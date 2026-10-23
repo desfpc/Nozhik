@@ -6,10 +6,11 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 3: файловая система и Project Model реализованы.** Семь крейтов,
+**Roadmap Phase 3.4: VCS Engine & GitHub Desktop UI реализован.** Восемь крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
-watcher, fuzzy-поиск по путям, вкладки и виртуализированный Rope-редактор.
-LSP, Git, терминал, запуск/отладка и подключения к БД ещё не реализованы.
+watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
+и встроенный Git-клиент. LSP, терминал, запуск/отладка и подключения к БД
+ещё не реализованы.
 
 ## Сборка и запуск
 
@@ -25,11 +26,15 @@ LSP, Git, терминал, запуск/отладка и подключени�
 | macOS | Xcode Command Line Tools: `xcode-select --install` |
 | Linux | C/C++ toolchain, pkg-config, заголовки X11/Wayland/xkbcommon; активная графическая сессия |
 
+Git backend собирает libgit2/OpenSSL из исходников: системный Git для локальных
+операций не нужен. Для сборки также необходим Perl в PATH и make на Unix;
+на Windows используйте Perl с совместимым MSVC окружением.
+
 Для Ubuntu/Debian:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libx11-dev libxkbcommon-dev libwayland-dev
+sudo apt-get install -y build-essential perl pkg-config libx11-dev libxkbcommon-dev libwayland-dev
 ```
 
 Одинаковые команды в PowerShell, Terminal и Linux shell, из корня репозитория:
@@ -53,12 +58,13 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
 nozhik-buffer ──► nozhik-event-bus, nozhik-core
 nozhik-fs-model ──► nozhik-event-bus
+nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
 ```
 
 ```text
@@ -68,6 +74,7 @@ crates/
   event_bus/  # Event, EventBus; broadcast<Arc<Event>>
   config/     # Config, ConfigManager; Arc<RwLock<Config>>
   fs_model/   # lazy tree, ignore, index, watcher, background I/O
+  vcs/        # Git worker, status, index, diff, history, branches, remotes
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
 docs/ai/
@@ -160,7 +167,8 @@ Ctrl/Cmd+Shift+O и Ctrl/Cmd+E пока открывают тот же поис�
 пусты до появления синтаксического индекса; Files ищет по всем путям проекта,
 Text — по содержимому буферов в памяти, Actions — по зарегистрированным действиям.
 Include non-project items зарезервирован для будущего индекса. Шестерёнка открывает настройки размера шрифта и отступа
-текущей сессии. Боковые и нижние кнопки переключают панели-заглушки.
+текущей сессии. Боковые кнопки открывают Project и Git, остальные tool windows
+пока представлены заглушками.
 
 ## Работа с проектами и файлами
 
@@ -197,3 +205,52 @@ Dirty снимается только после успеха и только д
 
 NUL в первом килобайте показывает **Binary file not supported**; такой буфер
 нельзя редактировать или сохранять. Невалидный UTF-8 возвращает ошибку открытия.
+
+## Встроенный Git-клиент
+
+Откройте папку внутри существующего Git-репозитория. Кнопка `⑂` на левом
+тулстрипе или **Ctrl/Cmd+Shift+G** открывает Changes/History. Если открыта
+подпапка репозитория, Git-панель показывает весь репозиторий; пути в ней
+относительны его корню.
+
+- **Changes**: фильтр по пути, цветные статусы, staging/unstaging файла и Select All.
+  Чекбоксы управляют настоящим Git index. Промежуточный чекбокс означает наличие
+  staged и unstaged изменений одновременно; снятие снимает staging, повторная
+  установка включает текущую дисковую версию файла целиком.
+- **Commit**: обязательный Summary и необязательный Description. Кнопка
+  `Commit N files to branch` или **Ctrl/Cmd+Enter** в Git-панели записывает index.
+  Нужна настроенная Git identity (`user.name` и `user.email`). Успех очищает поля,
+  обновляет статус и History; оставшиеся unstaged изменения сохраняются в списке.
+- **Diff Viewer**: unified hunks, старая/новая нумерация, зелёные добавления и
+  красные удаления, моноширинный шрифт. По умолчанию сравниваются HEAD и рабочее
+  дерево; **Staged only** показывает именно содержимое будущего коммита.
+- **History**: карточки коммитов, автор/относительное время, описание, полный и
+  короткий SHA с копированием, затронутые файлы и их исторические diff. Merge
+  commits сравниваются с первым родителем. История загружается по 100 записей
+  до 10 000; карточки и строки diff виртуализированы.
+- **Ветки и remotes**: верхняя панель и заголовок показывают текущую ветку.
+  Переключатель позволяет искать локальные ветки, создавать и переключать их.
+  Toolbar предлагает Fetch/Push origin, меню `…` также содержит Pull origin и Refresh.
+  Отображаются ahead/behind относительно upstream. Push не использует force;
+  для новой ветки устанавливается upstream. `origin` должен быть настроен заранее.
+
+Git status обновляется после сохранений/уведомлений watcher с debounce 200 мс,
+а для открытого репозитория дополнительно проверяется раз в 3 секунды, включая
+внешние изменения `.git`. Status, diff, index, history, commit и сеть исполняются
+в выделенном worker; результаты будят UI. SSH использует агент, HTTPS —
+настроенный credential helper. Секреты не вводятся и не хранятся в интерфейсе.
+
+В контекстном меню файла **Discard Changes…** запрашивает подтверждение перед
+восстановлением его index/дисковой версии из HEAD (untracked-файл удаляется).
+Переименование восстанавливает старый путь и удаляет новый; если старый путь уже
+занят, операция отклоняется. **Ignore File** добавляет точный экранированный путь
+в корневой `.gitignore`; уже tracked-файл это не удаляет из index.
+
+Ветки переключаются и Pull выполняется только при чистом index/рабочем дереве;
+Pull поддерживает fast-forward, расхождение веток возвращает ошибку. Merge/rebase,
+разрешение конфликтов, submodule-операции, hooks и GPG signing пока не поддерживаются.
+Git действует на дисковые версии: несохранённый текст редактора в коммит не входит.
+После checkout/pull/discard буферы редактора сохраняются в памяти без автоматического
+reload — это также относится к последующему сохранению устаревшего буфера.
+Binary/oversized diff показывает заглушку; текстовая выдача ограничена 2 MiB,
+50 000 строк и 4096 символами на строку с явной отметкой о сокращении.

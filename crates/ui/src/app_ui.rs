@@ -41,6 +41,22 @@ impl NozhikUi {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
             self.save_file();
         }
+        if ctx
+            .input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::G))
+        {
+            self.left = if self.left == Some(LeftTool::Commit) {
+                None
+            } else {
+                Some(LeftTool::Commit)
+            };
+        }
+        if self.left == Some(LeftTool::Commit)
+            && !self.search.open
+            && !self.settings_open
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter))
+        {
+            self.vcs.commit_selected();
+        }
         if search {
             self.action(SEARCH_ACTION);
         }
@@ -79,6 +95,7 @@ impl NozhikUi {
                             self.status =
                                 format!("Disk changed: {} (open buffers retained)", path.display());
                             self.refresh_project();
+                            self.vcs.invalidate();
                         }
                     }
                     Event::File(FileEvent::Error(error)) => {
@@ -94,6 +111,7 @@ impl NozhikUi {
                 Err(TryRecvError::Lagged(count)) => {
                     self.status = format!("Missed {count} notifications; current buffers retained");
                     self.refresh_project();
+                    self.vcs.invalidate();
                     if let Ok(config) = self.settings.snapshot() {
                         self.config = config;
                     }
@@ -103,7 +121,7 @@ impl NozhikUi {
         }
     }
 
-    fn top_bar(&self, ctx: &Context) {
+    fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("toolbar")
             .exact_height(44.0)
             .show(ctx, |ui| {
@@ -114,9 +132,7 @@ impl NozhikUi {
                     ui.menu_button("Nozhik v", |ui| {
                         ui.label("Nozhik · project workspace");
                     });
-                    ui.menu_button("master v", |ui| {
-                        ui.weak("Git integration is planned");
-                    });
+                    self.vcs.toolbar(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("⚙").on_hover_text("Settings").clicked() {
                             self.action(SETTINGS_ACTION);
@@ -150,7 +166,7 @@ impl NozhikUi {
                     ui.weak(&self.status);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label("Rust 2024");
-                        ui.label("master");
+                        ui.label(self.vcs.branch());
                         ui.label("UTF-8");
                     });
                 });
@@ -193,7 +209,7 @@ impl NozhikUi {
             .show(ctx, |ui| {
                 for (icon, title, tool) in [
                     ("▣", "Project", LeftTool::Project),
-                    ("⑂", "Commit / VCS", LeftTool::Commit),
+                    ("⑂", "Git · Changes / History", LeftTool::Commit),
                     ("☷", "Structure", LeftTool::Structure),
                 ] {
                     if ui
@@ -240,7 +256,11 @@ impl NozhikUi {
         if let Some(tool) = self.left {
             egui::SidePanel::left("left_dock")
                 .resizable(true)
-                .default_width(245.0)
+                .default_width(if tool == LeftTool::Commit {
+                    340.0
+                } else {
+                    245.0
+                })
                 .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(8))
                 .show(ctx, |ui| {
                     ui.label(match tool {
@@ -251,6 +271,8 @@ impl NozhikUi {
                     ui.separator();
                     if tool == LeftTool::Project {
                         self.project_panel(ui);
+                    } else if tool == LeftTool::Commit {
+                        self.vcs.panel(ui);
                     } else {
                         ui.weak("Tool window placeholder");
                     }
@@ -259,6 +281,14 @@ impl NozhikUi {
     }
 
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
+        if self.left == Some(LeftTool::Commit) {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(theme::BACKGROUND))
+                .show(ctx, |ui| {
+                    self.vcs.center(ui, f32::from(self.config.font_size));
+                });
+            return;
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BACKGROUND))
             .show(ctx, |ui| {
@@ -342,6 +372,7 @@ impl eframe::App for NozhikUi {
         self.shortcuts(ctx);
         self.receive_events();
         self.receive_files();
+        self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
         self.top_bar(ctx);
         self.panels(ctx);
         self.editor_area(ctx);
@@ -428,6 +459,22 @@ mod tests {
             document.open = false;
         }
         let _ = ctx.run(egui::RawInput::default(), |ctx| shell.editor_area(ctx));
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::G,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| shell.shortcuts(ctx));
+        assert!(shell.left == Some(LeftTool::Commit));
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            shell.panels(ctx);
+            shell.editor_area(ctx);
+        });
         // Assert the eframe integration remains implemented without creating a native window.
         is_app(&shell);
         Ok(())

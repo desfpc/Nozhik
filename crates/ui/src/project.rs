@@ -69,6 +69,7 @@ impl NozhikUi {
                     }
                 }
                 Reply::Tree(tree) => {
+                    self.vcs.set_project(&tree.root_path);
                     if self
                         .project
                         .as_ref()
@@ -96,6 +97,7 @@ impl NozhikUi {
                         document.buffer.mark_saved();
                     }
                     self.status = format!("Saved {}", path.display());
+                    self.vcs.invalidate();
                 }
                 Reply::Matches { token, files } => self.search.accept(token, files),
                 Reply::Error(error) => {

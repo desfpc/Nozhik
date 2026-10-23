@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-vcs.workspace = true
 nozhik-fs-model.workspace = true
 egui.workspace = true
 eframe.workspace = true
@@ -18,4 +19,5 @@ tokio.workspace = true
 workspace = true
 
 [dev-dependencies]
+git2.workspace = true
 tempfile.workspace = true

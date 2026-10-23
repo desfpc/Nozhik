@@ -10,10 +10,11 @@
 | 1 | Текстовое ядро: Rope, версии, курсоры, транзакции, история, поиск | Реализован |
 | 2 | UI Shell & Windowing: egui, панели, редактор, поиск | Реализован; ограничения ниже |
 | 3 | Проекты, файловый I/O, файловое дерево, watcher, поиск | Реализован; ограничения ниже |
+| 3.4 | VCS Engine & GitHub Desktop UI | Реализован; ограничения ниже |
 | 4 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
 | 5 | LSP, диагностика, completion, переходы и рефакторинг | Не начат |
 | 6 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
-| 7 | Git, terminal, task runner, запуск и отладка | Не начат |
+| 7 | Terminal, task runner, запуск и отладка | Не начат; Git вынесен в 3.4 |
 | 8 | Плагины, темы, keymap, API расширений | Не начат |
 | 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
 
@@ -201,3 +202,110 @@ Files Enter и отклонение устаревшего search token. Нат�
 Release-сборка успешна; для временного toolchain использован `DYLD_LIBRARY_PATH`
 к его lib-каталогу, чтобы rust-objcopy находил libLLVM при stripping.
 Нативное GUI-окно и Windows/Linux в этой итерации вручную не проверялись.
+
+## Phase 3.4 — VCS Engine & GitHub Desktop UI
+
+- [x] `nozhik-vcs` в workspace, `git2` 0.21 с https/ssh и vendored libgit2/OpenSSL.
+- [x] `model.rs`: owned `GitRepoStatus`, `FileChange`, `ChangeStatus`, `FileDiff`,
+  `DiffHunk`, `DiffLine`, `DiffLineKind`, `CommitInfo`, `DiffTarget`.
+- [x] `lib.rs`: выделенный serial worker, `Task` / `Reply` / `Outcome`,
+  typed `VcsError`, корреляция по project generation и request ID, wake callback.
+- [x] `git_worker.rs`: discovery, index/worktree status и rename detection,
+  upstream/ahead/behind, staged/combined/historical diff, commit/history/details,
+  stage/unstage, локальные ветки, fetch/push, fast-forward pull, discard/ignore.
+- [x] UI `vcs_panel.rs`: Changes/History, Filter, Select All и staging,
+  required Summary/Description/commit box, контекстные discard/ignore.
+- [x] `diff_view.rs`: виртуализированный unified diff, заголовки hunks,
+  два gutter, типы строк и цветные фоны, +added/−deleted.
+- [x] History: виртуализированные карточки, автор и относительное время,
+  SHA/copy, тело сообщения, affected files и historical diff первого родителя.
+- [x] Git toolbar: текущая ветка в toolbar/status/title, поиск локальных веток,
+  New Branch/checkout, Fetch/Push origin, меню Pull/Refresh, ahead/behind и spinner.
+- [x] Ctrl/Cmd+Shift+G переключает Git; Ctrl/Cmd+Enter коммитит из Git-панели.
+- [x] Сохранение и FileEvent/lag инвалидируют Git status с debounce 200 мс;
+  опрос раз в 3 секунды у открытого repo покрывает исключённые watcher `.git`-пути.
+
+### Публичный API и конкурентность
+
+`Vcs::start()` создаёт канал и worker, не читая диск на вызывающем потоке.
+`set_wakeup(Fn + Send + Sync)` однократно регистрирует пробуждение event loop.
+`send(generation, id, Task) -> bool` неблокирующе ставит команду в mpsc;
+`drain()` читает до 128 завершений без ожидания. `Reply { generation, id,
+result: Result<Outcome, VcsError> }` относится к одной команде. Репозиторий
+никогда не покидает worker. Drop handle закрывает очередь; worker завершает
+текущую операцию и прекращает работу при недоступности receiver.
+
+| Task | Outcome |
+| --- | --- |
+| Open(PathBuf), Refresh | Status(Option<GitRepoStatus>) |
+| Stage { paths, staged } | Done |
+| Diff(DiffTarget) | Diff(FileDiff) |
+| History(limit) | History(Vec<CommitInfo>) |
+| Details(sha) | Details { commit, files } |
+| Commit { summary, body } | Committed(CommitInfo) |
+| Fetch, Push, Pull, Checkout(name), NewBranch(name), Discard(path), Ignore(path) | Done |
+
+Open выполняет discovery вверх от папки проекта; не-repo/bare — нормальный
+Status(None). Root status — canonical worktree root. Native пути repository-relative;
+отображение не определяет идентичность. `is_staged` означает отличие index от HEAD,
+`has_unstaged` — отличие worktree от index, оба флага могут быть true. Источники
+rename учитываются отдельно: staging rename не добавляет воскресший старый путь.
+Unstage восстанавливает точные entries index из HEAD, а не wildcard pathspec.
+Commit записывает только index, проверяет summary, конфликты и отсутствие активного
+merge/rebase; не вызывает неявный stage. После успеха UI очищает поля и перечитывает
+status/history; оставшиеся unstaged файлы не скрываются.
+
+UI отбрасывает результаты старой generation после смены проекта, а diff/details
+сверяет по актуальному request ID и выбранному режиму. Переход History → Changes
+не допускает поздний historical diff. FileEvent от fs_model и save completion
+вызывают invalidate; это не Git-команды через best-effort broadcast. На ответ worker
+вызывает `Context::request_repaint`, egui не ждёт I/O и не держит Repository.
+
+### Безопасность и ограничения
+
+Discard требует явного UI-подтверждения. Обрабатывается только точный выбранный
+путь (для rename — оба пути), запрещены traversal/absolute/.git пути и выход
+через родительскую symlink-директорию. Checkout pathspec matching отключён для
+Discard. Удалённый родительский каталог может быть создан при восстановлении
+tracked-файла; занятый старый путь rename защищён от перезаписи. Ignore экранирует
+Git pattern metacharacters и не пишет через symlink `.gitignore`.
+
+Переключение веток и fast-forward Pull требуют чистого repo; игнорируемые локальные
+файлы не перезаписываются checkout. Divergence/rejection/credentials/locks возвращают
+ошибку в UI/stderr. Только origin и локальные ветки; push без force, credentials —
+SSH-agent/HTTPS helper, без хранения секретов и ослабления проверки сертификатов.
+Удалённые сервисы в тестах не используются: network workflow проверяется на локальном
+bare origin и втором clone. Сетевые задачи не имеют UI cancellation; очередь Git
+последовательная, поэтому долгая сеть задержит новые Git-ответы, но не рендеринг.
+
+Diff: HEAD→index, HEAD→worktree with index, первый parent→commit; для первого commit
+старое дерево пустое. Binary/oversized показывается отдельно; лимиты 2 MiB,
+50 000 строк, 4096 Unicode scalars/строку. Выдача ограничена, это не механизм
+построчного staging. History до 10 000 записей с загрузкой по 100. Идентичность
+берётся из Git config; hooks/GPG/merge UI/rebase/submodule lifecycle не реализованы.
+Буферы редактора авторитетны для несохранённого текста и автоматически не reload-ятся
+после Git-операций. Git status/commit/diff работают с диском/index, не с этими буферами.
+
+### Проверки Phase 3.4
+
+Локально на macOS arm64, Rust 1.99.1: `cargo fmt --all -- --check`,
+`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --locked --workspace --all-features` (39 unit-тестов и один doc-test),
+`cargo build --locked --workspace --release`, `git diff --check` прошли.
+Существующий тест FSEvents выполнялся вне sandbox; Git-тесты работают с временными
+репозиториями и локальным bare origin без обращения к внешним remotes.
+
+Семь VCS-тестов покрывают status/unborn, index-only commit при более новых
+worktree-правках, staged/unstaged, unified/historical/binary diff, rename/deletion,
+точные пути с wildcard-символами, удалённые parent directories, защиту воскресшего
+источника rename, branch/create/dirty guard, escape в ignore patterns, fetch/push/
+fast-forward/ahead/behind/divergence и корреляцию каналов/wake callback.
+UI-тест проходит staging → commit → history → historical diff и рендер обеих
+панелей без окна, проверяет отклонение устаревшего Details после смены режима.
+Тест shortcuts проверяет Ctrl/Cmd+Shift+G и открытие Git-панели.
+После финальной правки shortcut/modal guards UI-тесты и Clippy повторно прошли.
+
+Нативное GUI-окно, реальные HTTPS/SSH credentials и Windows/Linux вручную
+не проверялись; CI-матрица предусмотрена, но её прогон этой итерацией не заявляется.
+Для временного macOS toolchain при release используется `DYLD_LIBRARY_PATH`
+на его lib-каталог для загрузки LLVM rust-objcopy, как в Phase 3.

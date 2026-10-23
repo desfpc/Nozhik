@@ -1,9 +1,11 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
+mod diff_view;
 pub mod editor_view;
 mod project;
 pub mod search_everywhere;
 pub mod theme;
+mod vcs_panel;
 
 use nozhik_buffer::TextBuffer;
 use nozhik_config::{Config, ConfigManager};
@@ -38,7 +40,7 @@ pub struct Document {
 pub enum LeftTool {
     /// Project tree.
     Project,
-    /// Version control placeholder.
+    /// Git Changes and History.
     Commit,
     /// Structure placeholder.
     Structure,
@@ -53,6 +55,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    vcs: vcs_panel::VcsPanel,
     fs: FileSystem,
     project: Option<ProjectTree>,
     expanded: HashSet<PathBuf>,
@@ -85,6 +88,7 @@ impl NozhikUi {
         let events = bus.subscribe();
         let fs = FileSystem::start(bus.clone());
         Self {
+            vcs: vcs_panel::VcsPanel::default(),
             fs,
             project: None,
             expanded: HashSet::new(),

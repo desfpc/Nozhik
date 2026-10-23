@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 3
+# Архитектура Nozhik — Phase 3.4
 
 ## Границы крейтов
 
@@ -9,7 +9,8 @@
 | nozhik-buffer | Rope, координаты, курсоры, история, поиск | core, event_bus |
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus |
-| nozhik-ui | UI shell, documents, project integration, editor view, search | core, buffer, config, event_bus, fs_model |
+| nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -164,3 +165,21 @@ UTF-8 текст, native пути и модель дерева. `FileSystem` о�
 текст открытых документов остаётся в памяти. Надёжные Read/Save/LoadDir/Search
 используют mpsc команды/ответы, а не broadcast. Подробности и ограничения:
 [Phase 3](roadmap-progress.md#phase-3--файловая-система-и-project-model).
+
+## VCS (Phase 3.4)
+
+`nozhik-vcs` использует vendored libgit2/OpenSSL через git2, не зависит от UI,
+буфера, runtime или EventBus. `Repository` создаётся внутри одного worker и не
+передаётся между потоками. UI отправляет надёжные mpsc задачи, получает owned
+снимки и проверяет generation/request ID. `VcsPanel` отвечает за выбор файла,
+режим Changes/History, commit form и branch/remote controls; `DiffView` рендерит
+видимые строки unified patch. Результаты worker будят egui callback-ом.
+
+`FileEvent::Changed`, broadcast lag и успешный Save инвалидируют Git status с
+200 ms debounce. Фоновый опрос раз в 3 секунды покрывает `.git` и внешние команды,
+даже когда открыта другая IDE-панель. Changed-файлы Git определяет самостоятельно,
+поэтому ignore-политика fs_model не скрывает tracked изменения из Git status.
+Чекбоксы меняют реальный index; commit не перечитывает в него worktree автоматически.
+Git работает с диском; буферы редактора сохраняются в памяти после branch/pull/discard.
+Полные задачи, ответы и ограничения описаны в
+[roadmap Phase 3.4](roadmap-progress.md#phase-34--vcs-engine--github-desktop-ui).

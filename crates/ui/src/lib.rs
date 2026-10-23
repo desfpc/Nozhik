@@ -2,6 +2,7 @@
 mod app_ui;
 mod diff_view;
 pub mod editor_view;
+mod plugins;
 mod project;
 pub mod search_everywhere;
 pub mod theme;
@@ -11,6 +12,10 @@ use nozhik_buffer::TextBuffer;
 use nozhik_config::{Config, ConfigManager};
 use nozhik_event_bus::{Event, EventBus};
 use nozhik_fs_model::{FileSystem, tree::ProjectTree};
+use nozhik_plugin_host::{
+    PluginManager,
+    registry::{Action, ActionContext, When},
+};
 use std::{collections::HashSet, path::PathBuf};
 use tokio::sync::broadcast;
 
@@ -55,6 +60,10 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    plugins: Option<PluginManager>,
+    plugins_open: bool,
+    plugin_tab: Option<String>,
+    editor_focus: Option<egui::Id>,
     vcs: vcs_panel::VcsPanel,
     fs: FileSystem,
     project: Option<ProjectTree>,
@@ -87,7 +96,41 @@ impl NozhikUi {
     pub fn new(bus: EventBus, settings: ConfigManager, config: Config) -> Self {
         let events = bus.subscribe();
         let fs = FileSystem::start(bus.clone());
+        #[cfg(not(test))]
+        let plugins = PluginManager::start(bus.clone());
+        #[cfg(test)]
+        let plugins = PluginManager::with_paths(bus.clone(), Vec::new(), None);
+        let plugins = match plugins {
+            Ok(manager) => {
+                for (id, title, when) in [
+                    (SEARCH_ACTION, "Search Everywhere", ""),
+                    (SETTINGS_ACTION, "Settings", ""),
+                    (SAVE_ACTION, "Save File", "editorOpen"),
+                    ("ui.project", "Toggle Project Window", ""),
+                    ("ui.git", "Toggle Git Window", ""),
+                    ("ui.plugins", "Plugins", ""),
+                ] {
+                    if let Err(error) = manager.actions().register(Action {
+                        id: id.into(),
+                        title: title.into(),
+                        when: When(when.into()),
+                        owner: None,
+                    }) {
+                        eprintln!("Action registration: {error}");
+                    }
+                }
+                Some(manager)
+            }
+            Err(error) => {
+                eprintln!("Plugin host: {error}");
+                None
+            }
+        };
         Self {
+            plugins,
+            plugins_open: false,
+            plugin_tab: None,
+            editor_focus: None,
             vcs: vcs_panel::VcsPanel::default(),
             fs,
             project: None,
@@ -116,13 +159,35 @@ impl NozhikUi {
     }
 
     fn action(&self, name: &str) {
-        self.bus.publish(Event::ActionTriggered(name.into()));
+        if let Some(manager) = &self.plugins {
+            if let Err(error) = manager.actions().execute(name, self.action_context()) {
+                eprintln!("Action: {error}");
+            }
+        } else {
+            self.bus.publish(Event::ActionTriggered(name.into()));
+        }
+    }
+
+    fn action_context(&self) -> ActionContext {
+        ActionContext {
+            editor_open: self
+                .active
+                .and_then(|i| self.documents.get(i))
+                .is_some_and(|d| d.open && !d.binary),
+            editor_focus: self.editor_focus.is_some()
+                && !self.search.open
+                && !self.settings_open
+                && !self.plugins_open,
+            selected_file: self.selected_file.is_some(),
+            project_open: self.project.is_some(),
+        }
     }
 
     fn open_document(&mut self, index: usize) {
         if let Some(document) = self.documents.get_mut(index) {
             document.open = true;
             self.active = Some(index);
+            self.bus.publish(Event::FileOpened(document.path.clone()));
         }
     }
 }

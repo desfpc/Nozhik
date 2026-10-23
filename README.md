@@ -6,7 +6,7 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 3.4: VCS Engine & GitHub Desktop UI реализован.** Восемь крейтов,
+**Roadmap Phase 4: Plugin & Action Architecture реализован.** Девять крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. LSP, терминал, запуск/отладка и подключения к БД
@@ -58,13 +58,14 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
 nozhik-buffer ──► nozhik-event-bus, nozhik-core
 nozhik-fs-model ──► nozhik-event-bus
 nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
+nozhik-plugin-host ──► nozhik-event-bus, tokio, serde/serde_json, semver, directories
 ```
 
 ```text
@@ -75,6 +76,7 @@ crates/
   config/     # Config, ConfigManager; Arc<RwLock<Config>>
   fs_model/   # lazy tree, ignore, index, watcher, background I/O
   vcs/        # Git worker, status, index, diff, history, branches, remotes
+  plugin_host/ # manifests, process JSON-RPC host, action/keymap registries
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
 docs/ai/
@@ -254,3 +256,54 @@ Git действует на дисковые версии: несохранён�
 reload — это также относится к последующему сохранению устаревшего буфера.
 Binary/oversized diff показывает заглушку; текстовая выдача ограничена 2 MiB,
 50 000 строк и 4096 символами на строку с явной отметкой о сокращении.
+
+## Расширяемость и горячие клавиши
+
+`nozhik-plugin-host` обнаруживает `plugin.json` в подпапках `~/.nozhik/plugins/`
+и `<project>/.nozhik/plugins/`. Расширение поставляется отдельно от IDE:
+строгий манифест регистрирует языковые ассоциации, команды, defaults настроек
+и описания вкладок; optional executable запускается отдельным процессом
+по событиям открытия файла или вызова команды. SemVer проверяет минимум IDE
+и зависимости, конфликты и циклы видны в диагностике.
+
+Все вызовы расширений выполняются в фоновом host с JSON-RPC/stdio, очередью,
+таймаутом 3 секунды и лимитом ответа 64 KiB. Падение расширения переводит его
+в Failed и удаляет вклады. Процесс работает с правами пользователя;
+OS sandbox и языковые/LSP/БД API ещё не реализованы.
+
+**Settings → Plugins…** или команда **Plugins** в Search Everywhere открывает
+список с версией, автором, статусом и переключателем Enabled. Можно включать
+и отключать расширения без перезапуска; зависимые плагины отключаются вместе
+с зависимостью. **Rescan installed plugins** перечитывает каталоги. В текущей
+версии состояния переключателей действуют до следующего scan/запуска.
+Раздел Extension tabs показывает декларативные вкладки расширений.
+
+**Search Everywhere → Actions** динамически читает потокобезопасный реестр
+действий, фильтрует доступность по контексту и показывает shortcuts.
+Enter запускает выбранную команду. `when` поддерживает `editorOpen`,
+`editorFocus`, `selectedFile`, `projectOpen`, `&&` и `!`.
+
+Файл `~/.nozhik/keymap.json` переключает профили `JetBrains`, `VSCode`, `Custom`
+без перезапуска (проверка раз в секунду):
+
+```json
+{
+  "profile": "VSCode",
+  "bindings": [
+    {
+      "chord": { "key": "R", "primary": true, "alt": true },
+      "action": "php.runScript",
+      "when": "editorOpen"
+    }
+  ]
+}
+```
+
+`primary` — Ctrl на Windows/Linux и Cmd на macOS. Последний binding одинакового
+сочетания заменяет предыдущий; ошибочный reload сохраняет текущий профиль.
+VSCode использует Ctrl/Cmd+Shift+P для поиска, JetBrains — Ctrl/Cmd+Shift+A;
+Double Shift доступен в обоих. Внутренние сочетания текстового редактора
+и Git commit пока принадлежат соответствующим views.
+
+Полный манифест, IPC-протокол и примеры API:
+[руководство автора расширений](docs/ai/plugin-authoring-guide.md).

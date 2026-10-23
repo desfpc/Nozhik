@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 3.4
+# Архитектура Nozhik — Phase 4
 
 ## Границы крейтов
 
@@ -10,7 +10,8 @@
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
-| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs |
+| nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -148,7 +149,7 @@ UI проверяет broadcast без блокировки в update, request_r
 будят event loop через зарегистрированный callback `Context::request_repaint()`. UI не вызывается из Tokio-задач.
 ActionTriggered(ui.search_everywhere/ui.settings) открывает modal best-effort;
 состояние документов всегда читается напрямую, не восстанавливается из событий.
-Renderer — Glow/OpenGL. Plugin ABI и DB pools пока не выбираются.
+Renderer — Glow/OpenGL. Plugin protocol — JSON-RPC/stdio (Phase 4); DB pools пока не выбираются.
 
 
 ## Файловая система (Phase 3)
@@ -183,3 +184,24 @@ UTF-8 текст, native пути и модель дерева. `FileSystem` о�
 Git работает с диском; буферы редактора сохраняются в памяти после branch/pull/discard.
 Полные задачи, ответы и ограничения описаны в
 [roadmap Phase 3.4](roadmap-progress.md#phase-34--vcs-engine--github-desktop-ui).
+
+## Плагины и действия (Phase 4)
+
+`PluginManager` — неблокирующий UI handle с bounded mpsc requests и watch
+snapshot. Собственный worker с current-thread Tokio runtime владеет дочерними
+процессами, scan, dependency graph, активацией и hot reload keymap.json.
+Нативные библиотеки плагинов не загружаются в IDE; процессный протокол не требует
+перекомпиляции IDE. При shutdown внешний select отменяет ожидающий RPC,
+kill_on_drop защищает незавершённую инициализацию, известные процессы kill/reap.
+UI получает изменения snapshots при обычном 100ms repaint, не вызывает plugin I/O.
+
+ActionRegistry и KeymapRegistry — Arc/RwLock снимки; блокировки освобождаются
+до событий и запросов. Встроенное действие публикует ActionTriggered; команда
+расширения сначала попадает в mpsc, затем публикует best-effort уведомление.
+Процесс не получает повторный вызов из broadcast; RPC имеет отдельный ID и ack.
+`FileOpened` активирует языковые плагины; пропуски шины диагностируются,
+повторное открытие повторяет событие. `HostSnapshot` содержит только включённые
+языковые ассоциации, tool tabs и typed configuration defaults.
+
+Граница изоляции — отдельный процесс с правами пользователя, без sandbox.
+Протокол, ограничения и API: [руководство](plugin-authoring-guide.md).

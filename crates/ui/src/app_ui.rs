@@ -33,22 +33,43 @@ impl NozhikUi {
             self.last_shift = None;
         }
         self.shift_down = shift;
-        let search = ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::A)
-                || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::O)
-                || i.consume_key(egui::Modifiers::COMMAND, Key::E)
-        });
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
-            self.save_file();
-        }
-        if ctx
-            .input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::G))
+        if !self.search.open
+            && !self.settings_open
+            && !self.plugins_open
+            && let Some(manager) = &self.plugins
         {
-            self.left = if self.left == Some(LeftTool::Commit) {
-                None
-            } else {
-                Some(LeftTool::Commit)
-            };
+            let context = self.action_context();
+            let actions = manager.actions();
+            let keymap = manager.keymap();
+            let available = actions.available(context).unwrap_or_default();
+            for binding in keymap.bindings().unwrap_or_default() {
+                if !binding.when.matches(context)
+                    || !available.iter().any(|a| a.id == binding.action)
+                {
+                    continue;
+                }
+                let Some(key) = Key::from_name(&binding.chord.key) else {
+                    continue;
+                };
+                let chord = &binding.chord;
+                let modifiers = egui::Modifiers {
+                    ctrl: chord.ctrl,
+                    mac_cmd: chord.cmd,
+                    command: chord.primary
+                        || if cfg!(target_os = "macos") {
+                            chord.cmd
+                        } else {
+                            chord.ctrl
+                        },
+                    alt: chord.alt,
+                    shift: chord.shift,
+                };
+                if ctx.input_mut(|i| i.consume_key(modifiers, key))
+                    && let Err(error) = keymap.dispatch(chord, context, &actions)
+                {
+                    self.status = error.to_string();
+                }
+            }
         }
         if self.left == Some(LeftTool::Commit)
             && !self.search.open
@@ -57,12 +78,9 @@ impl NozhikUi {
         {
             self.vcs.commit_selected();
         }
-        if search {
-            self.action(SEARCH_ACTION);
-        }
     }
 
-    fn receive_events(&mut self) {
+    pub(crate) fn receive_events(&mut self) {
         // Bound per-frame work so continuous producers cannot starve rendering.
         for _ in 0..1024 {
             match self.events.try_recv() {
@@ -76,6 +94,14 @@ impl NozhikUi {
                         SETTINGS_ACTION => {
                             self.search.open = false;
                             self.settings_open = true;
+                        }
+                        "ui.plugins" => self.plugins_open = true,
+                        "ui.git" => {
+                            self.left = if self.left == Some(LeftTool::Commit) {
+                                None
+                            } else {
+                                Some(LeftTool::Commit)
+                            };
                         }
                         "ui.project" => {
                             self.left = if self.left == Some(LeftTool::Project) {
@@ -331,11 +357,15 @@ impl NozhikUi {
                 });
                 ui.separator();
                 if let Some(index) = self.active {
-                    let enabled = !self.search.open && !self.settings_open;
+                    let enabled = !self.search.open && !self.settings_open && !self.plugins_open;
                     if self.documents[index].binary {
                         ui.label("Binary file not supported");
                         return;
                     }
+                    let editor_id = ui
+                        .id()
+                        .with(("editor", self.documents[index].buffer.snapshot().buffer_id));
+                    self.editor_focus = ui.memory(|m| m.has_focus(editor_id)).then_some(editor_id);
                     if let Err(error) = self.editor.show(
                         ui,
                         &mut self.documents[index].buffer,
@@ -376,11 +406,20 @@ impl eframe::App for NozhikUi {
         self.top_bar(ctx);
         self.panels(ctx);
         self.editor_area(ctx);
+        if let Some(manager) = &self.plugins {
+            let context = self.action_context();
+            if let Err(error) =
+                self.search
+                    .set_actions(&manager.actions(), &manager.keymap(), context)
+            {
+                self.status = error.to_string();
+            }
+        }
         if let Some(target) = self.search.show(ctx, &self.documents) {
             match target {
                 SearchTarget::File(path) => self.open_file(path),
                 SearchTarget::Document(index) => self.open_document(index),
-                SearchTarget::Action(action) => self.action(action),
+                SearchTarget::Action(action) => self.action(&action),
             }
         }
         if let Some((token, query)) = self.search.take_request() {
@@ -389,6 +428,8 @@ impl eframe::App for NozhikUi {
         if self.settings_open {
             let modal = egui::Modal::new(egui::Id::new("settings")).show(ctx, |ui| {
                 ui.heading("Settings · current session");
+                if ui.button("Plugins…").clicked() { self.plugins_open = true; self.settings_open = false; }
+                ui.weak("Keymap: ~/.nozhik/keymap.json · JetBrains / VSCode / Custom · reloads every second");
                 let mut config = self.config.clone();
                 ui.add(egui::Slider::new(&mut config.font_size, 6..=96).text("Editor font size"));
                 ui.add(egui::Slider::new(&mut config.tab_width, 1..=16).text("Tab width"));
@@ -407,6 +448,7 @@ impl eframe::App for NozhikUi {
                 self.settings_open = false;
             }
         }
+        self.plugins_window(ctx);
         // Bounds latency of best-effort bus requests from producers without a UI handle.
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
@@ -470,6 +512,7 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run(input, |ctx| shell.shortcuts(ctx));
+        shell.receive_events();
         assert!(shell.left == Some(LeftTool::Commit));
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             shell.panels(ctx);

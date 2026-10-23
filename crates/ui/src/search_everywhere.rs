@@ -1,7 +1,12 @@
 //! Search Everywhere modal, with keyboard navigation and typed result targets.
-use crate::{Document, SAVE_ACTION, SEARCH_ACTION, SETTINGS_ACTION};
+use crate::Document;
 use egui::{Context, Key};
 use nozhik_fs_model::fuzzy::FileMatch;
+use nozhik_plugin_host::{
+    Result as HostResult,
+    keymap::KeymapRegistry,
+    registry::{ActionContext, ActionRegistry},
+};
 use std::path::PathBuf;
 
 /// Target selected by the modal.
@@ -12,7 +17,7 @@ pub enum SearchTarget {
     /// Index in the UI's document collection.
     Document(usize),
     /// Registered action identifier.
-    Action(&'static str),
+    Action(String),
 }
 
 /// Persistent modal state; filtering never mutates document text.
@@ -26,6 +31,7 @@ pub struct SearchEverywhere {
     selected: usize,
     focus: bool,
     files: Vec<FileMatch>,
+    actions: Vec<(String, SearchTarget)>,
     token: u64,
     requested: Option<String>,
 }
@@ -82,19 +88,43 @@ impl SearchEverywhere {
             }
         }
         if matches!(self.filter, 0 | 4) {
-            for (label, action) in [
-                ("Search Everywhere", SEARCH_ACTION),
-                ("Settings", SETTINGS_ACTION),
-                ("Toggle Project Window", "ui.project"),
-                ("Save File", SAVE_ACTION),
-            ] {
+            for (label, target) in &self.actions {
                 if label.to_lowercase().contains(query.trim_start_matches('/')) {
-                    results.push((label.into(), SearchTarget::Action(action)));
+                    results.push((label.clone(), target.clone()));
                 }
             }
         }
         results
     }
+    /// Refreshes command results and their current shortcut labels from shared registries.
+    /// # Errors
+    /// Returns registry lock errors.
+    pub fn set_actions(
+        &mut self,
+        actions: &ActionRegistry,
+        keymap: &KeymapRegistry,
+        context: ActionContext,
+    ) -> HostResult<()> {
+        let bindings = keymap.bindings()?;
+        self.actions = actions
+            .available(context)?
+            .into_iter()
+            .map(|action| {
+                let shortcuts = bindings
+                    .iter()
+                    .filter(|b| b.action == action.id && b.when.matches(context))
+                    .map(|b| b.chord.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    format!("{}    {}", action.title, shortcuts),
+                    SearchTarget::Action(action.id),
+                )
+            })
+            .collect();
+        Ok(())
+    }
+
     /// Renders the modal and returns the target activated by Enter or click.
     pub fn show(&mut self, ctx: &Context, documents: &[Document]) -> Option<SearchTarget> {
         if !self.open {
@@ -177,6 +207,7 @@ impl SearchEverywhere {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SEARCH_ACTION;
     use nozhik_buffer::TextBuffer;
     use nozhik_core::BufferId;
 
@@ -221,6 +252,81 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn dynamic_actions_show_shortcuts_execute_and_disappear()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use nozhik_event_bus::{Event, EventBus};
+        use nozhik_plugin_host::{
+            PluginManager,
+            keymap::{KeyBinding, KeyChord, KeymapConfig, KeymapProfile},
+            registry::{Action, When},
+        };
+        let bus = EventBus::new(16)?;
+        let mut events = bus.subscribe();
+        let host = PluginManager::with_paths(bus, Vec::new(), None)?;
+        let actions = host.actions();
+        actions.register(Action {
+            id: "demo.run".into(),
+            title: "Demo: Run".into(),
+            when: When("editorOpen".into()),
+            owner: Some("demo".into()),
+        })?;
+        let keymap = host.keymap();
+        keymap.replace(KeymapConfig {
+            profile: KeymapProfile::Custom,
+            bindings: vec![KeyBinding {
+                chord: KeyChord {
+                    key: "R".into(),
+                    primary: true,
+                    ..KeyChord::default()
+                },
+                action: "demo.run".into(),
+                when: When::default(),
+            }],
+        })?;
+        let context = ActionContext {
+            editor_open: true,
+            ..ActionContext::default()
+        };
+        let mut search = SearchEverywhere {
+            filter: 4,
+            ..SearchEverywhere::default()
+        };
+        search.set_actions(&actions, &keymap, context)?;
+        assert!(search.results(&[])[0].0.contains("Ctrl/Cmd+R"));
+        search.open();
+        let ctx = Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            search.show(ctx, &[]);
+        });
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..egui::RawInput::default()
+        };
+        let mut target = None;
+        let _ = ctx.run(input, |ctx| {
+            target = search.show(ctx, &[]);
+        });
+        let Some(SearchTarget::Action(id)) = target else {
+            return Err("Enter did not select the dynamic action".into());
+        };
+        actions.execute(&id, context)?;
+        assert_eq!(
+            *events.try_recv()?,
+            Event::ActionTriggered("demo.run".into())
+        );
+        actions.unregister_owner("demo")?;
+        search.set_actions(&actions, &keymap, context)?;
+        assert!(search.results(&[]).is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn keyboard_navigation_activation_and_escape() {
         let ctx = Context::default();
         let documents = vec![Document {
@@ -231,6 +337,10 @@ mod tests {
             open: true,
         }];
         let mut search = SearchEverywhere::default();
+        search.actions.push((
+            "Search Everywhere".into(),
+            SearchTarget::Action(SEARCH_ACTION.into()),
+        ));
         search.open();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             search.show(ctx, &documents);
@@ -253,7 +363,7 @@ mod tests {
         let _ = ctx.run(key_input(Key::Enter), |ctx| {
             result = search.show(ctx, &documents);
         });
-        assert!(matches!(result, Some(SearchTarget::Action(SEARCH_ACTION))));
+        assert!(matches!(result, Some(SearchTarget::Action(id)) if id == SEARCH_ACTION));
         assert!(!search.open);
         search.open();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {

@@ -45,7 +45,9 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Без UI; синхронные операции вызываются выделенным worker.
 - vcs: git2 (vendored libgit2/OpenSSL), thiserror. Без UI/runtime/event_bus;
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
-- ui: buffer, core, config, event_bus, fs_model, vcs, egui/eframe.
+- plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
+  directories, thiserror. Без egui, buffer и прямой зависимости от config.
+- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, egui/eframe.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные
   features. Обновляйте Cargo.lock. Изменения допустимых границ документируйте.

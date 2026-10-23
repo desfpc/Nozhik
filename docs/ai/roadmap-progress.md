@@ -11,11 +11,12 @@
 | 2 | UI Shell & Windowing: egui, панели, редактор, поиск | Реализован; ограничения ниже |
 | 3 | Проекты, файловый I/O, файловое дерево, watcher, поиск | Реализован; ограничения ниже |
 | 3.4 | VCS Engine & GitHub Desktop UI | Реализован; ограничения ниже |
-| 4 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
+| 4 | Plugin & Action Architecture: manifests, process host, actions, keymaps | Реализован; ограничения ниже |
+| 4.1 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
 | 5 | LSP, диагностика, completion, переходы и рефакторинг | Не начат |
 | 6 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
 | 7 | Terminal, task runner, запуск и отладка | Не начат; Git вынесен в 3.4 |
-| 8 | Плагины, темы, keymap, API расширений | Не начат |
+| 8 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
 | 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
 
 ## Phase 0 — реализовано
@@ -309,3 +310,71 @@ UI-тест проходит staging → commit → history → historical diff 
 не проверялись; CI-матрица предусмотрена, но её прогон этой итерацией не заявляется.
 Для временного macOS toolchain при release используется `DYLD_LIBRARY_PATH`
 на его lib-каталог для загрузки LLVM rust-objcopy, как в Phase 3.
+
+## Phase 4 — Plugin & Action Architecture
+
+- [x] Девятый workspace crate `nozhik-plugin-host`; serde/serde_json, semver,
+  Tokio process/io-util, отдельный host worker без зависимости от egui.
+- [x] Строгий `PluginManifest::parse`: metadata, activation events, languages,
+  commands/when, typed configuration defaults, tabs, executable/args/dependencies.
+- [x] Scan глобального/локального каталогов; минимум IDE, диапазоны версий
+  зависимостей, циклы и коллизии; ошибки отдельных установок не прерывают scan.
+- [x] Enabled/Disabled/Active/Failed, активация FileOpened по расширению/языку,
+  автоматическая активация команды, включение зависимостей, каскад Disable.
+- [x] JSON-RPC/NDJSON initialize/executeCommand, bounded queue, 3s timeout,
+  64 KiB response limit, проверка ID/ошибок, kill/reap процесса, отмена при shutdown.
+- [x] `ActionRegistry`: register, available, execute, unregister_owner;
+  Arc/RwLock, событийный обработчик для built-ins, процессная очередь для плагинов.
+- [x] `KeymapRegistry`: JetBrains/VSCode/Custom, атомарная замена профиля,
+  последний эквивалентный chord побеждает, контексты и hot reload keymap.json.
+- [x] Динамические Actions в Search Everywhere с shortcuts и Enter; Plugins
+  в Settings/Actions, версии/авторы/статусы, Enable/Disable, scan, generic tabs.
+- [x] Тесты манифестов, SemVer, dependency graph, collisions, cascade Disable,
+  смены проекта, action → keypress → bus, reload с сохранением прежнего профиля,
+  реального процесса (успех, crash, timeout, oversized response), UI Actions.
+
+### Формат и API
+
+Полная спецификация и примеры: [plugin-authoring-guide.md](plugin-authoring-guide.md).
+Обязательные поля манифеста: id/name/version/min_ide_version/description/author/
+activation_events; contributes содержит languages/commands/configuration/tabs.
+Executable/args и dependencies дополняют декларативный контракт процессным.
+SemVer min_ide_version — включительный минимум, dependencies — VersionReq.
+Команды `ui.*` зарезервированы IDE. События: `*`, `onLanguage:id`,
+`onFileExtension:.ext`, `onCommand:id`.
+
+Регистрация: `manager.actions().register(Action { id, title, when, owner: None })`.
+Вызов: `execute(id, ActionContext)`; built-in публикует ActionTriggered,
+plugin-owned команда ставится в надёжную локальную очередь и публикует уведомление.
+`when`: editorOpen/editorFocus/selectedFile/projectOpen с `&&`/`!`.
+`manager.keymap().replace(KeymapConfig)` меняет профиль; `dispatch` разрешает
+нажатие с проверкой контекста; UI читает registry для поиска и shortcuts.
+`manager.snapshot()` — авторитетный снимок статусов, ассоциаций, вкладок,
+конфигурационных defaults и диагностики. FileOpened остаётся best-effort;
+при пропуске уведомления повторное открытие файла повторяет активацию.
+
+### Границы текущей версии
+
+Это изоляция отдельным процессом с правами пользователя, без OS sandbox.
+Host последовательно обслуживает RPC; неответивший процесс задерживает очередь
+до таймаута, UI продолжает работать. Disable/shutdown завершают прямой процесс;
+дочерними процессами управляет расширение. Toggle действует до scan/перезапуска;
+scan включает валидные установки заново. Marketplace/installation API,
+LSP/Tree-sitter/БД, callbacks в IDE, редактирование буфера через RPC,
+произвольные plugin UI и пользовательские значения plugin configuration пока
+не реализованы. Tabs — метаданные для generic view в Plugins; result RPC — ack.
+Текстовые undo/redo и Git commit shortcuts пока принадлежат своим views.
+
+### Верификация Phase 4 (2026-10-23)
+
+Локально на macOS arm64 / stable Rust 1.99.1 прошли:
+`cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features --offline -- -D warnings`,
+`cargo test --workspace --all-features --offline` (47 unit + 1 doc-test),
+`cargo build --workspace --release --offline`, `git diff --check`.
+Первый тестовый прогон внутри sandbox не получил события macOS watcher;
+полный успешный прогон выполнен вне sandbox. Новый процессный тест компилирует
+std-only fixture через rustc и проверяет настоящий IPC, аварийное завершение,
+3s timeout, 64 KiB лимит и отмену ожидающей инициализации при Drop хоста.
+UI тестируется headless через egui RawInput; ручной запуск нативного окна,
+Windows/Linux и матрица CI в этой итерации не проверялись.

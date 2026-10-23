@@ -69,6 +69,15 @@ impl NozhikUi {
                     }
                 }
                 Reply::Tree(tree) => {
+                    if self
+                        .project
+                        .as_ref()
+                        .is_none_or(|p| p.root_path != tree.root_path)
+                        && let Some(manager) = &self.plugins
+                        && let Err(error) = manager.scan(Some(tree.root_path.clone()))
+                    {
+                        self.status = error.to_string();
+                    }
                     self.vcs.set_project(&tree.root_path);
                     if self
                         .project
@@ -289,6 +298,7 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run(input, |ctx| shell.shortcuts(ctx));
+        shell.receive_events();
         until(&mut shell, |s| s.status.starts_with("Saved"))?;
         assert!(!shell.documents[0].buffer.is_dirty());
         assert_eq!(std::fs::read_to_string(&path)?, "abc");

@@ -2,13 +2,15 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use nozhik_core::{BufferId, ConfigKey, Span};
+use nozhik_core::{BufferId, ConfigKey, Selection, Span, TextEdit};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
 /// System notifications shared by independent subsystems.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    /// Committed text engine notification.
+    Buffer(BufferEvent),
     /// A file has been opened successfully.
     FileOpened(PathBuf),
     /// A committed edit: replace `range` in the pre-edit buffer with `text`.
@@ -24,6 +26,29 @@ pub enum Event {
     ConfigChanged(ConfigKey),
     /// An action was triggered; delivery and execution are not guaranteed.
     ActionTriggered(String),
+}
+
+/// Buffer notifications. On lag, fetch an authoritative buffer snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BufferEvent {
+    /// Atomic commit; edits are replayed sequentially in the listed order.
+    Modified {
+        /// Affected buffer.
+        buffer_id: BufferId,
+        /// Monotonically increasing revision after this commit.
+        revision: u64,
+        /// Replacements in application order, including undo/redo.
+        edits: Vec<TextEdit>,
+    },
+    /// Canonical selections after movement or editing.
+    CursorChanged {
+        /// Affected buffer.
+        buffer_id: BufferId,
+        /// Text revision these positions refer to.
+        revision: u64,
+        /// Sorted, merged selections.
+        cursors: Vec<Selection>,
+    },
 }
 
 /// Errors constructing an event bus.

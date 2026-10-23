@@ -37,6 +37,8 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
 
 - core: только модели, serde и ошибки. Без tokio, UI и файловой системы.
 - event_bus: core, tokio, thiserror. Без config и app.
+- buffer: core, event_bus, ropey, regex (экранирование литералов), regex-cursor
+  (поиск по чанкам), thiserror. Без UI, прямого tokio и файлового I/O.
 - config: core, event_bus, serde, toml, serde_json, directories, tempfile,
   thiserror. Без UI.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.

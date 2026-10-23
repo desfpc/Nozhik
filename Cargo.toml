@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/event_bus", "crates/config", "crates/app"]
+members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "crates/buffer"]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +11,10 @@ license = "Apache-2.0"
 nozhik-core = { path = "crates/core" }
 nozhik-event-bus = { path = "crates/event_bus" }
 nozhik-config = { path = "crates/config" }
+nozhik-buffer = { path = "crates/buffer" }
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
+regex-cursor = { version = "0.1.5", features = ["ropey"] }
 anyhow = "1"
 directories = "6"
 serde = { version = "1", features = ["derive"] }

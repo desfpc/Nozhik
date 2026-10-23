@@ -1,6 +1,7 @@
 //! Shared value types. This crate has no runtime, filesystem, or UI dependencies.
 
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 use thiserror::Error;
 
 /// Opaque buffer identity, allocated by the future buffer store, never reused.
@@ -14,6 +15,26 @@ pub struct Position {
     pub line: u32,
     /// Zero-based UTF-8 byte offset within the line.
     pub column: u32,
+    /// Absolute UTF-8 byte offset, validated against the owning buffer revision.
+    pub byte_offset: usize,
+}
+
+/// Directed selection in one buffer revision; a caret has equal endpoints.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// Fixed endpoint.
+    pub anchor: Position,
+    /// Moving endpoint.
+    pub head: Position,
+}
+
+/// Replacement of a UTF-8 byte range with text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    /// Half-open byte range in the transaction's original revision.
+    pub range: Range<usize>,
+    /// Replacement text.
+    pub text: String,
 }
 
 /// Half-open range `[start, end)` in a particular buffer revision.
@@ -98,7 +119,11 @@ mod tests {
 
     #[test]
     fn rejects_reversed_span() {
-        let start = Position { line: 1, column: 0 };
+        let start = Position {
+            line: 1,
+            column: 0,
+            byte_offset: 0,
+        };
         assert!(Span::new(start, Position::default()).is_err());
         assert!(Span::new(start, start).is_ok());
     }

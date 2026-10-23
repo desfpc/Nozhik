@@ -1,0 +1,16 @@
+[package]
+name = "nozhik-buffer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nozhik-core.workspace = true
+nozhik-event-bus.workspace = true
+ropey.workspace = true
+regex.workspace = true
+regex-cursor.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

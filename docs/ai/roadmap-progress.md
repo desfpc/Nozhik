@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 0 | Каркас, документация, типы, шина, настройки, окно, CI | Реализован; проверки см. ниже |
 | 1 | Текстовое ядро: Rope, версии, курсоры, транзакции, история, поиск | Реализован |
-| 2 | Рендерер редактора, ввод, выделения, прокрутка, Unicode | Не начат |
+| 2 | UI Shell & Windowing: egui, панели, редактор, поиск | Реализован; ограничения ниже |
 | 3 | Проекты, VFS, файловое дерево, watcher, поиск | Не начат |
 | 4 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
 | 5 | LSP, диагностика, completion, переходы и рефакторинг | Не начат |
@@ -95,3 +95,40 @@ Modified содержит список последовательных заме
 набор выделений после commit. На Lagged нужно запросить snapshot у владельца.
 UI должен самостоятельно реализовать графемную/экранную навигацию, применение
 команд ввода и таймер, который выбирает ID группы. История пока без лимита памяти.
+
+## Phase 2 — UI Shell & Windowing
+
+- [x] `crates/ui` (`nozhik-ui`), egui/eframe 0.32.3, Glow/OpenGL, X11/Wayland.
+- [x] `app`: `eframe::run_native` на главном потоке, Tokio consumer событий.
+- [x] New UI Dark: точные HEX-цвета в theme.rs; toolbar, toolstrips,
+  изменяемые размеры левого/правого/нижнего dock, status bar.
+- [x] Вкладки с close и dirty; закрытые sample-буферы сохраняются до выхода.
+- [x] TextEditorView: show_rows виртуализирует строки Rope, gutter, каретка,
+  клик, Shift-выделение, Unicode scalar navigation, вставка, удаление, undo/redo.
+- [x] Мутации через EditTransaction; TextBuffer публикует Modified/CursorChanged.
+- [x] Search Everywhere: Double Shift / Ctrl/Cmd+Shift+A, модальный overlay,
+  chips, query, список, стрелки, Enter, Esc; настройки — отдельное modal.
+
+Открытие модальных окон: `bus.publish(Event::ActionTriggered(
+nozhik_ui::SEARCH_ACTION.into()))` или `SETTINGS_ACTION`. UI подписывается
+в конструкторе, читает события в update без блокировки. Repaint каждые 100 мс
+ограничивает задержку внешних запросов. Это best-effort broadcast: подписчик
+должен существовать до публикации, доставка не гарантируется. Lagged выводится
+в статус, настройки перечитываются; редактор читает авторитетные буферы напрямую.
+Настройки modal меняются через ConfigManager::replace и ConfigChanged,
+без неявной записи пользовательского файла.
+
+Границы этапа: демонстрационное дерево и in-memory документы; реального VFS,
+сохранения, Git, runner/debugger, terminal, DB нет. Classes/Symbols и checkbox
+внешних результатов — UI-каркас до появления индекса. Нет IME preedit,
+графемной навигации, syntax highlighting, drag docking и персистентности layout.
+Строки виртуализируются; одна очень длинная строка layout-ится целиком.
+Ручная проверка окна на каждой из трёх ОС остаётся отдельной задачей.
+
+Проверки этой итерации (macOS arm64): `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --workspace --all-features` и `cargo build --workspace --release`
+успешны. Четыре UI-теста покрывают Unicode-ввод/историю/события, удаление
+CRLF/выделения, открытие modal через bus и Double Shift, пустой workspace,
+стрелки/Enter/Esc в поиске. Тесты egui выполняются без системного окна;
+визуальная проверка нативного окна на macOS/Windows/Linux не выполнялась.

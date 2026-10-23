@@ -1,5 +1,5 @@
 [package]
-name = "nozhik-app"
+name = "app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,8 @@ nozhik-event-bus.workspace = true
 nozhik-config.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
-winit.workspace = true
+eframe.workspace = true
+nozhik-ui.workspace = true
 
 [lints]
 workspace = true

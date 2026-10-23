@@ -6,11 +6,11 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 1: текстовое ядро реализовано.** Пять крейтов, Rope-буфер,
-множественные курсоры, транзакции, undo/redo, поиск, асинхронная шина событий,
-настройки TOML/JSON, пустое системное окно, тесты и CI.
-Рендерер редактора, LSP и подключения к БД пока не реализованы.
-Окно создаётся через winit; отрисовка содержимого на этом этапе отсутствует.
+**Roadmap Phase 2: UI Shell & Windowing реализован.** Шесть крейтов,
+нативная оболочка egui/eframe (Glow/OpenGL), тёмная тема New UI, переключаемые
+док-панели, вкладки, виртуализированный Rope-редактор и Search Everywhere.
+Дерево и документы демонстрационные, хранятся в памяти. VFS, LSP, Git,
+терминал, запуск/отладка и подключения к БД ещё не реализованы.
 
 ## Сборка и запуск
 
@@ -40,11 +40,11 @@ cargo build --workspace
 cargo test --workspace --all-features
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo run -p nozhik-app
+cargo run -p app
 cargo build --workspace --release
 ```
 
-Бинарник: `target/release/nozhik-app` (`nozhik-app.exe` на Windows).
+Бинарник: `target/release/app` (`app.exe` на Windows).
 Закрытие окна завершает приложение и обработчик событий. Для тестов GUI
 не требуется; для запуска нужен доступ к дисплею. CI проверяет три ОС;
 наличие workflow само по себе не подтверждает успешный прогон.
@@ -54,7 +54,8 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-nozhik-app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
+app ──► nozhik-ui ──► nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
 nozhik-buffer ──► nozhik-event-bus, nozhik-core
@@ -66,7 +67,8 @@ crates/
   buffer/     # TextBuffer, CursorSet, History, SearchEngine; Ropey
   event_bus/  # Event, EventBus; broadcast<Arc<Event>>
   config/     # Config, ConfigManager; Arc<RwLock<Config>>
-  app/        # winit на главном потоке, Tokio workers
+  ui/         # egui shell, theme, TextEditorView, Search Everywhere
+  app/        # eframe на главном потоке, Tokio workers
 docs/ai/
   architecture.md
   coding-standards.md
@@ -107,12 +109,13 @@ assert!(!buffer.is_dirty());
 
 Загрузка/сохранение файлов и реестр открытых документов остаются задачами
 интеграции: вызывающий код выделяет уникальные `BufferId` и отмечает состояние
-сохранённым только после успешной записи. Ядро не подключено к вводу окна.
+сохранённым только после успешной записи. Ядро подключено к TextEditorView;
+ввод проходит через EditTransaction.
 
 ## Настройки
 
 `directories::ProjectDirs::from("dev", "Nozhik", "Nozhik")` определяет каталог.
-Приложение выводит фактический путь в stderr после создания окна. Типичные пути:
+Приложение выводит фактический путь в stderr перед запуском окна. Типичные пути:
 
 - Windows: `%APPDATA%\Nozhik\Nozhik\config\settings.toml`.
 - macOS: `~/Library/Application Support/dev.Nozhik.Nozhik/settings.toml`.
@@ -141,3 +144,18 @@ theme = "dark"
 
 Лицензия: [Apache-2.0](LICENSE).
 
+## Графический интерфейс
+
+Запуск: `cargo run -p app`. Кликните по тексту для фокуса редактора.
+Ввод, Backspace/Delete, Enter/Tab, стрелки, Home/End, Shift-выделение,
+Ctrl/Cmd+A, Ctrl/Cmd+Z и Ctrl/Cmd+Shift+Z работают с TextBuffer.
+Закрытие вкладки сохраняет демонстрационный буфер в памяти до выхода;
+дерево Project и поиск позволяют открыть его снова. Записи файлов пока нет.
+
+Search Everywhere: Double Shift (интервал до 400 мс), Ctrl/Cmd+Shift+A
+или лупа на тулбаре. Стрелки выбирают результат, Enter открывает, Esc закрывает.
+Ctrl/Cmd+Shift+O и Ctrl/Cmd+E пока открывают тот же поиск. Фильтры Classes/Symbols
+пусты до появления индекса; Files/Text работают с демонстрационными документами,
+Actions — с зарегистрированными действиями. Include non-project items зарезервирован
+для будущего индекса. Шестерёнка открывает настройки размера шрифта и отступа
+текущей сессии. Боковые и нижние кнопки переключают панели-заглушки.

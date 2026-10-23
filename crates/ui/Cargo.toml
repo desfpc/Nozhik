@@ -1,0 +1,17 @@
+[package]
+name = "nozhik-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+egui.workspace = true
+eframe.workspace = true
+nozhik-core.workspace = true
+nozhik-buffer.workspace = true
+nozhik-event-bus.workspace = true
+nozhik-config.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

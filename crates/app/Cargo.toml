@@ -1,0 +1,16 @@
+[package]
+name = "nozhik-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nozhik-event-bus.workspace = true
+nozhik-config.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true
+

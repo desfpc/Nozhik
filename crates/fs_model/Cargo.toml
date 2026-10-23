@@ -1,0 +1,20 @@
+[package]
+name = "nozhik-fs-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nozhik-event-bus.workspace = true
+notify.workspace = true
+ignore.workspace = true
+fuzzy-matcher.workspace = true
+thiserror.workspace = true
+ropey.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

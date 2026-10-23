@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 2
+# Архитектура Nozhik — Phase 3
 
 ## Границы крейтов
 
@@ -8,7 +8,8 @@
 | nozhik-event-bus | Системные события и транспорт pub/sub | core |
 | nozhik-buffer | Rope, координаты, курсоры, история, поиск | core, event_bus |
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
-| nozhik-ui | UI shell, layout, editor view, modal search | core, buffer, config, event_bus |
+| nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus |
+| nozhik-ui | UI shell, documents, project integration, editor view, search | core, buffer, config, event_bus, fs_model |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -77,7 +78,7 @@ Unicode scalars; графемы, табуляция и экранная шири
 ## Текстовое ядро
 
 `TextBuffer` принадлежит вызывающему коду, который выделяет уникальный `BufferId`.
-Общий BufferStore и файловый I/O в эту итерацию не входят. `snapshot()` возвращает
+Реестр файловых документов принадлежит UI; файловый I/O выполняет fs_model worker. `snapshot()` возвращает
 Rope с copy-on-write, ревизию и курсоры; состояние доступно без подписки на шину.
 Ревизия u64 монотонно растёт при commit, undo и redo. Движение курсоров не меняет
 текстовую ревизию. Ошибочные и пустые правки не создают событий и истории.
@@ -138,11 +139,28 @@ replace меняет только память, save сохраняет явно
 
 ## Следующие архитектурные решения
 
-Для интеграции файлов определить BufferStore, жизненный цикл ID и сохранение
-конкретной ревизии. Версии документов и snapshot/resync реализованы в buffer.
+UI выделяет BufferId монотонно без переиспользования и хранит документы по canonical path.
+Сохранение передаёт COW snapshot и revision; успешное завершение снимает dirty
+только при совпадении текущей revision. Версии документов и snapshot/resync реализованы в buffer.
 UI проверяет broadcast без блокировки в update, request_repaint_after(100 ms)
-обеспечивает обработку внешних уведомлений. UI не вызывается из Tokio-задач.
+обеспечивает обработку внешних bus-действий. Файловый worker и watcher также
+будят event loop через зарегистрированный callback `Context::request_repaint()`. UI не вызывается из Tokio-задач.
 ActionTriggered(ui.search_everywhere/ui.settings) открывает modal best-effort;
 состояние документов всегда читается напрямую, не восстанавливается из событий.
 Renderer — Glow/OpenGL. Plugin ABI и DB pools пока не выбираются.
 
+
+## Файловая система (Phase 3)
+
+`fs_model` не зависит от egui или buffer: принимает Rope snapshot, возвращает
+UTF-8 текст, native пути и модель дерева. `FileSystem` обрабатывает команды
+последовательно на отдельном потоке, `ProjectWatcher` публикует invalidation
+через EventBus после debounce 150 мс. UI владеет `TextBuffer`, lazy-состоянием
+раскрытых каталогов и search token; никакой дисковый I/O не выполняется в update.
+
+`Event::File(FileEvent::Changed(PathBuf))` включает create/remove/rename/modify
+и собственные сохранения. `FileEvent::Error(String)` означает неполноту наблюдения.
+На Changed и Lagged UI запрашивает Refresh индекса/загруженных каталогов;
+текст открытых документов остаётся в памяти. Надёжные Read/Save/LoadDir/Search
+используют mpsc команды/ответы, а не broadcast. Подробности и ограничения:
+[Phase 3](roadmap-progress.md#phase-3--файловая-система-и-project-model).

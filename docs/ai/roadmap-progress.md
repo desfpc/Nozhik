@@ -9,7 +9,7 @@
 | 0 | Каркас, документация, типы, шина, настройки, окно, CI | Реализован; проверки см. ниже |
 | 1 | Текстовое ядро: Rope, версии, курсоры, транзакции, история, поиск | Реализован |
 | 2 | UI Shell & Windowing: egui, панели, редактор, поиск | Реализован; ограничения ниже |
-| 3 | Проекты, VFS, файловое дерево, watcher, поиск | Не начат |
+| 3 | Проекты, файловый I/O, файловое дерево, watcher, поиск | Реализован; ограничения ниже |
 | 4 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
 | 5 | LSP, диагностика, completion, переходы и рефакторинг | Не начат |
 | 6 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
@@ -118,7 +118,7 @@ nozhik_ui::SEARCH_ACTION.into()))` или `SETTINGS_ACTION`. UI подписыв
 Настройки modal меняются через ConfigManager::replace и ConfigChanged,
 без неявной записи пользовательского файла.
 
-Границы этапа: демонстрационное дерево и in-memory документы; реального VFS,
+Исторические границы Phase 2 (заменены Phase 3): демонстрационное дерево и in-memory документы; реального VFS,
 сохранения, Git, runner/debugger, terminal, DB нет. Classes/Symbols и checkbox
 внешних результатов — UI-каркас до появления индекса. Нет IME preedit,
 графемной навигации, syntax highlighting, drag docking и персистентности layout.
@@ -132,3 +132,72 @@ nozhik_ui::SEARCH_ACTION.into()))` или `SETTINGS_ACTION`. UI подписыв
 CRLF/выделения, открытие modal через bus и Double Shift, пустой workspace,
 стрелки/Enter/Esc в поиске. Тесты egui выполняются без системного окна;
 визуальная проверка нативного окна на macOS/Windows/Linux не выполнялась.
+
+## Phase 3 — файловая система и Project Model
+
+- [x] `nozhik-fs-model` в workspace: `notify`, `ignore`, `fuzzy-matcher`, Rope snapshot I/O.
+- [x] `tree.rs`: `ProjectTree { root_path, directories }`, `DirNode { path, children }`,
+  `Node::Dir(PathBuf)` / `Node::File(FileNode)`, типы Rust/PHP/JS/TS/config/Markdown/generic.
+  `children: None` означает отсутствие загрузки; `Some([])` — загруженный пустой каталог.
+  Загружается только один уровень; папки сверху, обе группы по имени.
+- [x] `fuzzy.rs`: отдельный плоский `FileIndex`, обход не раскрывает lazy-дерево;
+  fuzzy-рейтинг относительных путей, детерминированная сортировка, максимум 100 результатов в UI.
+- [x] Единая ignore-политика: `.gitignore`, вложенные/родительские правила, `.ignore`,
+  глобальные Git rules; `.git`, `target`, `node_modules`, `vendor` исключаются всегда.
+- [x] `watcher.rs`: recommended OS watcher, отдельный debounce worker, 150 мс тишины
+  на путь; access events пропускаются, ignore matchers перечитываются после изменений.
+- [x] `lib.rs`: `FileSystem` с выделенным serial worker и каналами `Command` / `Reply`;
+  чтение, запись, обход, поиск, canonicalize и настройка watcher выполняются вне egui.
+- [x] UI: реальное дерево, двойной клик/Enter, дедупликация по canonical path,
+  уникальные BufferId, сохранение по Ctrl/Cmd+S и Files в Search Everywhere.
+- [x] Сохранение: COW Rope snapshot + revision; serial worker сохраняет порядок,
+  temp file + sync_all + persist, исходные permissions; dirty снимается после успеха
+  только при совпадении текущей ревизии. Ошибки не меняют точку сохранения.
+- [x] NUL в первых 1024 байтах → binary placeholder без editing/save;
+  невалидный UTF-8 и I/O errors → status bar + stderr, без panic/unwrap.
+- [x] CLI project path или текущая директория; поле пути + Open для смены проекта.
+
+### Контракты событий и конкуренции
+
+`Event::File(FileEvent::Changed(PathBuf))` — абсолютный native path изменившегося
+файла или каталога; включает create, remove и обе стороны rename. Это invalidation,
+а не точный diff и не гарантия внешнего происхождения: собственные записи тоже видны.
+`Event::File(FileEvent::Error(String))` сообщает ошибку watcher; проект остаётся
+доступным для чтения/сохранения, полнота автоматического обновления не гарантируется.
+`Event::FileOpened(PathBuf)` публикует UI после установки документа/placeholder.
+
+Обязательные операции не идут через best-effort bus. `Command`: OpenProject,
+LoadDir, Refresh, Read, Save { path, revision, text: Rope }, Search { token, query }.
+`Reply`: Tree, Refreshed, Read, Binary, Saved, Matches, Error. Завершения приходят
+по отдельному mpsc; egui читает их без ожидания. Дерево обновляется по Changed,
+на Lagged запрашивается Refresh. Изменения во время обновления планируют повторный
+Refresh. UI не меняется из worker; callback вызывает `Context::request_repaint()` после
+завершения команды или уведомления watcher. Дополнительный repaint с интервалом
+100 мс ограничивает задержку внешних bus-действий. Search token отбрасывает ответы устаревших запросов.
+
+Для I/O используются `PathBuf` и canonical paths; для поиска — относительные пути
+с `/`, запросы также принимают `\`. UI хранит свои буферы авторитетно; закрытые
+вкладки и смена проекта их не уничтожают. Watcher обновляет дерево/индекс, но
+не заменяет текст открытого буфера. Нет автоматического reload/merge, file locking,
+восстановления сессии или запроса о сохранении при выходе. Запись атомарно заменяет
+файл, но не гарантирует durability каталога при аварийном отключении; ACL/xattrs
+не копируются, hard links не сохраняют общую файловую идентичность после замены.
+Ссылки при обходе не раскрываются. Очень большие файлы и длинные строки требуют
+дальнейших лимитов/оптимизации. Фоновый worker последовательный: полный scan
+может задерживать I/O/search, но не рендеринг UI.
+
+### Проверки Phase 3
+
+Поведенческие тесты покрывают lazy/sorted tree, ignore rules и вложенные исключения,
+fuzzy path search и Windows-разделители запросов, чтение/UTF-8/binary/errors,
+фоновый индекс и refresh, сохранение/permissions, дедупликацию вкладок,
+правку во время save, Ctrl/Cmd+S, удалённый файл, binary placeholder,
+Files Enter и отклонение устаревшего search token. Нативные окна Windows/Linux
+нужно проверять отдельно; тесты egui выполняются без окна.
+
+Локально на macOS arm64, Rust 1.99.1: fmt, Clippy workspace/all-targets/all-features
+с `-D warnings`, 31 unit-тест и один doc-test прошли. Реальный OS watcher
+проверен вне sandbox: внутри sandbox FSEvents не доставлял события.
+Release-сборка успешна; для временного toolchain использован `DYLD_LIBRARY_PATH`
+к его lib-каталогу, чтобы rust-objcopy находил libLLVM при stripping.
+Нативное GUI-окно и Windows/Linux в этой итерации вручную не проверялись.

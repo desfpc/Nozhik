@@ -34,7 +34,15 @@ fn main() -> Result<()> {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            let ui = NozhikUi::new(bus.clone(), settings, config);
+            let mut ui = NozhikUi::new(bus.clone(), settings, config);
+            match std::env::args_os()
+                .nth(1)
+                .map(std::path::PathBuf::from)
+                .map_or_else(std::env::current_dir, Ok)
+            {
+                Ok(path) => ui.open_project(path),
+                Err(error) => eprintln!("Cannot resolve project folder: {error}"),
+            }
             bus.publish(Event::ActionTriggered("app.started".into()));
             Ok(Box::new(ui))
         }),

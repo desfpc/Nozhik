@@ -41,6 +41,9 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   (поиск по чанкам), thiserror. Без UI, прямого tokio и файлового I/O.
 - config: core, event_bus, serde, toml, serde_json, directories, tempfile,
   thiserror. Без UI.
+- fs_model: event_bus, notify, ignore, fuzzy-matcher, ropey, tempfile, thiserror.
+  Без UI; синхронные операции вызываются выделенным worker.
+- ui: buffer, core, config, event_bus, fs_model, egui/eframe.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные
   features. Обновляйте Cargo.lock. Изменения допустимых границ документируйте.

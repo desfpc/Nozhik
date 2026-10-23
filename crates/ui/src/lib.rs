@@ -1,22 +1,30 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
 pub mod editor_view;
+mod project;
 pub mod search_everywhere;
 pub mod theme;
 
 use nozhik_buffer::TextBuffer;
 use nozhik_config::{Config, ConfigManager};
-use nozhik_core::BufferId;
 use nozhik_event_bus::{Event, EventBus};
+use nozhik_fs_model::{FileSystem, tree::ProjectTree};
+use std::{collections::HashSet, path::PathBuf};
 use tokio::sync::broadcast;
 
 /// Best-effort action opening Search Everywhere through the shared bus.
 pub const SEARCH_ACTION: &str = "ui.search_everywhere";
 /// Best-effort action opening the settings modal.
 pub const SETTINGS_ACTION: &str = "ui.settings";
+/// Best-effort action saving the active file through the I/O worker.
+pub const SAVE_ACTION: &str = "ui.save_file";
 
 /// One in-memory document; closing its tab retains its unsaved buffer.
 pub struct Document {
+    /// Canonical native file identity.
+    pub path: PathBuf,
+    /// Binary placeholder; prevents editing and saving.
+    pub binary: bool,
     /// Label in tabs and project tree.
     pub name: String,
     /// Authoritative text and history.
@@ -36,8 +44,23 @@ pub enum LeftTool {
     Structure,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefreshState {
+    Idle,
+    Pending,
+    Again,
+}
+
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    fs: FileSystem,
+    project: Option<ProjectTree>,
+    expanded: HashSet<PathBuf>,
+    loading: HashSet<PathBuf>,
+    selected_file: Option<PathBuf>,
+    project_path: String,
+    next_buffer_id: u64,
+    refresh: RefreshState,
     bus: EventBus,
     events: broadcast::Receiver<std::sync::Arc<Event>>,
     settings: ConfigManager,
@@ -56,40 +79,26 @@ pub struct NozhikUi {
 }
 
 impl NozhikUi {
-    /// Creates the shell with explicitly labelled, editable sample documents.
-    /// No project files are read or written.
+    /// Creates an empty shell; all project I/O is queued to a dedicated worker.
     #[must_use]
     pub fn new(bus: EventBus, settings: ConfigManager, config: Config) -> Self {
         let events = bus.subscribe();
-        let documents = [
-            (
-                "main.rs",
-                "// Nozhik — in-memory sample\nfn main() {\n    println!(\"Hello, Nozhik!\");\n}\n",
-            ),
-            (
-                "Cargo.toml",
-                "# In-memory sample\n[package]\nname = \"nozhik\"\nversion = \"0.1.0\"\n",
-            ),
-        ]
-        .into_iter()
-        .zip(1_u64..)
-        .map(|((name, text), id)| {
-            let mut buffer = TextBuffer::load_from_str(BufferId(id), text);
-            buffer.set_event_bus(bus.clone());
-            Document {
-                name: name.into(),
-                buffer,
-                open: id == 1,
-            }
-        })
-        .collect();
+        let fs = FileSystem::start(bus.clone());
         Self {
+            fs,
+            project: None,
+            expanded: HashSet::new(),
+            loading: HashSet::new(),
+            selected_file: None,
+            project_path: String::new(),
+            next_buffer_id: 1,
+            refresh: RefreshState::Idle,
             bus,
             events,
             settings,
             config,
-            documents,
-            active: Some(0),
+            documents: Vec::new(),
+            active: None,
             left: Some(LeftTool::Project),
             right: None,
             bottom: None,
@@ -97,7 +106,7 @@ impl NozhikUi {
             settings_open: false,
             shift_down: false,
             last_shift: None,
-            status: "In-memory samples".into(),
+            status: "Open a project folder".into(),
             editor: editor_view::TextEditorView,
         }
     }

@@ -9,6 +9,8 @@ use tokio::sync::broadcast;
 /// System notifications shared by independent subsystems.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    /// Filesystem invalidation; reread authoritative state.
+    File(FileEvent),
     /// Committed text engine notification.
     Buffer(BufferEvent),
     /// A file has been opened successfully.
@@ -26,6 +28,15 @@ pub enum Event {
     ConfigChanged(ConfigKey),
     /// An action was triggered; delivery and execution are not guaranteed.
     ActionTriggered(String),
+}
+
+/// Debounced filesystem notifications with absolute native paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileEvent {
+    /// Content or directory membership changed (including create/remove/rename).
+    Changed(PathBuf),
+    /// Watcher failed; observations may be incomplete.
+    Error(String),
 }
 
 /// Buffer notifications. On lag, fetch an authoritative buffer snapshot.

@@ -1,12 +1,14 @@
 use crate::{
-    LeftTool, NozhikUi, SEARCH_ACTION, SETTINGS_ACTION, search_everywhere::SearchTarget, theme,
+    LeftTool, NozhikUi, SAVE_ACTION, SEARCH_ACTION, SETTINGS_ACTION,
+    search_everywhere::SearchTarget, theme,
 };
 use egui::{Context, Key};
-use nozhik_event_bus::Event;
+use nozhik_event_bus::{Event, FileEvent};
+use nozhik_fs_model::Command;
 use tokio::sync::broadcast::error::TryRecvError;
 
 impl NozhikUi {
-    fn shortcuts(&mut self, ctx: &Context) {
+    pub(crate) fn shortcuts(&mut self, ctx: &Context) {
         let (shift, time, used) = ctx.input(|i| {
             (
                 i.modifiers.shift,
@@ -36,6 +38,9 @@ impl NozhikUi {
                 || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::O)
                 || i.consume_key(egui::Modifiers::COMMAND, Key::E)
         });
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
+            self.save_file();
+        }
         if search {
             self.action(SEARCH_ACTION);
         }
@@ -47,6 +52,7 @@ impl NozhikUi {
             match self.events.try_recv() {
                 Ok(event) => match event.as_ref() {
                     Event::ActionTriggered(action) => match action.as_str() {
+                        SAVE_ACTION => self.save_file(),
                         SEARCH_ACTION => {
                             self.settings_open = false;
                             self.search.open();
@@ -64,6 +70,21 @@ impl NozhikUi {
                         }
                         _ => {}
                     },
+                    Event::File(FileEvent::Changed(path)) => {
+                        if self
+                            .project
+                            .as_ref()
+                            .is_some_and(|p| path.starts_with(&p.root_path))
+                        {
+                            self.status =
+                                format!("Disk changed: {} (open buffers retained)", path.display());
+                            self.refresh_project();
+                        }
+                    }
+                    Event::File(FileEvent::Error(error)) => {
+                        self.status.clone_from(error);
+                        eprintln!("Watcher: {error}");
+                    }
                     Event::ConfigChanged(_) => match self.settings.snapshot() {
                         Ok(config) => self.config = config,
                         Err(error) => self.status = error.to_string(),
@@ -72,6 +93,7 @@ impl NozhikUi {
                 },
                 Err(TryRecvError::Lagged(count)) => {
                     self.status = format!("Missed {count} notifications; current buffers retained");
+                    self.refresh_project();
                     if let Ok(config) = self.settings.snapshot() {
                         self.config = config;
                     }
@@ -90,7 +112,7 @@ impl NozhikUi {
                         ui.add_space(72.0);
                     }
                     ui.menu_button("Nozhik v", |ui| {
-                        ui.label("Nozhik · sample workspace");
+                        ui.label("Nozhik · project workspace");
                     });
                     ui.menu_button("master v", |ui| {
                         ui.weak("Git integration is planned");
@@ -228,30 +250,7 @@ impl NozhikUi {
                     });
                     ui.separator();
                     if tool == LeftTool::Project {
-                        let mut open = None;
-                        egui::CollapsingHeader::new("Nozhik · samples")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                egui::CollapsingHeader::new("src").default_open(true).show(
-                                    ui,
-                                    |ui| {
-                                        for (index, document) in self.documents.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(
-                                                    self.active == Some(index),
-                                                    &document.name,
-                                                )
-                                                .clicked()
-                                            {
-                                                open = Some(index);
-                                            }
-                                        }
-                                    },
-                                );
-                            });
-                        if let Some(index) = open {
-                            self.open_document(index);
-                        }
+                        self.project_panel(ui);
                     } else {
                         ui.weak("Tool window placeholder");
                     }
@@ -259,7 +258,7 @@ impl NozhikUi {
         }
     }
 
-    fn editor_area(&mut self, ctx: &Context) {
+    pub(crate) fn editor_area(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BACKGROUND))
             .show(ctx, |ui| {
@@ -287,7 +286,7 @@ impl NozhikUi {
                         }
                         if ui
                             .small_button("×")
-                            .on_hover_text("Close tab (sample buffer is retained)")
+                            .on_hover_text("Close tab (unsaved buffer is retained)")
                             .clicked()
                         {
                             close = Some(index);
@@ -303,6 +302,10 @@ impl NozhikUi {
                 ui.separator();
                 if let Some(index) = self.active {
                     let enabled = !self.search.open && !self.settings_open;
+                    if self.documents[index].binary {
+                        ui.label("Binary file not supported");
+                        return;
+                    }
                     if let Err(error) = self.editor.show(
                         ui,
                         &mut self.documents[index].buffer,
@@ -334,16 +337,23 @@ impl NozhikUi {
 
 impl eframe::App for NozhikUi {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        let wake_context = ctx.clone();
+        self.fs.set_wakeup(move || wake_context.request_repaint());
         self.shortcuts(ctx);
         self.receive_events();
+        self.receive_files();
         self.top_bar(ctx);
         self.panels(ctx);
         self.editor_area(ctx);
         if let Some(target) = self.search.show(ctx, &self.documents) {
             match target {
+                SearchTarget::File(path) => self.open_file(path),
                 SearchTarget::Document(index) => self.open_document(index),
                 SearchTarget::Action(action) => self.action(action),
             }
+        }
+        if let Some((token, query)) = self.search.take_request() {
+            self.queue(Command::Search { token, query });
         }
         if self.settings_open {
             let modal = egui::Modal::new(egui::Id::new("settings")).show(ctx, |ui| {

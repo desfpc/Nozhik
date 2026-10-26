@@ -41,32 +41,47 @@ impl NozhikUi {
         }
     }
     pub(crate) fn save_file(&mut self) {
-        let Some(document) = self.active.and_then(|i| self.documents.get(i)) else {
+        if let Some(i) = self.database.active {
+            self.save_sql(i);
+        } else if let Some(i) = self.active {
+            self.save_document(i);
+        }
+    }
+    pub(crate) fn save_document(&mut self, index: usize) {
+        let Some(document) = self.documents.get(index) else {
             return;
         };
         if document.binary {
             self.status = "Binary file not supported".into();
             return;
         }
+        let path = document.path.clone();
         let snapshot = document.buffer.snapshot();
-        if self.remote.documents.contains_key(&document.path) {
-            if self.remote.document_invalidated(&document.path) {
-                self.status = "SSH profile changed/deleted; reopen the file from SFTP before saving. Edits remain in this buffer.".into();
-                return;
-            }
-            if !self
-                .remote
-                .save(&document.path, snapshot.revision, snapshot.text)
-            {
-                self.status = "SSH queue full/stopped; file remains unsaved".into();
-            }
+        if self.integration.saving.get(&path) == Some(&snapshot.revision) {
             return;
         }
-        self.queue(Command::Save {
-            path: document.path.clone(),
-            revision: snapshot.revision,
-            text: snapshot.text,
-        });
+        let queued = if self.remote.documents.contains_key(&path) {
+            if self.remote.document_invalidated(&path) {
+                let error = "SSH profile changed/deleted; reopen the file from SFTP before saving. Edits remain unsaved.";
+                self.status = error.into();
+                self.integration.save_error = Some(error.into());
+                return;
+            }
+            self.remote.save(&path, snapshot.revision, snapshot.text)
+        } else {
+            self.fs.send(Command::Save {
+                path: path.clone(),
+                revision: snapshot.revision,
+                text: snapshot.text,
+            })
+        };
+        if queued {
+            self.integration.saving.insert(path, snapshot.revision);
+        } else {
+            self.integration.save_error =
+                Some("Save queue full/stopped; file remains unsaved".into());
+            self.status = self.integration.save_error.clone().unwrap_or_default();
+        }
     }
     pub(crate) fn receive_files(&mut self) {
         let replies: Vec<_> = self.fs.drain().collect();
@@ -113,6 +128,7 @@ impl NozhikUi {
                 Reply::Read { path, text } => self.loaded_file(path, &text, false),
                 Reply::Binary(path) => self.loaded_file(path, "", true),
                 Reply::Saved { path, revision } => {
+                    self.saved(&path, revision);
                     if let Some(document) = self.documents.iter_mut().find(|d| d.path == path)
                         && document.buffer.snapshot().revision == revision
                     {
@@ -123,6 +139,10 @@ impl NozhikUi {
                 }
                 Reply::Matches { token, files } => self.search.accept(token, files),
                 Reply::Error(error) => {
+                    if !self.integration.saving.is_empty() {
+                        self.integration.save_error = Some(error.clone());
+                        self.integration.saving.clear();
+                    }
                     for path in self.loading.drain() {
                         self.expanded.remove(&path);
                     }
@@ -159,6 +179,7 @@ impl NozhikUi {
         });
         self.active = self.documents.len().checked_sub(1);
         self.database.active = None;
+        self.search.note_file(path.clone());
         self.bus.publish(Event::FileOpened(path));
     }
     pub(crate) fn project_panel(&mut self, ui: &mut egui::Ui) {

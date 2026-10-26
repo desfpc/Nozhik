@@ -161,7 +161,7 @@ impl TerminalView {
                 );
             let caret = egui::Rect::from_min_size(origin, egui::vec2(cell_width, cell_height));
             if enabled && response.has_focus() {
-                painter.rect_filled(caret, 0.0, Color32::from_white_alpha(85));
+                painter.rect_filled(caret, 0.0, theme::CARET);
             } else {
                 painter.rect_stroke(
                     caret,
@@ -179,24 +179,7 @@ impl TerminalView {
     reason = "The ANSI cube and grayscale formulas are bounded to 0..=255"
 )]
 fn color(color: TerminalColor, default: Color32) -> Color32 {
-    let palette = [
-        (30, 31, 34),
-        (229, 92, 94),
-        (106, 171, 115),
-        (229, 192, 123),
-        (86, 168, 245),
-        (199, 125, 187),
-        (86, 182, 194),
-        (188, 190, 196),
-        (122, 126, 133),
-        (255, 113, 113),
-        (138, 201, 144),
-        (255, 220, 150),
-        (127, 186, 255),
-        (223, 157, 224),
-        (132, 214, 225),
-        (255, 255, 255),
-    ];
+    let palette = theme::ANSI;
     match color {
         TerminalColor::Default => default,
         TerminalColor::Rgb(r, g, b) => Color32::from_rgb(r, g, b),

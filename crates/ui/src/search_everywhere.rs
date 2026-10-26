@@ -31,6 +31,7 @@ pub struct SearchEverywhere {
     selected: usize,
     focus: bool,
     files: Vec<FileMatch>,
+    recent: Vec<PathBuf>,
     actions: Vec<(String, SearchTarget)>,
     token: u64,
     requested: Option<String>,
@@ -44,6 +45,15 @@ impl SearchEverywhere {
         self.selected = 0;
     }
 
+    pub(crate) fn note_file(&mut self, path: PathBuf) {
+        self.recent.retain(|p| p != &path);
+        self.recent.insert(0, path);
+        self.recent.truncate(30);
+    }
+    pub(crate) const fn open_filter(&mut self, filter: usize) {
+        self.filter = filter;
+        self.open();
+    }
     pub(crate) fn invalidate(&mut self) {
         self.token = self.token.wrapping_add(1);
         self.requested = None;
@@ -66,6 +76,14 @@ impl SearchEverywhere {
     fn results(&self, documents: &[Document]) -> Vec<(String, SearchTarget)> {
         let query = self.query.to_lowercase();
         let mut results = Vec::new();
+        if self.filter == 6 {
+            for path in &self.recent {
+                let label = path.display().to_string();
+                if label.to_lowercase().contains(&query) {
+                    results.push((label, SearchTarget::File(path.clone())));
+                }
+            }
+        }
         if matches!(self.filter, 0 | 2) && !query.starts_with('/') {
             for file in &self.files {
                 results.push((file.relative.clone(), SearchTarget::File(file.path.clone())));
@@ -139,9 +157,11 @@ impl SearchEverywhere {
             .show(ctx, |ui| {
                 ui.set_width((ctx.screen_rect().width() - 48.0).clamp(240.0, 720.0));
                 ui.horizontal_wrapped(|ui| {
-                    for (index, label) in ["All", "Classes", "Files", "Symbols", "Actions", "Text"]
-                        .iter()
-                        .enumerate()
+                    for (index, label) in [
+                        "All", "Classes", "Files", "Symbols", "Actions", "Text", "Recent",
+                    ]
+                    .iter()
+                    .enumerate()
                     {
                         if ui.selectable_label(self.filter == index, *label).clicked() {
                             self.filter = index;

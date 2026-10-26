@@ -314,6 +314,7 @@ pub struct Worker {
     /// Bounded completions; drain without waiting on the UI thread.
     pub output: mpsc::Receiver<Reply>,
     stop: CancellationToken,
+    done: std::sync::mpsc::Receiver<()>,
 }
 impl Worker {
     /// Start an isolated Tokio worker; profile and credential I/O use blocking pool.
@@ -323,6 +324,7 @@ impl Worker {
         let (sender, output) = mpsc::channel(32);
         let stop = CancellationToken::new();
         let stopped = stop.clone();
+        let (finished, done) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -384,14 +386,26 @@ impl Worker {
                     }
                 }
                 for token in active_tokens.values() { token.cancel(); }
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                let closes=connections.values().map(|(connection,_)|connection.close());
+                let _closed=tokio::time::timeout(Duration::from_secs(2),futures_util::future::join_all(closes)).await;
             }));
             runtime.shutdown_timeout(Duration::from_secs(1));
+            let _finished = finished.send(());
         });
         Self {
             input,
             output,
             stop,
+            done,
         }
+    }
+    /// Cancel requests, close pools and wait at most four seconds for worker teardown.
+    pub fn shutdown(mut self) {
+        self.stop.cancel();
+        self.output.close();
+        let _finished = self.done.recv_timeout(Duration::from_secs(4));
     }
     /// Enqueue without blocking; false means the queue is full or worker stopped.
     #[must_use]

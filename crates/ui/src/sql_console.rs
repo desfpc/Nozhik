@@ -6,6 +6,10 @@ use nozhik_language_support::highlighter::HighlightSpan;
 use std::ops::Range;
 
 pub struct SqlConsole {
+    pub path: Option<std::path::PathBuf>,
+    pub split: f32,
+    pub focus_id: Option<egui::Id>,
+    pub editor_id: Option<egui::Id>,
     pub title: String,
     pub connection: String,
     pub schema: String,
@@ -22,6 +26,10 @@ pub struct SqlConsole {
 impl SqlConsole {
     pub fn new(id: u64, connection: String, schema: String, sql: &str, title: String) -> Self {
         Self {
+            path: None,
+            split: 0.45,
+            focus_id: None,
+            editor_id: None,
             title,
             connection,
             schema,
@@ -81,7 +89,7 @@ impl SqlConsole {
                     .add_enabled(
                         self.pending.is_none(),
                         egui::Button::new(
-                            egui::RichText::new("▶ Execute").color(egui::Color32::LIGHT_GREEN),
+                            egui::RichText::new("▶ Execute").color(crate::theme::SUCCESS),
                         ),
                     )
                     .clicked();
@@ -100,7 +108,7 @@ impl SqlConsole {
             execute = true;
         }
         if !self.error.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+            ui.colored_label(crate::theme::ERROR, &self.error);
         }
         let revision = self.buffer.snapshot().revision;
         if self.highlighted != Some(revision) {
@@ -117,12 +125,16 @@ impl SqlConsole {
             self.language.revision = revision;
             self.highlighted = Some(revision);
         }
+        let total_height = ui.available_height();
         let editor_height = if self.results.is_empty() {
             ui.available_height()
         } else {
-            (ui.available_height() * 0.45).max(70.0)
+            (ui.available_height() * self.split).max(70.0)
         };
         ui.allocate_ui(egui::vec2(ui.available_width(), editor_height), |ui| {
+            let id = ui.id().with(("editor", self.buffer.snapshot().buffer_id));
+            self.editor_id = Some(id);
+            self.focus_id = ui.memory(|m| m.has_focus(id)).then_some(id);
             if let Err(e) = self.editor.show_language(
                 ui,
                 &mut self.buffer,
@@ -135,7 +147,18 @@ impl SqlConsole {
             }
         });
         if !self.results.is_empty() {
-            ui.separator();
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), crate::theme::SPLITTER),
+                egui::Sense::drag(),
+            );
+            ui.painter().rect_filled(rect, 0.0, crate::theme::BORDER);
+            response
+                .clone()
+                .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                .on_hover_text("Resize SQL editor / results");
+            if response.dragged() {
+                self.split = (self.split + response.drag_delta().y / total_height).clamp(0.15, 0.8);
+            }
             ui.horizontal(|ui| {
                 for (index, _) in self.results.iter().enumerate() {
                     ui.selectable_value(
@@ -154,6 +177,9 @@ impl SqlConsole {
         } else {
             None
         }
+    }
+    pub(crate) const fn reveal(&mut self, line: Option<usize>) {
+        self.editor.reveal_line = line;
     }
     pub fn execution_sql(&self) -> String {
         let source = self.buffer.rope().to_string();

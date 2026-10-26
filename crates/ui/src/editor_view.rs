@@ -102,6 +102,28 @@ impl TextEditorView {
                         }
                     }
                 }
+                if matches!(event, Event::Copy | Event::Cut) {
+                    let text = buffer
+                        .cursors()
+                        .as_slice()
+                        .iter()
+                        .map(|c| {
+                            buffer
+                                .rope()
+                                .byte_slice(
+                                    c.anchor.byte_offset.min(c.head.byte_offset)
+                                        ..c.anchor.byte_offset.max(c.head.byte_offset),
+                                )
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ui.ctx().copy_text(text);
+                    if matches!(event, Event::Cut) {
+                        Self::replace(buffer, "", None)?;
+                    }
+                    continue;
+                }
                 let trigger = matches!(&event, Event::Text(s) if s.chars().last().is_some_and(|c| c.is_alphanumeric() || matches!(c,'_'|'$'|'>'|':'|'\\')));
                 Self::input(buffer, event, tab_width)?;
                 if let Some(state) = language.as_deref_mut() {
@@ -205,9 +227,9 @@ impl TextEditorView {
                                 == Some(
                                     nozhik_language_support::lsp_types::DiagnosticSeverity::WARNING,
                                 ) {
-                                egui::Color32::YELLOW
+                                crate::theme::WARNING
                             } else {
-                                egui::Color32::LIGHT_RED
+                                crate::theme::ERROR
                             };
                             ui.painter().circle_filled(
                                 rect.min + egui::vec2(12.0, 10.0),
@@ -531,7 +553,7 @@ impl TextEditorView {
         }
     }
 
-    fn replace(
+    pub(crate) fn replace(
         buffer: &mut TextBuffer,
         text: &str,
         deletion: Option<Key>,

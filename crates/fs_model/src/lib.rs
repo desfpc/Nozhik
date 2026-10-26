@@ -47,6 +47,10 @@ pub enum Command {
     LoadDir(PathBuf),
     /// Refresh index and previously loaded directories.
     Refresh,
+    /// Detect file or folder on the worker, then open through existing I/O paths.
+    OpenPath(PathBuf),
+    /// Create a new empty file exclusively; existing files are never truncated.
+    Create(PathBuf),
     /// Read and canonicalize a file.
     Read(PathBuf),
     /// Persist a shared Rope snapshot; revision identifies the save point.
@@ -229,6 +233,20 @@ impl Worker {
                     }
                 }
                 Reply::Refreshed(tree.clone())
+            }
+            Command::OpenPath(path) => {
+                return self.execute(if path.is_dir() {
+                    Command::OpenProject(path)
+                } else {
+                    Command::Read(path)
+                });
+            }
+            Command::Create(path) => {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)?;
+                return self.execute(Command::Read(path));
             }
             Command::Read(path) => {
                 let path = path.canonicalize()?;

@@ -19,6 +19,7 @@ enum Mode {
 }
 /// Persistent UI state. No repository handles or disk operations live here.
 pub struct VcsPanel {
+    pub open_branches: bool,
     worker: Vcs,
     project: Option<PathBuf>,
     generation: u64,
@@ -50,6 +51,7 @@ pub struct VcsPanel {
 impl Default for VcsPanel {
     fn default() -> Self {
         Self {
+            open_branches: false,
             worker: Vcs::start(),
             project: None,
             generation: 0,
@@ -103,6 +105,9 @@ impl VcsPanel {
         self.refresh_at = None;
         self.submit(Task::Open(root.into()));
     }
+    pub(crate) fn run_global(&mut self, task: Task) {
+        self.submit(task);
+    }
     fn submit(&mut self, task: Task) -> u64 {
         self.sequence = self.sequence.wrapping_add(1);
         let id = self.sequence;
@@ -150,6 +155,16 @@ impl VcsPanel {
                 self.submit(Task::Refresh);
             } else if let Some(root) = &self.project {
                 self.submit(Task::Open(root.clone()));
+            }
+        }
+        if self.project.is_some() && self.pending.is_empty() {
+            let due = self
+                .refresh_at
+                .into_iter()
+                .chain((visible || self.repo.is_some()).then_some(self.next_poll))
+                .min();
+            if let Some(due) = due {
+                ctx.request_repaint_after(due.saturating_duration_since(Instant::now()));
             }
         }
         self.confirm_discard(ctx);
@@ -233,6 +248,18 @@ impl VcsPanel {
         self.diff_request = self.submit(Task::Diff(target));
     }
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
+        if self.open_branches {
+            let mut open = true;
+            egui::Window::new("Branches")
+                .open(&mut open)
+                .show(ui.ctx(), |ui| {
+                    self.branch_controls(ui);
+                });
+            self.open_branches = open;
+        }
+        self.branch_controls(ui);
+    }
+    fn branch_controls(&mut self, ui: &mut egui::Ui) {
         let label = format!("⑂ {} v", self.branch());
         let branches = self
             .repo
@@ -346,7 +373,7 @@ impl VcsPanel {
         });
         ui.separator();
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::from_rgb(240, 110, 110), error);
+            ui.colored_label(crate::theme::ERROR, error);
         }
         if !self.notice.is_empty() {
             ui.weak(&self.notice);
@@ -358,7 +385,7 @@ impl VcsPanel {
         ui.weak(repo.root.display().to_string());
         if let Some(operation) = &repo.operation {
             ui.colored_label(
-                Color32::YELLOW,
+                crate::theme::WARNING,
                 format!("Repository operation: {operation}"),
             );
         }
@@ -473,11 +500,11 @@ impl VcsPanel {
                 });
             }
             let (marker, color) = match change.status {
-                ChangeStatus::New => ("+", Color32::from_rgb(90, 200, 120)),
-                ChangeStatus::Deleted => ("−", Color32::from_rgb(240, 110, 110)),
-                ChangeStatus::Renamed => ("→", Color32::from_rgb(120, 170, 240)),
-                ChangeStatus::Conflicted => ("!", Color32::RED),
-                ChangeStatus::Modified => ("●", Color32::from_rgb(230, 190, 80)),
+                ChangeStatus::New => ("+", crate::theme::SUCCESS),
+                ChangeStatus::Deleted => ("−", crate::theme::ERROR),
+                ChangeStatus::Renamed => ("→", crate::theme::INFO),
+                ChangeStatus::Conflicted => ("!", crate::theme::ERROR),
+                ChangeStatus::Modified => ("●", crate::theme::WARNING),
             };
             ui.colored_label(color, marker);
             let row = ui.selectable_label(
@@ -650,7 +677,7 @@ impl VcsPanel {
             ui.label("This restores the file and its staging to HEAD. An untracked file is deleted. Editor buffers are retained.");
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() { self.discard = None; }
-                if ui.add_enabled(self.pending.is_empty(), egui::Button::new("Discard Changes").fill(Color32::from_rgb(150, 45, 50))).clicked() {
+                if ui.add_enabled(self.pending.is_empty(), egui::Button::new("Discard Changes").fill(crate::theme::DESTRUCTIVE)).clicked() {
                     self.submit(Task::Discard(path)); self.discard = None;
                 }
             });
@@ -753,6 +780,45 @@ mod tests {
                 panel.panel(ui);
             });
         });
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    #[test]
+    fn hidden_non_repository_does_not_schedule_an_expired_poll()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut panel = VcsPanel::default();
+        let ctx = egui::Context::default();
+        panel.set_project(dir.path());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !panel.pending.is_empty() && Instant::now() < deadline {
+            let _frame = ctx.run(egui::RawInput::default(), |ctx| panel.tick(ctx, false));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(panel.pending.is_empty());
+        assert!(panel.repo.is_none());
+        let mut delay = Duration::ZERO;
+        for i in 0..10 {
+            let frame = ctx.run(
+                egui::RawInput {
+                    time: Some(f64::from(i)),
+                    ..egui::RawInput::default()
+                },
+                |ctx| panel.tick(ctx, false),
+            );
+            delay = frame
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map_or(Duration::MAX, |v| v.repaint_delay);
+        }
+        assert!(
+            delay > Duration::from_secs(1),
+            "expired hidden poll caused {delay:?}"
+        );
         Ok(())
     }
 }

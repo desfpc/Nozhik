@@ -6,7 +6,7 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 8: Database Tooling реализован.** Тринадцать крейтов,
+**v0.1.0-RC1 — Feature Complete. Этап 9 реализован.** Тринадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
@@ -136,10 +136,9 @@ buffer.undo()?;
 assert!(!buffer.is_dirty());
 ```
 
-Загрузка/сохранение файлов и реестр открытых документов остаются задачами
-интеграции: вызывающий код выделяет уникальные `BufferId` и отмечает состояние
-сохранённым только после успешной записи. Ядро подключено к TextEditorView;
-ввод проходит через EditTransaction.
+Файловый worker и реестр документов UI интегрированы с TextEditorView.
+UI выделяет уникальные `BufferId`, ввод проходит через EditTransaction,
+а успешный ответ сохранения очищает dirty только для той же ревизии.
 
 ## Настройки
 
@@ -178,9 +177,10 @@ theme = "dark"
 Запуск: `cargo run -p app`. Кликните по тексту для фокуса редактора.
 Ввод, Backspace/Delete, Enter/Tab, стрелки, Home/End, Shift-выделение,
 Ctrl/Cmd+A, Ctrl/Cmd+Z и Ctrl/Cmd+Shift+Z работают с TextBuffer.
-Закрытие вкладки сохраняет буфер, включая несохранённые изменения, в памяти до
-выхода; дерево Project и поиск позволяют открыть его снова. При выходе буферы
-не сохраняются автоматически.
+Закрытие изменённой вкладки или окна показывает **Save All / Discard / Cancel**.
+Save All ждёт подтверждения записи актуальных ревизий, в том числе SFTP и SQL.
+Ошибка записи оставляет текст и окно открытыми. Закрытая вкладка освобождает
+буфер/историю/результаты; Recent Files хранит до 30 путей для повторного открытия.
 
 Search Everywhere: Double Shift (интервал до 400 мс), Ctrl/Cmd+Shift+A
 или лупа на тулбаре. Стрелки выбирают результат, Enter открывает, Esc закрывает.
@@ -563,3 +563,67 @@ TRUNCATED. Результаты только для чтения; постран
 в эту версию. Транзакционный скрипт выполняйте одним запуском. SQLite JSON остаётся
 Text, поскольку движок хранит его как TEXT; нативные PostgreSQL/MySQL JSON
 возвращаются как Json. Неподдержанные vendor-типы дают ошибку декодирования.
+
+
+## RC1: глобальное меню и единый интерфейс
+
+File, Edit, View, Navigate, Code, Git, Database, Terminal, Tools и Help вызывают
+зарегистрированные действия ActionRegistry. macOS использует нативное меню
+AppKit через muda; Windows/Linux — встроенную строку меню egui. Подписи сочетаний
+и нативные accelerators следуют текущему keymap, включая hot reload.
+File → Open File / Folder принимает абсолютный путь; New File создаёт новый
+файл без перезаписи существующего. Edit поддерживает Undo/Redo, Cut/Copy/Paste,
+литеральный поиск и Replace/Replace All (одна undo-транзакция).
+
+Общие семантические цвета, ANSI base palette, радиусы и ширина разделителей
+собраны в `crates/ui/src/theme.rs`. Перетаскивайте границы Project/Git/SSH,
+Database, нижнего терминала и разделитель SQL editor/results.
+Пропорции сохраняются фоновым worker в `layout.json` рядом с `settings.toml`
+и восстанавливаются при запуске. Повреждённый файл сохраняется без перезаписи.
+
+При выходе оркестратор останавливает LSP (shutdown → exit), PTY/ConPTY,
+SQL-пулы через Pool::close, SSH-сессии и туннели, затем основной Tokio runtime.
+Каждый шаг ожидания ограничен по времени; аварийный kill процесса не даёт
+такой гарантии. Help → About Nozhik показывает RC1, базовый Git commit сборки,
+версию rustc, ОС/архитектуру, egui/Glow и Tokio.
+
+Для отдельной конфигурации, например при проверке релиза:
+
+```sh
+cargo run -p app -- --config /absolute/test/settings.toml /absolute/test/project
+```
+
+### Keymap Cheatsheet
+
+`Primary` — Cmd на macOS, Ctrl на Windows/Linux. Таблица — штатный JetBrains
+профиль; пользовательский keymap переопределяет сочетания, меню показывает актуальные.
+
+| Действие | Сочетание |
+| --- | --- |
+| New File / Open File or Folder | Primary+N / Primary+O |
+| Save / Save All / Close Tab | Primary+S / Primary+Shift+S / Primary+W |
+| Settings / Exit | Primary+, / Primary+Q |
+| Undo / Redo | Primary+Z / Primary+Shift+Z |
+| Cut / Copy / Paste | Primary+X / Primary+C / Primary+V |
+| Find / Replace | Primary+F / Primary+R |
+| Search Everywhere | Double Shift / Primary+Shift+A |
+| Go to File / Recent Files | Primary+Shift+O / Primary+E |
+| Git panel / Commit | Primary+Shift+G / Primary+K |
+| New Terminal | Alt+F12 |
+| Execute SQL | Primary+Enter |
+| Git commit from Git panel | Primary+Enter |
+| Go to Definition (PHP) | F12 / Primary+click |
+
+UI больше не перерисовывается каждые 100 мс. Ввод, bus events и ответы workers
+будят окно; Git debounce/poll и LSP requests назначают собственные сроки.
+На macOS ARM64 измерено **0.6% одного CPU-ядра** за 30 секунд для пустого
+non-Git проекта при заблокированном экране (0.18 CPU s / 30.01 wall s).
+Это результат конкретного замера, не гарантия для любой ОС, GPU и нагрузки.
+Стресс-тесты проверяют 10 МБ / 100 000 строк Rope, Data Grid 100 000×50 ячеек
+с прокруткой обеих осей и PTY streaming + Git polling + LSP одновременно.
+Проверка FPS на реальных дисплеях остаётся частью ручной release-матрицы.
+
+RC1 обозначает полноту описанного набора Editor/Git/PHP LSP/Terminal/SSH/SQL.
+Runner/debugger, marketplace, SQL editing/pagination и ограничения предыдущих
+разделов сохраняются. Подробная матрица допуска релиза:
+[verification checklist](docs/ai/verification-checklist.md).

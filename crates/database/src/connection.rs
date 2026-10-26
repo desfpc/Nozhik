@@ -233,6 +233,17 @@ impl Connection {
             Ok(Ok(()))
         )
     }
+    /// Close idle and active SQL connections before stopping the owned SSH tunnel.
+    pub async fn close(&self) {
+        match &self.pool {
+            Pool::Postgres(p) => p.close().await,
+            Pool::Mysql(p) => p.close().await,
+            Pool::Sqlite(p) => p.close().await,
+        }
+        if let Some(tunnel) = &self.tunnel {
+            tunnel.stop();
+        }
+    }
     /// Dialect for identifier quoting and schema controls.
     #[must_use]
     pub const fn driver(&self) -> DbDriverType {

@@ -66,7 +66,7 @@ impl TerminalPanel {
         self.initialized = true;
         Ok(())
     }
-    fn create(&mut self, root: &Path) -> Option<String> {
+    pub(crate) fn create(&mut self, root: &Path) -> Option<String> {
         match self.manager.create(SessionOptions::new(root.into())) {
             Ok(id) => {
                 self.active = Some(id);
@@ -178,7 +178,7 @@ impl TerminalPanel {
         {
             let snapshot = self.snapshots.get(&id);
             if let Some(SessionState::Failed(message)) = snapshot.map(|s| &s.state) {
-                ui.colored_label(egui::Color32::LIGHT_RED, message);
+                ui.colored_label(crate::theme::ERROR, message);
             } else {
                 let grid = snapshot.and_then(|s| s.grid.as_deref());
                 if let Some(message) = self.view.show(

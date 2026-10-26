@@ -1,6 +1,6 @@
 //! Virtualized unified diff with two gutters; only visible rows are laid out.
 use crate::theme;
-use egui::{Color32, FontId};
+use egui::FontId;
 use nozhik_vcs::model::{DiffLineKind, FileDiff};
 
 enum Row {
@@ -34,11 +34,8 @@ impl DiffView {
         };
         ui.horizontal(|ui| {
             ui.strong(file.path.to_string_lossy());
-            ui.colored_label(Color32::from_rgb(90, 200, 120), format!("+{}", file.added));
-            ui.colored_label(
-                Color32::from_rgb(240, 110, 110),
-                format!("−{}", file.deleted),
-            );
+            ui.colored_label(crate::theme::SUCCESS, format!("+{}", file.added));
+            ui.colored_label(crate::theme::ERROR, format!("−{}", file.deleted));
         });
         if file.binary {
             ui.weak("Binary or oversized file — text diff is unavailable");
@@ -65,14 +62,14 @@ impl DiffView {
                             None,
                             None,
                             ' ',
-                            Color32::from_rgb(43, 54, 72),
+                            crate::theme::DIFF_HUNK,
                         ),
                         Row::Line(h, l) => {
                             let line = &file.hunks[h].lines[l];
                             let (marker, bg) = match line.kind {
                                 DiffLineKind::Context => (' ', theme::BACKGROUND),
-                                DiffLineKind::Addition => ('+', Color32::from_rgb(27, 59, 40)),
-                                DiffLineKind::Deletion => ('−', Color32::from_rgb(68, 34, 38)),
+                                DiffLineKind::Addition => ('+', crate::theme::DIFF_ADD),
+                                DiffLineKind::Deletion => ('−', crate::theme::DIFF_DELETE),
                             };
                             (
                                 line.text.trim_end_matches(['\n', '\r']),

@@ -1,10 +1,14 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
 mod data_grid;
+pub use data_grid::DataGrid;
 mod database_panel;
 mod diff_view;
 pub mod editor_view;
+mod integration;
 mod language;
+mod layout;
+mod menu_bar;
 mod plugins;
 mod project;
 mod remote_panel;
@@ -35,7 +39,7 @@ pub const SETTINGS_ACTION: &str = "ui.settings";
 /// Best-effort action saving the active file through the I/O worker.
 pub const SAVE_ACTION: &str = "ui.save_file";
 
-/// One in-memory document; closing its tab retains its unsaved buffer.
+/// One open document; guarded close saves or discards edits and releases its buffer.
 pub struct Document {
     /// Canonical native file identity.
     pub path: PathBuf,
@@ -71,6 +75,11 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    integration: integration::Integration,
+    layout: layout::LayoutManager,
+    wake_task: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<menu_bar::native::NativeMenu>,
     database: database_panel::DatabaseUi,
     remote: remote_panel::RemoteUi,
     terminal: Option<terminal_panel::TerminalPanel>,
@@ -117,15 +126,7 @@ impl NozhikUi {
         let plugins = PluginManager::with_paths(bus.clone(), Vec::new(), None);
         let plugins = match plugins {
             Ok(manager) => {
-                for (id, title, when) in [
-                    (SEARCH_ACTION, "Search Everywhere", ""),
-                    (SETTINGS_ACTION, "Settings", ""),
-                    (SAVE_ACTION, "Save File", "editorOpen"),
-                    ("ui.project", "Toggle Project Window", ""),
-                    ("ui.git", "Toggle Git Window", ""),
-                    ("ui.terminal", "Toggle Terminal Window", ""),
-                    ("ui.plugins", "Plugins", ""),
-                ] {
+                for &(id, title, when) in menu_bar::MENUS.iter().flat_map(|(_, entries)| *entries) {
                     if let Err(error) = manager.actions().register(Action {
                         id: id.into(),
                         title: title.into(),
@@ -143,6 +144,11 @@ impl NozhikUi {
             }
         };
         Self {
+            integration: integration::Integration::default(),
+            layout: layout::LayoutManager::default(),
+            wake_task: None,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
             database: database_panel::DatabaseUi::default(),
             remote: remote_panel::RemoteUi::default(),
             terminal: None,
@@ -190,18 +196,16 @@ impl NozhikUi {
 
     fn action_context(&self) -> ActionContext {
         ActionContext {
-            editor_open: self.database.active.is_none()
-                && self
+            editor_open: self
+                .database
+                .active
+                .and_then(|i| self.database.tabs.get(i))
+                .is_some_and(|t| t.open)
+                || self
                     .active
                     .and_then(|i| self.documents.get(i))
                     .is_some_and(|d| d.open && !d.binary),
-            editor_focus: self.database.active.is_none()
-                && self.editor_focus.is_some()
-                && !self.search.open
-                && !self.settings_open
-                && !self.plugins_open
-                && !self.remote.modal_open()
-                && !self.database.modal_open(),
+            editor_focus: self.editor_focus.is_some() && !self.global_modal(),
             selected_file: self.selected_file.is_some(),
             project_open: self.project.is_some(),
         }
@@ -211,6 +215,7 @@ impl NozhikUi {
         self.database.active = None;
         if let Some(document) = self.documents.get_mut(index) {
             document.open = true;
+            self.search.note_file(document.path.clone());
             self.active = Some(index);
             self.bus.publish(Event::FileOpened(document.path.clone()));
         }

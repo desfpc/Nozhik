@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 nozhik-database.workspace = true
 zeroize.workspace = true
 nozhik-remote-ssh.workspace = true
@@ -30,3 +32,10 @@ workspace = true
 [dev-dependencies]
 rand.workspace = true
 git2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+
+[[test]]
+name = "stress_tests"
+path = "../../tests/stress_tests.rs"

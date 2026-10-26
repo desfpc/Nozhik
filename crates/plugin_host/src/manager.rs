@@ -142,6 +142,12 @@ impl PluginManager {
         })
     }
 
+    /// Subscribe to lifecycle and keymap changes for event-driven UI wakeup.
+    #[must_use]
+    pub fn subscribe_updates(&self) -> watch::Receiver<HostSnapshot> {
+        self.snapshot.clone()
+    }
+
     /// Shared action registry for built-ins and extensions.
     #[must_use]
     pub fn actions(&self) -> ActionRegistry {
@@ -183,7 +189,7 @@ impl Drop for PluginManager {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum KeymapSource {
     Missing,
     Present(Vec<u8>),
@@ -252,14 +258,17 @@ impl Worker {
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = timer.tick() => {
+                    let old_source = self.keymap_source.clone();
+                    let old_diagnostics = self.snapshot.diagnostics.len();
                     self.reload_keymap();
                     let failed: Vec<_> = self.sessions.iter_mut().filter_map(|(id, session)| match session.exited() {
                         Ok(false) => None,
                         Ok(true) => Some((id.clone(), "plugin process exited".into())),
                         Err(error) => Some((id.clone(), error.to_string())),
                     }).collect();
+                    let changed = !failed.is_empty() || old_source != self.keymap_source || old_diagnostics != self.snapshot.diagnostics.len();
                     for (id, error) in failed { self.fail(&id, error).await; }
-                    self.publish();
+                    if changed { self.publish(); }
                 }
             }
         }

@@ -20,7 +20,8 @@
 | 7.1 | Task runner, запуск и отладка | Не начат |
 | 8 | Database Tooling: PostgreSQL/MySQL/SQLite, SSH, Explorer, SQL, Data Grid | Реализован; ограничения ниже |
 | 8.1 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
-| 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
+| 9 | Финальная интеграция, global menus/actions, layout/theme, shutdown, stress/idle | Реализован; v0.1.0-RC1 (Feature Complete) |
+| 9.1 | Полная ручная OS-матрица, accessibility/security audit, подписанные пакеты | Release gates; см. verification-checklist.md |
 
 ## Phase 0 — реализовано
 
@@ -861,3 +862,67 @@ OS credential stores не запускались; наличие CI не объ�
 `--check` подтвердил общий source fingerprint и SHA-256 payload; проверены Mach-O
 ARM64 и PE32+ x86-64. runtime_tested=false сохраняется: нативные окна не запускались.
 Тестовые контейнеры и их временные volumes удалены.
+
+
+## Phase 9 — Системная интеграция / v0.1.0-RC1 (Feature Complete)
+
+- [x] Общий menu catalog + ActionRegistry/KeymapRegistry для File/Edit/View/
+  Navigate/Code/Git/Database/Terminal/Tools/Help. macOS native menu/accelerators
+  через muda; embedded MenuBar на Windows/Linux и при native initialization failure.
+- [x] New/Open/Save/Save All/Close/Settings/Exit, Undo/Redo/Cut/Copy/Paste,
+  Find/Replace/Replace All, MRU 30 путей, Git Fetch/Pull/Push/Branches,
+  Database connection/console, New Terminal и About с build identity.
+- [x] Семантические theme tokens, ANSI base palette, радиусы, resize handles,
+  status/icon tooltips. Drag docks и SQL editor/results, атомарный layout.json.
+- [x] Несохранённые file/SQL tabs: Save All/Discard/Cancel для Close Tab и окна.
+  Gate ждёт saved revision, сохраняет dirty при ошибке/гонке и отменяет выход.
+  Закрытые вкладки освобождают Rope/history/Data Grid; paths остаются в MRU.
+- [x] Idempotent shutdown LSP→terminal→SQL pools→SSH tunnels/sessions→plugins;
+  bounded acknowledgements, Pool::close, app event consumer/runtime teardown.
+- [x] Event-driven repaint bus/watch/workers вместо 100ms redraw. Исправлен
+  просроченный timer скрытой Git-панели без repo; unchanged plugin snapshots
+  не будят UI каждую секунду.
+- [x] tests/stress_tests.rs подключён как integration target nozhik-ui:
+  10 MB Rope edits + 100k-line viewport, 100k×50 Data Grid + scrolling,
+  streaming real PTY + Git polling + active mock LSP buffer.
+- [x] Lifecycle/save failures/stale revisions/menu registration/idle repaint/
+  splitter dragging + layout persistence проверяются headless egui тестами.
+
+### Проверка производительности и границы RC1
+
+Локальный debug stress run: 10 MB Rope edits + viewport ~16 ms;
+синтетическая таблица 5M ячеек + 10 layout passes ~97 ms, максимум 197 видимых
+text shapes в окне 1200×700. Это диагностические стендовые результаты с широкими
+регрессионными timeout, не FPS benchmark и не абсолютная гарантия задержек.
+Backend SQL limits (10k rows/16MiB) в реальном console остаются; stress grid
+намеренно конструирует большой snapshot напрямую, проверяя UI независимо от них.
+
+Нативный release macOS ARM64 запущен с отдельными temporary settings и пустым
+non-Git проектом. AX подтвердил верхнее меню и availability File items.
+Дальнейшая визуальная/мышиная QA остановлена блокировкой экрана macOS.
+Профиль idle после исправления hidden Git timer: 0.18 CPU s за 30.01 wall s,
+**0.6% одного ядра**, screen locked, без активных LSP/PTY/DB запросов.
+Показатель зависит от ОС/дисплея/драйверов и фоновой нагрузки; unlocked foreground
+и Windows/Linux измеряются по release checklist, универсальное CPU≤1% не заявляется.
+
+RC1 — полнота текущего заявленного набора функций, не отмена прежних ограничений:
+runner/debugger, marketplace, full accessibility, signed installers, SQL editing/
+pagination, многие vendor SQL types и persistent sessions остаются вне scope.
+Manual release matrix и неисполненные gates отмечены в verification-checklist.md.
+
+
+### Итоговая автоматизированная верификация Phase 9 (2026-10-26)
+
+На macOS ARM64 / Rust 1.99.1 прошли fmt, Clippy workspace/all-targets/all-features
+с `-D warnings` для native и cross x86_64-pc-windows-gnu. Полный workspace run:
+87 unit + 8 integration (включая 3 stress) + 1 doc-test = 96 passed, без failures;
+4 прежних system tests остаются ignored. Release workspace build успешен.
+Headless pointer test подтвердил настоящее перетаскивание splitter и сохранённую
+пропорцию; тест clean close подтвердил освобождение большого буфера.
+Тестовый нативный процесс после измерения CPU завершён, временный bundle удалён.
+
+Финальные macOS ARM64 и Windows x64 GNU binaries пересобраны через
+scripts/update-binaries.py. `--check` подтвердил одинаковый source fingerprint
+и SHA-256 обоих payload. runtime_tested=false сохранён: runtime-матрица новых
+скачиваемых комплектов целиком не выполнена. Нативное меню/idle smoke проверялись
+на локальном промежуточном release build; оставшиеся GUI gates явно открыты.

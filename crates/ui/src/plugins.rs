@@ -48,7 +48,7 @@ impl NozhikUi {
                             });
                         }
                         for diagnostic in snapshot.diagnostics {
-                            ui.colored_label(egui::Color32::YELLOW, diagnostic);
+                            ui.colored_label(crate::theme::WARNING, diagnostic);
                         }
                         ui.separator();
                         ui.label("Extension tabs");

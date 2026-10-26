@@ -99,7 +99,9 @@ impl RemoteUi {
             || self.delete.is_some()
     }
     pub fn shutdown(&mut self) {
-        self.worker = None;
+        if let Some(worker) = self.worker.take() {
+            worker.shutdown();
+        }
     }
     fn queue(&self, command: Command) -> bool {
         self.worker
@@ -266,6 +268,7 @@ impl NozhikUi {
                 }
             }
             Reply::Saved(path, revision) => {
+                self.saved(&path, revision);
                 if let Some(document) = self.documents.iter_mut().find(|d| d.path == path)
                     && document.buffer.snapshot().revision == revision
                 {
@@ -275,6 +278,10 @@ impl NozhikUi {
             }
             Reply::Message(message) => self.status = message,
             Reply::Error(error) => {
+                if !self.integration.saving.is_empty() {
+                    self.integration.save_error = Some(error.clone());
+                    self.integration.saving.clear();
+                }
                 self.remote.profile_busy = false;
                 self.remote.profile_error.clone_from(&error);
                 self.remote.pending.clear();
@@ -390,7 +397,7 @@ impl NozhikUi {
             egui::Modal::new(egui::Id::new("delete_ssh_profile")).show(ctx, |ui| {
                 ui.heading(format!("Delete SSH host {name}?"));
                 ui.label("The profile and saved password will be removed. Active connections will close; open editor buffers keep their text.");
-                if !self.remote.profile_error.is_empty() { ui.colored_label(egui::Color32::LIGHT_RED, &self.remote.profile_error); }
+                if !self.remote.profile_error.is_empty() { ui.colored_label(crate::theme::ERROR, &self.remote.profile_error); }
                 if ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Delete host")).clicked() { remove = Some(name.clone()); }
                 cancel = ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Cancel")).clicked();
             });
@@ -518,7 +525,7 @@ impl NozhikUi {
                     _ => AuthMethod::Password,
                 };
                 if !form.error.is_empty() {
-                    ui.colored_label(egui::Color32::LIGHT_RED, &form.error);
+                    ui.colored_label(crate::theme::ERROR, &form.error);
                 }
                 ui.horizontal(|ui| {
                     let valid = form.profile.validate();
@@ -584,7 +591,7 @@ impl NozhikUi {
                 if std::mem::take(&mut self.remote.login_focus) {
                     password.request_focus();
                 }
-                if !self.remote.login_error.is_empty() { ui.colored_label(egui::Color32::LIGHT_RED, &self.remote.login_error); }
+                if !self.remote.login_error.is_empty() { ui.colored_label(crate::theme::ERROR, &self.remote.login_error); }
                 ui.add_enabled_ui(can_remember, |ui| { ui.checkbox(&mut profile.save_password, "Save password in system credential store"); });
                 ui.weak(if can_remember { "macOS Keychain / Windows Credential Manager / Linux Secret Service. Passwords are never written to JSON." } else { "Save this SSH profile first to remember its password." });
                 connect = ui.button("Connect").clicked()

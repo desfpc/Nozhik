@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 8
+# Архитектура Nozhik — Phase 9 / v0.1.0-RC1
 
 ## Границы крейтов
 
@@ -148,12 +148,13 @@ replace меняет только память, save сохраняет явно
 UI выделяет BufferId монотонно без переиспользования и хранит документы по canonical path.
 Сохранение передаёт COW snapshot и revision; успешное завершение снимает dirty
 только при совпадении текущей revision. Версии документов и snapshot/resync реализованы в buffer.
-UI проверяет broadcast без блокировки в update, request_repaint_after(100 ms)
-обеспечивает обработку внешних bus-действий. Файловый worker и watcher также
+UI проверяет broadcast без блокировки в update; attach_runtime запускает
+ожидающий bus/watch bridge и будит окно по событию без периодического repaint. Файловый worker и watcher также
 будят event loop через зарегистрированный callback `Context::request_repaint()`. UI не вызывается из Tokio-задач.
 ActionTriggered(ui.search_everywhere/ui.settings) открывает modal best-effort;
 состояние документов всегда читается напрямую, не восстанавливается из событий.
-Renderer — Glow/OpenGL. Plugin protocol — JSON-RPC/stdio (Phase 4); DB pools пока не выбираются.
+Renderer — Glow/OpenGL. Plugin protocol — JSON-RPC/stdio (Phase 4);
+Database pools — PostgreSQL/MySQL/SQLite через SQLx (Phase 8).
 
 
 ## Файловая система (Phase 3)
@@ -197,7 +198,8 @@ snapshot. Собственный worker с current-thread Tokio runtime влад
 Нативные библиотеки плагинов не загружаются в IDE; процессный протокол не требует
 перекомпиляции IDE. При shutdown внешний select отменяет ожидающий RPC,
 kill_on_drop защищает незавершённую инициализацию, известные процессы kill/reap.
-UI получает изменения snapshots при обычном 100ms repaint, не вызывает plugin I/O.
+UI подписан на watch snapshots; timer хоста публикует изменения только при
+изменении keymap/diagnostics/процессов, не вызывает redraw на каждом idle tick.
 
 ActionRegistry и KeymapRegistry — Arc/RwLock снимки; блокировки освобождаются
 до событий и запросов. Встроенное действие публикует ActionTriggered; команда
@@ -384,3 +386,52 @@ TextEditorView, локальный SQL lexer и отдельные result tabs. 
 порядок индексов строк, сортирует загруженный snapshot и рисует только пересечение
 двумерного viewport. Копирование выполняется по исходному значению, preview ячейки
 ограничен 256 символами. Результат и текст остаются при скрытии/смене вкладки.
+
+
+## Системная интеграция RC1 (Phase 9)
+
+`menu_bar::MENUS` — единый каталог идентификаторов, меток и availability predicates.
+Он регистрируется в ActionRegistry и используется embedded egui MenuBar и
+нативным macOS muda Menu. Callback AppKit кладёт ID в bounded очередь и будит
+окно; dispatch на UI повторно проверяет текущий ActionContext. KeymapRegistry
+поставляет подписи и native accelerators; нативные item properties обновляются
+только при смене availability/keymap, а не на каждом кадре.
+
+`integration` связывает actions с buffer/project/VCS/database/terminal API.
+OpenPath и Create выполняются в fs_model worker: тип пути определяется вне UI,
+create_new защищает существующий файл. Cut/Copy обрабатывают штатные egui clipboard
+события, RequestPaste читает clipboard в winit; menu paste восстанавливает фокус
+последнего активного редактора. Recent Files ограничен 30 путями.
+
+`layout::Layout` хранит относительные left/right/bottom/sql размеры. Ordered worker
+загружает и атомарно записывает соседний `layout.json`; UI сохраняет изменения
+с debounce 250 ms, на shutdown ждёт final write до 1s. Только drag меняет dock
+пропорции; resize окна пересчитывает размеры из пропорций. Ошибка чтения/JSON
+не превращается в перезапись defaults. Native splitters egui и SQL drag bar
+используют общие theme tokens.
+
+CloseTarget (window/file/sql) → проверка dirty → Save All / Discard / Cancel.
+Waiting state ждёт завершения всех отправленных save revisions; поздний ack
+не очищает новые edits. При ошибке нет автоматического Close, при Cancel окно
+остаётся. Непривязанные к файлу SQL-консоли получают Save path dialog. Clean close
+и Discard освобождают Rope/history/result snapshots, Drop SQL отменяет query token.
+Смена проекта сохраняет открытые документы. Повторное открытие пути получает
+новый BufferId; идентификаторы не переиспользуются.
+
+`app::main` создаёт event runtime, attach_runtime регистрирует bus/watch wakeup
+и native menu на главном потоке. eframe intercepts close_requested/CancelClose;
+NozhikUi::shutdown_systems идемпотентен (также вызывается из Drop): layout flush,
+LSP shutdown→exit (≤3s), terminal manager (≤3s), database shutdown acknowledgement
+(≤4s), SSH disconnect acknowledgement (≤3s), plugin host stop, abort wake bridge.
+Database worker отменяет/завершает query tasks и ждёт Pool::close до 2s суммарно,
+затем останавливает owned tunnels. SSH worker явно disconnects authenticated
+handles с общим deadline 2s. После возврата run_native app дожидается consumer
+до 2s и останавливает runtime. Жёсткий kill не проходит этот flow.
+
+Idle: нет unconditional 100ms repaint. Ответы I/O, terminal grid, language service,
+DB/SSH и bus/watch bridge вызывают request_repaint; debounce и Git timer —
+request_repaint_after только при наличии срока. Для скрытого non-Git проекта
+просроченный next_poll не планируется (регрессия zero-delay busy loop).
+Plugin watch не публикует одинаковый snapshot каждую секунду. Background service
+health timers не требуют UI frame. LSP и terminal курсоры пока без idle blink.
+Стендовые стресс-замеры и ручные release gates — verification-checklist.md.

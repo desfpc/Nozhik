@@ -33,7 +33,7 @@ impl NozhikUi {
             self.last_shift = None;
         }
         self.shift_down = shift;
-        if self.remote.modal_open() || self.database.modal_open() {
+        if self.global_modal() {
             return;
         }
         if !self.search.open
@@ -41,7 +41,10 @@ impl NozhikUi {
             && !self.plugins_open
             && let Some(manager) = &self.plugins
         {
-            let context = self.action_context();
+            let mut context = self.action_context();
+            context.editor_focus = self
+                .editor_focus
+                .is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
             let actions = manager.actions();
             let keymap = manager.keymap();
             let available = actions.available(context).unwrap_or_default();
@@ -124,7 +127,7 @@ impl NozhikUi {
                                 Some(LeftTool::Project)
                             }
                         }
-                        _ => {}
+                        _ => self.integration.actions.push(action.clone()),
                     },
                     Event::File(FileEvent::Changed(path)) => {
                         if self
@@ -196,13 +199,17 @@ impl NozhikUi {
             });
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Dock panels share sizing and terminal lifecycle state"
+    )]
     fn panels(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(4))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Nozhik");
+                    ui.label("Nozhik").on_hover_text("Nozhik v0.1.0-RC1");
                     let errors = self
                         .language
                         .views
@@ -227,12 +234,15 @@ impl NozhikUi {
                                 )
                         })
                         .count();
-                    ui.label(format!("Errors: {errors}  Warnings: {warnings}"));
+                    ui.label(format!("Errors: {errors}  Warnings: {warnings}"))
+                        .on_hover_text("Diagnostics in open language buffers");
                     ui.weak(&self.status);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label("Rust 2024");
-                        ui.label(self.vcs.branch());
-                        ui.label("UTF-8");
+                        ui.label("0.1.0-RC1")
+                            .on_hover_text("Release candidate · Help → About Nozhik");
+                        ui.label(self.vcs.branch())
+                            .on_hover_text("Current Git branch");
+                        ui.label("UTF-8").on_hover_text("Editor text encoding");
                     });
                 });
             });
@@ -259,10 +269,19 @@ impl NozhikUi {
                     }
                 });
             });
+        let viewport = ctx
+            .input(|i| i.viewport().inner_rect)
+            .unwrap_or_else(|| ctx.screen_rect());
         if let Some(label) = self.bottom {
-            egui::TopBottomPanel::bottom("bottom_dock")
+            crate::layout::seed(
+                ctx,
+                "bottom_dock",
+                viewport.width(),
+                viewport.height() * self.layout.value.bottom,
+            );
+            let panel = egui::TopBottomPanel::bottom("bottom_dock")
                 .resizable(true)
-                .default_height(160.0)
+                .default_height(viewport.height() * self.layout.value.bottom)
                 .show(ctx, |ui| {
                     if label == crate::terminal_panel::TERMINAL_LABEL {
                         let panel = self
@@ -273,7 +292,8 @@ impl NozhikUi {
                             && !self.settings_open
                             && !self.plugins_open
                             && !self.remote.modal_open()
-                            && !self.database.modal_open();
+                            && !self.database.modal_open()
+                            && !self.integration.blocking();
                         let (collapse, error) =
                             panel.show(ui, root, f32::from(self.config.font_size), enabled);
                         if collapse {
@@ -288,10 +308,19 @@ impl NozhikUi {
                         ui.weak("Tool window placeholder");
                     }
                 });
+            let mut layout = self.layout.value;
+            layout.bottom = (panel.response.rect.height() / viewport.height()).clamp(0.1, 0.8);
+            if ctx.input(|i| i.pointer.any_down()) {
+                self.layout.set(layout);
+            }
         }
         self.side_panels(ctx);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Left and right splitters share viewport geometry"
+    )]
     fn side_panels(&mut self, ctx: &Context) {
         egui::SidePanel::left("left_strip")
             .exact_width(42.0)
@@ -334,9 +363,19 @@ impl NozhikUi {
                     }
                 }
             });
+        let viewport = ctx
+            .input(|i| i.viewport().inner_rect)
+            .unwrap_or_else(|| ctx.screen_rect());
         if let Some(title) = self.right {
-            egui::SidePanel::right("right_dock")
-                .default_width(240.0)
+            crate::layout::seed(
+                ctx,
+                "right_dock",
+                viewport.width() * self.layout.value.right,
+                viewport.height(),
+            );
+            let panel = egui::SidePanel::right("right_dock")
+                .default_width(viewport.width() * self.layout.value.right)
+                .width_range(150.0..=viewport.width() * 0.4)
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.label(title);
@@ -347,15 +386,23 @@ impl NozhikUi {
                         ui.weak("Tool window placeholder");
                     }
                 });
+            let mut layout = self.layout.value;
+            layout.right = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
+            if ctx.input(|i| i.pointer.any_down()) {
+                self.layout.set(layout);
+            }
         }
         if let Some(tool) = self.left {
-            egui::SidePanel::left("left_dock")
+            crate::layout::seed(
+                ctx,
+                "left_dock",
+                viewport.width() * self.layout.value.left,
+                viewport.height(),
+            );
+            let panel = egui::SidePanel::left("left_dock")
                 .resizable(true)
-                .default_width(if tool == LeftTool::Commit {
-                    340.0
-                } else {
-                    245.0
-                })
+                .default_width(viewport.width() * self.layout.value.left)
+                .width_range(150.0..=viewport.width() * 0.4)
                 .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(8))
                 .show(ctx, |ui| {
                     ui.label(match tool {
@@ -375,6 +422,11 @@ impl NozhikUi {
                         ui.weak("Tool window placeholder");
                     }
                 });
+            let mut layout = self.layout.value;
+            layout.left = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
+            if ctx.input(|i| i.pointer.any_down()) {
+                self.layout.set(layout);
+            }
         }
     }
 
@@ -420,27 +472,25 @@ impl NozhikUi {
                         }
                         if ui
                             .small_button("×")
-                            .on_hover_text("Close tab (unsaved buffer is retained)")
+                            .on_hover_text("Close tab (asks before discarding changes)")
                             .clicked()
                         {
                             close = Some(index);
                         }
                     }
                     if let Some(index) = close {
-                        self.documents[index].open = false;
-                        if self.active == Some(index) {
-                            self.active = self.documents.iter().position(|d| d.open);
-                        }
+                        self.request_close(crate::integration::CloseTarget::File(index), ctx);
                     }
                 });
                 ui.separator();
+                self.find_bar(ui);
                 if self.database.active.is_some() {
-                    self.editor_focus = None;
                     let enabled = !self.search.open
                         && !self.settings_open
                         && !self.plugins_open
                         && !self.remote.modal_open()
-                        && !self.database.modal_open();
+                        && !self.database.modal_open()
+                        && !self.integration.blocking();
                     self.database_editor(ui, enabled);
                     return;
                 }
@@ -449,7 +499,8 @@ impl NozhikUi {
                         && !self.settings_open
                         && !self.plugins_open
                         && !self.remote.modal_open()
-                        && !self.database.modal_open();
+                        && !self.database.modal_open()
+                        && !self.integration.blocking();
                     if self.documents[index].binary {
                         ui.label("Binary file not supported");
                         return;
@@ -457,6 +508,7 @@ impl NozhikUi {
                     let editor_id = ui
                         .id()
                         .with(("editor", self.documents[index].buffer.snapshot().buffer_id));
+                    self.integration.last_editor = Some(editor_id);
                     self.editor_focus = ui.memory(|m| m.has_focus(editor_id)).then_some(editor_id);
                     let document = &mut self.documents[index];
                     if let Err(error) = self.editor.show_language(
@@ -491,20 +543,21 @@ impl NozhikUi {
 
 impl eframe::App for NozhikUi {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if let Some(panel) = &mut self.terminal {
-            panel.shutdown();
-        }
-        self.database.shutdown();
-        self.remote.shutdown();
-        self.shutdown_language();
+        self.shutdown_systems();
     }
 
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.update_frame(ctx);
+    }
+}
+impl NozhikUi {
+    pub(crate) fn update_frame(&mut self, ctx: &Context) {
         let wake_context = ctx.clone();
         self.fs.set_wakeup(move || wake_context.request_repaint());
         self.shortcuts(ctx);
         self.receive_events();
         self.receive_files();
+        self.integration_tick(ctx);
         self.database_tick(ctx);
         self.receive_remote(ctx);
         self.language_tick(ctx);
@@ -514,6 +567,7 @@ impl eframe::App for NozhikUi {
             self.status = message;
         }
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
+        self.menu_bar(ctx);
         self.top_bar(ctx);
         self.panels(ctx);
         self.editor_area(ctx);
@@ -560,8 +614,10 @@ impl eframe::App for NozhikUi {
             }
         }
         self.plugins_window(ctx);
-        // Bounds latency of best-effort bus requests from producers without a UI handle.
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        self.integration_dialogs(ctx);
+        if !self.integration.actions.is_empty() {
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -572,14 +628,14 @@ mod tests {
     use nozhik_event_bus::EventBus;
 
     #[test]
-    fn terminal_keymap_toggles_panel_without_spawning_outside_a_project()
+    fn terminal_keymap_opens_panel_without_spawning_outside_a_project()
     -> Result<(), Box<dyn std::error::Error>> {
         let bus = EventBus::new(32)?;
         let dir = tempfile::tempdir()?;
         let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
         let mut shell = NozhikUi::new(bus, settings, Config::default());
         let ctx = egui::Context::default();
-        for expected_open in [true, false] {
+        for expected_open in [true, true] {
             let input = egui::RawInput {
                 modifiers: egui::Modifiers::ALT,
                 events: vec![egui::Event::Key {
@@ -594,6 +650,7 @@ mod tests {
             let _frame = ctx.run(input, |ctx| {
                 shell.shortcuts(ctx);
                 shell.receive_events();
+                shell.global_actions(ctx);
                 shell.panels(ctx);
                 shell.editor_area(ctx);
             });

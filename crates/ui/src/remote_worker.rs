@@ -52,6 +52,7 @@ pub struct Worker {
     input: mpsc::Sender<Command>,
     pub output: mpsc::Receiver<Reply>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
+    done: std::sync::mpsc::Receiver<()>,
 }
 struct State {
     sessions: HashMap<String, SshSession>,
@@ -69,6 +70,7 @@ impl Worker {
         let (input, mut commands) = mpsc::channel(64);
         let (sender, output) = mpsc::channel(64);
         let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (finished, done) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -82,6 +84,7 @@ impl Worker {
                 }
             };
             runtime.block_on(async {
+                let mut cleanup_sessions:Vec<SshSession>=Vec::new();
                 let run = async {
                     let cache = tokio::task::spawn_blocking(tempfile::tempdir).await.map_err(|e| join_error(&e))??;
                     let mut state = State { sessions: HashMap::new(), profiles: HashMap::new(), sftp: HashMap::new(), tunnels: HashMap::new(), cache, documents: HashMap::new(), path, credentials: Arc::new(OsCredentialStore), next_document: 1 };
@@ -116,6 +119,7 @@ impl Worker {
                                     if sender.send(Reply::Connected(name.clone())).await.is_err() { break; }
                                     wake();
                                 }
+                                cleanup_sessions=state.sessions.values().cloned().collect();
                                 if sender.send(reply).await.is_err() { break; } wake();
                             }
                             _ = timer.tick() => {
@@ -136,13 +140,24 @@ impl Worker {
                     result = run => { if let Err(e) = result { let _sent = sender.send(Reply::Error(e.to_string())).await; wake(); } }
                     _ = stopped => {}
                 }
+                let cleanup=async {for session in cleanup_sessions {if let Err(e)=session.disconnect().await {eprintln!("SSH shutdown: {e}");}}};
+                let _closed=tokio::time::timeout(std::time::Duration::from_secs(2),cleanup).await;
             });
+            let _finished = finished.send(());
         });
         Self {
             input,
             output,
             stop: Some(stop),
+            done,
         }
+    }
+    pub fn shutdown(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _stopped = stop.send(());
+        }
+        self.output.close();
+        let _finished = self.done.recv_timeout(std::time::Duration::from_secs(3));
     }
     pub fn send(&self, command: Command) -> bool {
         self.input.try_send(command).is_ok()

@@ -61,6 +61,10 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   remote_ssh, tokio/tokio-util, futures-util, keyring, serde/serde_json, tempfile,
   thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
   SSH только через проверенный SshSession, query/result limits и cancellation.
+- ui: serde/serde_json/tempfile для фонового layout I/O; macOS-only muda для
+  native menu (safe wrapper, main thread). menu_bar каталог общий для реестра,
+  embedded/native menus. Нет unconditional repaint; задавайте срок конкретной
+  задачи либо callback wake. Close должен проходить dirty/revision gate.
 - ui: database, buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, egui/eframe.
   remote_shell — адаптер ExternalTransport; прямые russh channel messages принадлежат этому адаптеру.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.

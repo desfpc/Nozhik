@@ -8,7 +8,24 @@ use tokio::{runtime::Runtime, sync::broadcast::error::RecvError};
 
 fn main() -> Result<()> {
     let bus = EventBus::new(1024)?;
-    let settings = ConfigManager::load(bus.clone()).context("Cannot load user settings")?;
+    let mut args = std::env::args_os().skip(1);
+    let mut config_path = None;
+    let mut project_path = None;
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            config_path = Some(std::path::PathBuf::from(
+                args.next().context("--config requires a settings path")?,
+            ));
+        } else {
+            project_path = Some(std::path::PathBuf::from(arg));
+        }
+    }
+    let settings = config_path
+        .map_or_else(
+            || ConfigManager::load(bus.clone()),
+            |path| ConfigManager::from_path(path, bus.clone()),
+        )
+        .context("Cannot load user settings")?;
     let config = settings.snapshot()?;
     eprintln!("Settings: {}", settings.path().display());
     let mut events = bus.subscribe();
@@ -16,7 +33,7 @@ fn main() -> Result<()> {
     let consumer = runtime.spawn(async move {
         loop {
             match events.recv().await {
-                Ok(event) => eprintln!("Event: {event:?}"),
+                Ok(_) => {}
                 Err(RecvError::Lagged(count)) => {
                     eprintln!("Event logger missed {count} notifications");
                 }
@@ -29,17 +46,15 @@ fn main() -> Result<()> {
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
+    let ui_runtime = runtime.handle().clone();
     let result = eframe::run_native(
         "Nozhik",
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
             let mut ui = NozhikUi::new(bus.clone(), settings, config);
-            match std::env::args_os()
-                .nth(1)
-                .map(std::path::PathBuf::from)
-                .map_or_else(std::env::current_dir, Ok)
-            {
+            ui.attach_runtime(&cc.egui_ctx, &ui_runtime);
+            match project_path.map_or_else(std::env::current_dir, Ok) {
                 Ok(path) => ui.open_project(path),
                 Err(error) => eprintln!("Cannot resolve project folder: {error}"),
             }

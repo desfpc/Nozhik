@@ -8,6 +8,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+muda = { version = "0.21.2", default-features = false }
 nozhik-database = { path = "crates/database" }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "sqlite", "chrono", "uuid", "json", "rust_decimal"] }
 futures-util = "0.3"

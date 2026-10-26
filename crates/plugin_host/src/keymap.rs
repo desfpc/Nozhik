@@ -185,6 +185,7 @@ fn valid_key(key: &str) -> bool {
         || matches!(
             key,
             "Enter"
+                | "Comma"
                 | "Escape"
                 | "Space"
                 | "Tab"
@@ -212,14 +213,26 @@ fn defaults(profile: KeymapProfile) -> Vec<KeyBinding> {
     }
     let mut entries = vec![
         ("S", false, "ui.save_file", "editorOpen"),
+        ("O", false, "ui.open", ""),
+        ("Q", false, "ui.exit", ""),
+        ("C", false, "ui.copy", "editorFocus"),
+        ("X", false, "ui.cut", "editorFocus"),
+        ("V", false, "ui.paste", "editorFocus"),
+        ("N", false, "ui.new_file", ""),
+        ("S", true, "ui.save_all", ""),
+        ("W", false, "ui.close_tab", "editorOpen"),
+        ("Comma", false, "ui.settings", ""),
+        ("Z", false, "ui.undo", "editorFocus"),
+        ("Z", true, "ui.redo", "editorFocus"),
+        ("F", false, "ui.find", "editorOpen"),
+        ("R", false, "ui.replace", "editorOpen"),
+        ("K", false, "ui.commit", "projectOpen"),
+        ("O", true, "ui.go_file", ""),
+        ("E", false, "ui.recent_files", ""),
         ("G", true, "ui.git", ""),
     ];
     if profile == KeymapProfile::JetBrains {
-        entries.extend([
-            ("A", true, "ui.search_everywhere", ""),
-            ("O", true, "ui.search_everywhere", ""),
-            ("E", false, "ui.search_everywhere", ""),
-        ]);
+        entries.extend([("A", true, "ui.search_everywhere", "")]);
     } else {
         entries.push(("P", true, "ui.search_everywhere", ""));
     }
@@ -242,7 +255,7 @@ fn defaults(profile: KeymapProfile) -> Vec<KeyBinding> {
             alt: true,
             ..KeyChord::default()
         },
-        action: "ui.terminal".into(),
+        action: "ui.new_terminal".into(),
         when: When::default(),
     });
     bindings

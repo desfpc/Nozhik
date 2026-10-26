@@ -2,14 +2,19 @@
 use nozhik_database::{DbValue, QueryResult};
 use std::cmp::Ordering;
 
+/// Read-only result snapshot with two-dimensional viewport rendering.
 #[derive(Default)]
 pub struct DataGrid {
+    /// Retained rows and native column descriptors.
     pub result: QueryResult,
     order: Vec<usize>,
     sort: Option<(usize, bool)>,
     selected: Option<(usize, usize)>,
+    focused: bool,
 }
 impl DataGrid {
+    /// Create a view in original server row order.
+    #[must_use]
     pub fn new(result: QueryResult) -> Self {
         let order = (0..result.rows.len()).collect();
         Self {
@@ -17,6 +22,13 @@ impl DataGrid {
             order,
             ..Self::default()
         }
+    }
+    pub(crate) fn selected_copy(&self) -> Option<String> {
+        if !self.focused {
+            return None;
+        }
+        let (row, col) = self.selected?;
+        self.result.rows.get(row)?.get(col).map(ToString::to_string)
     }
     fn sort_column(&mut self, column: usize) {
         self.sort = match self.sort {
@@ -45,6 +57,7 @@ impl DataGrid {
         clippy::too_many_lines,
         reason = "Bounded result indices are converted to egui logical viewport coordinates"
     )]
+    /// Render only viewport cells, with sorting, selection and clipboard support.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let grid_id = ui.id().with("data_grid");
         ui.interact(
@@ -182,7 +195,8 @@ impl DataGrid {
         if let Some(column) = sort {
             self.sort_column(column);
         }
-        if ui.memory(|m| m.has_focus(grid_id))
+        self.focused = ui.memory(|m| m.has_focus(grid_id));
+        if self.focused
             && ui.input_mut(|i| {
                 let copy = i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
                     || i.events.iter().any(|e| matches!(e, egui::Event::Copy));

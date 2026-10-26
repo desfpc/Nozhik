@@ -94,6 +94,11 @@ impl crate::NozhikUi {
             let ready = view
                 .request_at
                 .is_none_or(|time| time.elapsed() >= std::time::Duration::from_millis(200));
+            if !ready && let Some(at) = view.request_at {
+                ctx.request_repaint_after(
+                    std::time::Duration::from_millis(200).saturating_sub(at.elapsed()),
+                );
+            }
             if ready && let Some((kind, byte)) = view.request.take() {
                 let source = document.buffer.rope().to_string();
                 if byte > source.len() || !source.is_char_boundary(byte) {

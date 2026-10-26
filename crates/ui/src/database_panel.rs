@@ -47,11 +47,17 @@ impl Drop for DatabaseUi {
     }
 }
 impl DatabaseUi {
+    pub(crate) fn new_connection(&mut self) {
+        self.form = Some(Form::default());
+        self.error.clear();
+    }
     pub const fn modal_open(&self) -> bool {
         self.form.is_some() || self.login.is_some()
     }
     pub fn shutdown(&mut self) {
-        self.worker = None;
+        if let Some(worker) = self.worker.take() {
+            worker.shutdown();
+        }
         self.pending.clear();
         for tab in &mut self.tabs {
             if let Some((_, t)) = tab.pending.take() {
@@ -258,7 +264,7 @@ impl NozhikUi {
             }
         });
         if !self.database.error.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_RED, &self.database.error);
+            ui.colored_label(crate::theme::ERROR, &self.database.error);
         }
         egui::ScrollArea::both().show(ui, |ui| {
             for profile in &self.database.profiles {
@@ -402,6 +408,14 @@ impl NozhikUi {
             self.execute_database_sql(sql);
         }
     }
+    pub(crate) fn open_database_console(&mut self) {
+        if let Some(profile) = self.database.profiles.first() {
+            let name = profile.name.clone();
+            self.new_sql_console(name, String::new(), "SELECT 1;", "SQL Console".into());
+        } else {
+            self.database.new_connection();
+        }
+    }
     fn new_sql_console(&mut self, name: String, schema: String, sql: &str, title: String) {
         let id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -432,24 +446,24 @@ impl NozhikUi {
                 close = Some(index);
             }
         }
-        if let Some(index) = close
-            && let Some(tab) = self.database.tabs.get_mut(index)
-        {
-            tab.open = false;
-            if let Some((_, t)) = tab.pending.take() {
-                t.cancel();
-            }
-            if self.database.active == Some(index) {
-                self.database.active = None;
-            }
+        if let Some(index) = close {
+            self.request_close(crate::integration::CloseTarget::Sql(index), ui.ctx());
         }
     }
+
     pub(crate) fn database_editor(&mut self, ui: &mut egui::Ui, enabled: bool) {
         if let Some(index) = self.database.active
             && let Some(tab) = self.database.tabs.get_mut(index)
         {
+            tab.split = self.layout.value.sql;
             let tree = self.database.trees.get(&tab.connection);
-            if let Some(sql) = tab.show(ui, &self.database.profiles, tree, enabled) {
+            let request = tab.show(ui, &self.database.profiles, tree, enabled);
+            self.editor_focus = tab.focus_id;
+            self.integration.last_editor = tab.editor_id;
+            let mut layout = self.layout.value;
+            layout.sql = tab.split;
+            self.layout.set(layout);
+            if let Some(sql) = request {
                 self.execute_database_sql(sql);
             }
         }
@@ -566,7 +580,7 @@ impl NozhikUi {
                         ui.label(&self.database.error);
                     }
                     if form.tested {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "Test succeeded");
+                        ui.colored_label(crate::theme::SUCCESS, "Test succeeded");
                     }
                     ui.horizontal(|ui| {
                         if ui

@@ -34,6 +34,23 @@ impl TerminalManager {
     /// # Errors
     /// Returns session limit or exhausted ID errors; spawn failures arrive as events.
     pub fn create(&mut self, options: SessionOptions) -> Result<TerminalSessionId> {
+        self.create_backend(options, None)
+    }
+    /// Allocate a tab using an external nonblocking byte transport.
+    /// # Errors
+    /// Returns session limit or exhausted identity errors.
+    pub fn create_external(
+        &mut self,
+        options: SessionOptions,
+        transport: Box<dyn crate::external::ExternalTransport>,
+    ) -> Result<TerminalSessionId> {
+        self.create_backend(options, Some(transport))
+    }
+    fn create_backend(
+        &mut self,
+        options: SessionOptions,
+        transport: Option<Box<dyn crate::external::ExternalTransport>>,
+    ) -> Result<TerminalSessionId> {
         if self.sessions.len() >= 16 {
             return Err(TerminalError::Invalid(
                 "at most 16 terminal tabs may be open".into(),
@@ -47,7 +64,17 @@ impl TerminalManager {
         self.next = next;
         self.sessions.insert(
             id,
-            TerminalSession::start(id, options, self.wake.clone(), self.sender.clone()),
+            if let Some(transport) = transport {
+                TerminalSession::start_external(
+                    id,
+                    options,
+                    self.wake.clone(),
+                    self.sender.clone(),
+                    transport,
+                )
+            } else {
+                TerminalSession::start(id, options, self.wake.clone(), self.sender.clone())
+            },
         );
         Ok(id)
     }

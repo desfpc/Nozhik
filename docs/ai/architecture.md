@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 6
+# Архитектура Nozhik — Phase 7
 
 ## Границы крейтов
 
@@ -13,7 +13,8 @@
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
-| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal |
+| nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -237,3 +238,99 @@ encoder передаёт control/escape/UTF-8 bytes через bounded queue в 
 Resize панели обновляет PTY и emulator в control worker. Tab close сигнализирует
 stop без ожидания, App::on_exit выполняет bounded manager shutdown.
 Контракты и ограничения: [roadmap Phase 6](roadmap-progress.md#phase-6--terminal-subsystem).
+
+
+## Remote Development & SSH (Phase 7)
+
+`remote_ssh` не зависит от egui, buffer, terminal или config. Russh 0.65
+содержит `russh::keys` (отдельный устаревший russh-keys не нужен); выбран
+ring backend без aws-lc/libssh2. SFTP v3 — russh-sftp 3.0.1. Rust SSH stack
+не добавляет C SSH-библиотек; ring использует свой нативный crypto build.
+
+`SshProfile` сериализует только публичные настройки; SHA256 pin необязателен
+и сохранён для совместимости со старыми профилями.
+`load_profiles/save_profiles` валидируют поля и уникальность имён; сохранение
+атомарно через tempfile. UI использует соседний с settings `ssh_hosts.json`.
+Никаких паролей/фраз в профилях: `connect(profile, secret)` получает их временно.
+Host key проверяется до auth; CA certificates отклоняются.
+Новый UI flow: Verify (SSH handshake без auth) → TrustRequired → явное Trust →
+Verified → saved OS credential либо модальный Password/Passphrase → Connect. UnknownHostKey содержит
+полученный fingerprint; HostKeyChanged никогда не превращается в first-use prompt.
+`trust.rs` атомарно хранит host/port → SHA256 в соседнем `ssh_known_hosts.json`;
+ошибки чтения/JSON не заменяются defaults, существующий другой pin не перезаписывается.
+Connect повторно проверяет тот же pin на настоящем auth-соединении, поэтому смена
+ключа между предварительной проверкой и вводом пароля отклоняется. Key file I/O работает
+через spawn_blocking, Agent — Unix socket / Windows OpenSSH named pipe.
+
+`SshSession` разделяет Handle через Arc<tokio::Mutex>; lock нужен только для
+создания каналов/авторизации, сами shell/SFTP/direct-tcpip работают независимо.
+Connect и channel setup имеют deadline 15s, keepalive interval 20s/max 3.
+Отклонённый PTY/shell/subsystem не превращается в успешный результат.
+Waiter ожидает Success/Failure, пропускает WindowAdjusted/XonXoff; ранние
+Data/ExtendedData помещаются в ограниченную очередь (64 KiB за фазу, до 128
+сообщений). `SshShellStream::wait` сначала возвращает этот вывод, затем читает
+Channel, включая Data/ExtendedData/ExitStatus/Close. Настоящий Failure указывает
+PTY или shell; EOF/close/exit во время setup — отдельная ошибка. SFTP setup
+также пропускает window-adjust. Общий deadline ограничивает ожидание ack.
+
+UI remote worker владеет своим current-thread runtime и типизированными bounded
+command/reply очередями ёмкостью 64; завершение отменяет runtime и все задачи.
+Локальные profile/cache операции используют blocking pool / tokio fs. Repaint
+вызывается после публикации ответа. Connect и операции файлов последовательны,
+с общим deadline команды 35s; shell/tunnel I/O продолжается независимо. Worker
+проверяет закрытие транспорта раз в секунду, удаляет SFTP и туннели, сообщает Offline.
+UpsertProfile/DeleteProfile загружают актуальный список с диска, проверяют имена
+и атомарно сохраняют JSON, затем закрывают затронутые сессии/каналы и туннели.
+UI не теряет форму при ошибке записи. Количество forwards в форме не ограничено
+одним правилом. Изменение identity/legacy pin инвалидирует привязки открытых
+документов: текст остаётся, но upload запрещён до повторного открытия через SFTP.
+Cache document IDs монотонны даже после удаления/переиспользования имени хоста.
+
+Терминал получает `ExternalTransport`, оставаясь независимым от SSH/Tokio.
+UI adapter переводит input/resize в bounded async очередь, а Data/Exit/Error —
+в выходную. Отдельный terminal worker использует существующий Emulator и
+SessionSnapshot; VT100 parsing не работает на UI. Drop/close отменяет shell task
+независимо от заполненных очередей; ошибки сохраняют последний экран.
+
+`SftpClient` лениво кэширует непосредственных детей: 128 путей на соединение,
+TTL 30s, директории перед файлами, dot entries отбрасываются. Символические ссылки
+не раскрываются как папки. Upload/Refresh сбрасывают listings. Чтение ограничено
+16 MiB во время streaming. Путь SFTP — протокольная POSIX-строка, локальный
+кэш — PathBuf. Worker назначает непрозрачные document-N имена в TempDir;
+серверные имена не используются как локальные пути. UI хранит привязку
+cache path → (profile name, remote path), повторное открытие сохраняет буфер.
+Ctrl/Cmd+S отправляет Rope snapshot; материализация происходит на worker,
+ack содержит revision, dirty снимается только при её совпадении. Ошибки не
+переключают сохранение на локальный fs_model. Upload CREATE/TRUNCATE/WRITE
+не атомарен: при сбое сервер может содержать частичный файл, редактор остаётся dirty.
+
+Туннель привязан к loopback IPv4, каждому сокету соответствует direct-tcpip.
+Tokio copy_bidirectional поддерживает обратное давление/half-close. JoinSet
+ограничивает соединения до 64; abort/drop TunnelHandle закрывает listener и все
+потоки. Неявного открытия туннелей при тесте/терминале/SFTP нет.
+
+
+### Защищённые SSH credentials
+
+`credentials.rs`: Secret (Zeroizing<String>, redacted Debug), CredentialStore
+и OsCredentialStore через keyring 3.6.3. macOS — apple-native (Keychain), Windows —
+windows-native (Credential Manager), Linux — sync-secret-service + crypto-rust
+и vendored DBus. Mock keyring backend используется только в изолированных тестах,
+не как production fallback. Native store I/O работает через spawn_blocking.
+Entry identity: service dev.Nozhik.Nozhik.SSH, account — сериализованный tuple
+profile name/host/port/user/auth (+ path ключа). Secret не сериализуется.
+
+В профиле boolean save_password (default false). Read credentials выполняется
+после host trust; фактический auth handshake повторно проверяет pin. Save
+включается явно в credential modal для уже сохранённого профиля и выполняется
+после успешной авторизации. Ошибка native store не превращается в plaintext
+файл или ложный успех сохранения. Missing/rejected/locked secret возвращает
+CredentialsRequired; пользователь может войти без сохранения. После успешного
+входа metadata preference синхронизируется обратно в UI.
+
+ForgetPassword/удаление профиля/смена credential identity удаляет прежний native
+entry; если credential store отказывает в удалении, операция профиля завершается
+ошибкой до изменения JSON. При ошибке JSON после удаления секрета профиль может
+остаться с preference=true, но отсутствие entry безопасно приводит к запросу
+ввода. JSON и OS store не имеют общей транзакции. Trust records хранятся отдельно
+и не удаляются вместе с профилем (один сервер может использоваться несколькими).

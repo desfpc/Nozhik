@@ -16,7 +16,8 @@
 | 5 | Tree-sitter Syntax Highlighting & LSP Client Core (PHP) | Реализован; рефакторинг отложен |
 | 6 | Terminal Subsystem: PTY, ANSI grid, вкладки, TUI | Реализован; ограничения ниже |
 | 6.1 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
-| 7 | Task runner, запуск и отладка | Не начат; терминал реализован в 6, Git в 3.4 |
+| 7 | Remote Development & SSH: профили, remote shell, SFTP, local forwarding | Реализован; ограничения ниже |
+| 7.1 | Task runner, запуск и отладка | Не начат |
 | 8 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
 | 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
 
@@ -610,3 +611,153 @@ Release macOS ARM64 и Windows x64 GNU пересобраны через update-
 Реальные GUI Windows/Linux, ConPTY/PowerShell/cmd и GitHub CI в этой итерации
 не выполнялись. Нативное окно macOS также вручную не открывалось; проверка vi
 использовала настоящую PTY и виртуальную сетку без GUI.
+
+
+## Phase 7 — Remote Development & SSH
+
+- [x] Двенадцатый крейт `nozhik-remote-ssh`, russh 0.65 (keys встроены),
+  russh-sftp 3.0.1, Tokio; без libssh2, ring crypto backend.
+- [x] SshProfile/Password/PrivateKeyFile/Agent, default port 22, валидация,
+  уникальные имена, атомарный `config/ssh_hosts.json` рядом с settings.toml.
+  Секреты запрашиваются модально и не сериализуются; malformed JSON сохраняется.
+- [x] Проверка SHA256 host key до авторизации; first-use TOFU dialog с явным
+  подтверждением и сохранением в ssh_known_hosts.json, блокировка изменённых
+  ключей и host certificates без CA policy. Legacy profile pins поддерживаются.
+- [x] Connect/auth/channel deadlines 15s; keepalive 20s/max 3; Unix SSH_AUTH_SOCK
+  и Windows OpenSSH pipe, OpenSSH key files с optional passphrase.
+- [x] xterm-256color PTY, shell, resize/window-change, Data/ExtendedData/ExitStatus;
+  bounded adapter в штатные TerminalView/Emulator/SessionSnapshot и SSH tab labels.
+- [x] Tool window ⇄ Remote Host / SSH, профильный modal, Test Connection,
+  Connected/Offline, Open Terminal, Browse SFTP, Disconnect, Start/Stop Tunnels.
+- [x] SFTP lazy tree, атрибуты, UTF-8 read с лимитом 16 MiB, временный приватный
+  локальный кэш; прозрачный upload Ctrl/Cmd+S с проверкой ревизии и сохранением dirty.
+- [x] Кэш каталогов: максимум 128 на соединение, TTL 30s; folder-first sorting,
+  фильтрация dot entries; явный Refresh и invalidation после upload.
+- [x] Local forwarding только 127.0.0.1, port 0, direct-tcpip,
+  copy_bidirectional/half-close, максимум 64 потока, cancel listener + streams.
+
+### Архитектура и жизненный цикл
+
+remote_ssh независим от UI/terminal/config. Shared authenticated Handle создаёт
+независимые shell/SFTP/tunnel каналы. UI worker владеет runtime, профилями,
+сессиями, SFTP, TempDir и туннелями; очереди команд/ответов по 64, wake → repaint.
+Сеть/локальный I/O не блокируют UI; общая команда ограничена 35s, отдельные сетевые
+операции 15s. При закрытии runtime отменяет задачи; SSH channel adapter использует
+отдельные bounded input/output очереди по 64. Терминальный ExternalTransport
+не зависит от russh: existing background Emulator обрабатывает ANSI bytes.
+
+Реестр remote documents хранит cache PathBuf → (profile, POSIX remote path).
+Remote basename не используется как локальный путь. Повторное открытие сохраняет
+несохранённый TextBuffer. Save получает Rope snapshot/revision, upload выполняется
+на worker; ack очищает dirty только при той же ревизии. При ошибке/обрыве нет
+fallback на локальное сохранение. Смена проекта не меняет remote document identity.
+
+### Проверки и границы
+
+Тесты профилей: roundtrip трёх auth types, default port, пустые/неверные поля,
+дубликаты, атомарное сохранение и сохранность malformed JSON. Mock SSH server
+на localhost проверяет настоящее рукопожатие/password auth, pinned key rejection,
+PTY/resize/echo, direct-tcpip roundtrip и disconnect. Stalled TCP handshake
+проверяет штатный 15s timeout без panic. In-memory SFTP protocol server проверяет
+read/write/truncation, attributes, directory cache reuse/expiry/invalidation.
+Terminal transport test проверяет ANSI grid, input, resize и close. Headless UI
+проверяет modal и stale save ack, dirty после обрыва, отсутствие local-save fallback.
+
+Удалённый workspace/LSP/Git, SSH config/ProxyJump, 2FA, автопереподключение,
+SSH host certificates/CA и known_hosts import остаются за границами. Форма поддерживает несколько forwards, как и JSON. SFTP upload не атомарен,
+внешние изменения/блокировки/merge не проверяются. Лимит editor read 16 MiB;
+каталоги читаются целиком, pagination пока нет. Реальные внешние SSH-серверы,
+GUI macOS/Windows/Linux и Windows Agent runtime вручную не проверялись.
+
+
+### Верификация Phase 7 (2026-10-26)
+
+На macOS ARM64 / Rust 1.99.1 прошли fmt, Clippy workspace/all-targets/all-features
+с `-D warnings` для native и x86_64-pc-windows-gnu; также прошли
+`cargo build --locked --workspace --release --offline` и `git diff --check`.
+Полный workspace test run
+вне sandbox: 64 unit + 5 integration + 1 doc-test; прежний ручной system_vi test
+остаётся ignored и в этой итерации отдельно не запускался. SSH shell cancellation
+проверен настоящим локальным сервером при заполненной выходной очереди:
+закрытие вкладки доставляет peer channel-close без ожидания освобождения очереди.
+
+Release-бинарники обеих платформ пересобраны scripts/update-binaries.py;
+`--check` подтвердил общий source fingerprint, архитектуры и SHA-256 payload.
+GUI и внешние SSH-серверы не проверялись; runtime_tested остаётся false.
+
+
+### Доработка SSH подключения: TOFU и запрос пароля (2026-10-26)
+
+Из формы Add SSH host убрано обязательное поле fingerprint. Новый профиль можно
+сохранить без pin. Verify получает ключ сервера без отправки пароля; первое
+подключение показывает host/port и fingerprint с Trust and Continue / Cancel.
+Доверие сохраняется атомарно в отдельном ssh_known_hosts.json по host/port;
+отмена ничего не сохраняет. Изменившийся ключ блокируется отдельным modal
+без автоматического replacement. Старые профили с pin остаются совместимыми.
+После проверки/принятия ключа открывается Password/Passphrase с автоматическим
+фокусом, маскированием и подтверждением Enter; форма поясняет этот порядок.
+При настоящем auth handshake ключ снова строго проверяется.
+
+Mock SSH audit проверяет отсутствие password auth до доверия, его сохранение,
+повторную проверку, успешную авторизацию после доверия и отказ при смене ключа.
+Проверяются malformed trust-file preservation и отсутствие записи при отмене.
+Headless egui test вводит пароль в сфокусированное поле и проверяет, что текст
+не попадает в отрисованные строки. Профили без поля fingerprint валидны;
+непустые legacy pins валидируются парсером OpenSSH fingerprint.
+
+
+Проверка доработки: fmt, native и Windows GNU Clippy all-targets/all-features
+с -D warnings, workspace release build и git diff --check прошли.
+Полный прогон: 66 unit + 5 integration + 1 doc-test; system_vi остаётся ignored.
+Обе платформы пересобраны update-binaries.py, --check подтвердил source/payload
+hashes. Проверки выполнены на mock SSH и headless UI; внешний сервер пользователя
+и нативное окно в этой доработке не запускались.
+
+
+### SSH shell, управление профилями и защищённые пароли (2026-10-26)
+
+- Исправлен ложный server rejected PTY/shell request: ожидание одного сообщения
+  заменено ожиданием Success/Failure с пропуском WindowAdjusted/XonXoff. Ранний
+  вывод сохраняется в bounded pending queue, SshShellStream::wait возвращает его
+  перед дальнейшими сообщениями. Failure различает PTY/shell, close/exit не маскируются.
+- Ошибка воспроизведена с прежним waiter против отдельного настоящего OpenSSH
+  на localhost; исправленный код открывает PTY/shell, выполняет printf и проверяет
+  SFTP write/read. Тест system_openssh_shell_and_sftp ignored по умолчанию,
+  запускается явно, использует временные ключи/config без изменения ~/.ssh.
+- Edit/Save и Delete с подтверждением, Forget password. Worker перечитывает
+  актуальные профили, валидирует уникальность, сохраняет атомарно, отключает
+  затронутый транспорт. Ошибки сохраняют форму и старый JSON. Все forwards
+  можно редактировать, добавлять и удалять.
+- Изменение credential identity удаляет прежний пароль; изменение endpoint/auth/
+  имени/legacy pin блокирует upload открытых старых буферов вместо их переназначения
+  новому серверу. Текст/dirty сохраняются; cache document IDs не переиспользуются.
+- Явный Save password in system credential store в login modal для сохранённых
+  профилей. keyring 3.6.3: macOS Keychain, Windows Credential Manager, Linux
+  Secret Service с crypto-rust/vendored DBus. save_password default=false —
+  единственная metadata в JSON; пароль/фраза сохраняются после успешного auth.
+- Native store операции через spawn_blocking, Secret zeroizes собственный буфер
+  и скрывает Debug. Пароль загружается после host trust, реальный auth снова
+  проверяет host key. Missing/locked/rejected saved password возвращает запрос
+  ввода. Ошибки store не создают plaintext fallback и не объявляют запись успешной.
+- Удаление/Forget и смена identity удаляют запись OS store; отказ хранилища
+  блокирует изменение профиля с сообщением. Trust keys отдельно и не удаляются.
+
+Тесты: настоящий OpenSSH smoke, ранний banner до shell-success, различение
+настоящих PTY/shell failures; mock OS credential entry roundtrip/delete/denial
+без изменения пользовательского Keychain; worker auth проверяет opt-in save,
+повторный вход, rejected/locked/missing credentials и отсутствие секрета в JSON.
+Profile tests проверяют edit/rename/delete/duplicate/missing, отказ locked store,
+Forget password, сохранение нескольких forwards. Headless UI проверяет
+инвалидацию старых документов с сохранением dirty и формы при ошибке записи.
+
+
+Верификация доработки: fmt, native macOS и Windows GNU Clippy с all-targets/
+all-features и -D warnings, workspace release build, git diff --check прошли.
+Полный workspace run: 71 unit + 5 integration + 1 doc-test, без failures;
+2 ignored (system_vi и system_openssh). system_openssh отдельно запущен и прошёл;
+legacy waiter временно воспроизвёл исходную ошибку на том же OpenSSH, затем код
+восстановлен. После выделения test setup дополнительно прошли все 6 remote UI/
+worker tests. macOS ARM64 и Windows x64 GNU бинарники обновлены скриптом,
+--check подтвердил общий source fingerprint и payload hashes. Реальные Keychain/
+Credential Manager/Secret Service и GUI вручную не проверялись; OS API тестируются
+через изолированные mock/injected stores, Windows API проверен cross-build.

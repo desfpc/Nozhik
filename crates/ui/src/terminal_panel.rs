@@ -13,6 +13,7 @@ pub struct TerminalPanel {
     snapshots: HashMap<TerminalSessionId, SessionSnapshot>,
     view: TerminalView,
     initialized: bool,
+    labels: HashMap<TerminalSessionId, String>,
     pub focus: bool,
 }
 impl TerminalPanel {
@@ -24,6 +25,7 @@ impl TerminalPanel {
             snapshots: HashMap::new(),
             view: TerminalView::default(),
             initialized: false,
+            labels: HashMap::new(),
             focus: true,
         }
     }
@@ -50,6 +52,20 @@ impl TerminalPanel {
         }
         message
     }
+    pub fn create_remote(
+        &mut self,
+        name: &str,
+        transport: Box<dyn nozhik_terminal::external::ExternalTransport>,
+    ) -> nozhik_terminal::Result<()> {
+        let id = self
+            .manager
+            .create_external(SessionOptions::new(std::path::PathBuf::new()), transport)?;
+        self.labels.insert(id, format!("[SSH: {name}]"));
+        self.active = Some(id);
+        self.focus = true;
+        self.initialized = true;
+        Ok(())
+    }
     fn create(&mut self, root: &Path) -> Option<String> {
         match self.manager.create(SessionOptions::new(root.into())) {
             Ok(id) => {
@@ -64,6 +80,7 @@ impl TerminalPanel {
     fn remove(&mut self, id: TerminalSessionId) {
         let _closed = self.manager.remove(id);
         self.snapshots.remove(&id);
+        self.labels.remove(&id);
         self.view.forget(id);
         if self.active == Some(id) {
             self.active = self
@@ -110,7 +127,10 @@ impl TerminalPanel {
                                     |g| g.title.chars().take(30).collect(),
                                 );
                             if ui
-                                .selectable_label(self.active == Some(id), label)
+                                .selectable_label(
+                                    self.active == Some(id),
+                                    self.labels.get(&id).cloned().unwrap_or(label),
+                                )
                                 .on_hover_text(session.options().cwd.display().to_string())
                                 .clicked()
                             {

@@ -33,6 +33,9 @@ impl NozhikUi {
             self.last_shift = None;
         }
         self.shift_down = shift;
+        if self.remote.modal_open() {
+            return;
+        }
         if !self.search.open
             && !self.settings_open
             && !self.plugins_open
@@ -266,8 +269,10 @@ impl NozhikUi {
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
                         let root = self.project.as_ref().map(|p| p.root_path.as_path());
-                        let enabled =
-                            !self.search.open && !self.settings_open && !self.plugins_open;
+                        let enabled = !self.search.open
+                            && !self.settings_open
+                            && !self.plugins_open
+                            && !self.remote.modal_open();
                         let (collapse, error) =
                             panel.show(ui, root, f32::from(self.config.font_size), enabled);
                         if collapse {
@@ -295,6 +300,7 @@ impl NozhikUi {
                     ("▣", "Project", LeftTool::Project),
                     ("⑂", "Git · Changes / History", LeftTool::Commit),
                     ("☷", "Structure", LeftTool::Structure),
+                    ("⇄", "Remote Host / SSH", LeftTool::Remote),
                 ] {
                     if ui
                         .selectable_label(self.left == Some(tool), icon)
@@ -351,12 +357,15 @@ impl NozhikUi {
                         LeftTool::Project => "Project v",
                         LeftTool::Commit => "Commit",
                         LeftTool::Structure => "Structure",
+                        LeftTool::Remote => "Remote Host / SSH",
                     });
                     ui.separator();
                     if tool == LeftTool::Project {
                         self.project_panel(ui);
                     } else if tool == LeftTool::Commit {
                         self.vcs.panel(ui);
+                    } else if tool == LeftTool::Remote {
+                        self.remote_panel(ui);
                     } else {
                         ui.weak("Tool window placeholder");
                     }
@@ -415,7 +424,10 @@ impl NozhikUi {
                 });
                 ui.separator();
                 if let Some(index) = self.active {
-                    let enabled = !self.search.open && !self.settings_open && !self.plugins_open;
+                    let enabled = !self.search.open
+                        && !self.settings_open
+                        && !self.plugins_open
+                        && !self.remote.modal_open();
                     if self.documents[index].binary {
                         ui.label("Binary file not supported");
                         return;
@@ -460,6 +472,7 @@ impl eframe::App for NozhikUi {
         if let Some(panel) = &mut self.terminal {
             panel.shutdown();
         }
+        self.remote.shutdown();
         self.shutdown_language();
     }
 
@@ -469,6 +482,7 @@ impl eframe::App for NozhikUi {
         self.shortcuts(ctx);
         self.receive_events();
         self.receive_files();
+        self.receive_remote(ctx);
         self.language_tick(ctx);
         if let Some(panel) = &mut self.terminal
             && let Some(message) = panel.tick()

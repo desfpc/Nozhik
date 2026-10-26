@@ -75,6 +75,26 @@ impl TerminalSession {
         wake: Wakeup,
         events: mpsc::Sender<TerminalEvent>,
     ) -> Self {
+        Self::start_backend(id, options, wake, events, None)
+    }
+    /// Start a terminal backed by a nonblocking external byte transport.
+    #[must_use]
+    pub fn start_external(
+        id: TerminalSessionId,
+        options: SessionOptions,
+        wake: Wakeup,
+        events: mpsc::Sender<TerminalEvent>,
+        transport: Box<dyn crate::external::ExternalTransport>,
+    ) -> Self {
+        Self::start_backend(id, options, wake, events, Some(transport))
+    }
+    fn start_backend(
+        id: TerminalSessionId,
+        options: SessionOptions,
+        wake: Wakeup,
+        events: mpsc::Sender<TerminalEvent>,
+        transport: Option<Box<dyn crate::external::ExternalTransport>>,
+    ) -> Self {
         let shared = Arc::new(Shared {
             emulator: Mutex::new(Emulator::new(options.rows, options.cols)),
             snapshot: Mutex::new(SessionSnapshot {
@@ -92,15 +112,20 @@ impl TerminalSession {
         let state = shared.clone();
         let worker_options = options.clone();
         std::thread::spawn(move || {
-            if let Err(error) = worker(
-                id,
-                &worker_options,
-                &state,
-                &wake,
-                &events,
-                writes,
-                &commands,
-            ) {
+            let result = if let Some(transport) = transport {
+                external_worker(id, transport, &state, &wake, &events, &writes, &commands)
+            } else {
+                worker(
+                    id,
+                    &worker_options,
+                    &state,
+                    &wake,
+                    &events,
+                    writes,
+                    &commands,
+                )
+            };
+            if let Err(error) = result {
                 state.state(SessionState::Failed(error.to_string()));
                 report(
                     &events,
@@ -456,4 +481,82 @@ fn write_input(
             break;
         }
     }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "External backend shares existing lifecycle and queue contracts"
+)]
+fn external_worker(
+    id: TerminalSessionId,
+    mut transport: Box<dyn crate::external::ExternalTransport>,
+    shared: &Shared,
+    wake: &Wakeup,
+    events: &mpsc::Sender<TerminalEvent>,
+    writes: &mpsc::Receiver<Vec<u8>>,
+    commands: &mpsc::Receiver<Control>,
+) -> Result<()> {
+    use crate::external::ExternalOutput;
+    shared.state(SessionState::Running(None));
+    report(events, wake, TerminalEvent::Started { id, pid: None });
+    let result = (|| {
+        loop {
+            if shared.stop.load(Ordering::Acquire) {
+                shared.state(SessionState::Closed);
+                return Ok(());
+            }
+            for bytes in writes.try_iter().take(64) {
+                transport.write(bytes)?;
+            }
+            for command in commands.try_iter().take(128) {
+                match command {
+                    Control::Resize(rows, cols) => {
+                        transport.resize(rows, cols)?;
+                        let mut emulator = shared.emulator.lock();
+                        emulator.resize(rows, cols);
+                        shared.publish(&emulator);
+                        drop(emulator);
+                    }
+                    Control::Scroll(delta) => {
+                        let mut emulator = shared.emulator.lock();
+                        emulator.scroll(delta);
+                        shared.publish(&emulator);
+                        drop(emulator);
+                    }
+                }
+            }
+            if shared.live.swap(false, Ordering::AcqRel) {
+                let mut emulator = shared.emulator.lock();
+                emulator.live();
+                shared.publish(&emulator);
+                drop(emulator);
+            }
+            for _ in 0..128 {
+                match transport.poll()? {
+                    Some(ExternalOutput::Data(bytes)) => {
+                        let response = {
+                            let mut emulator = shared.emulator.lock();
+                            let response = emulator.process(&bytes);
+                            shared.publish(&emulator);
+                            drop(emulator);
+                            response
+                        };
+                        if !response.is_empty() {
+                            transport.write(response)?;
+                        }
+                    }
+                    Some(ExternalOutput::Exited(code)) => {
+                        shared.state(SessionState::Exited(code));
+                        report(events, wake, TerminalEvent::Exited { id, code });
+                        return Ok(());
+                    }
+                    None => break,
+                }
+            }
+            wake();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    })();
+    transport.close();
+    result
 }

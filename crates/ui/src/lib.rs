@@ -5,6 +5,9 @@ pub mod editor_view;
 mod language;
 mod plugins;
 mod project;
+mod remote_panel;
+mod remote_shell;
+mod remote_worker;
 pub mod search_everywhere;
 mod terminal_panel;
 mod terminal_view;
@@ -50,6 +53,8 @@ pub enum LeftTool {
     Project,
     /// Git Changes and History.
     Commit,
+    /// Remote SSH hosts and SFTP browser.
+    Remote,
     /// Structure placeholder.
     Structure,
 }
@@ -63,6 +68,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    remote: remote_panel::RemoteUi,
     terminal: Option<terminal_panel::TerminalPanel>,
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
@@ -133,6 +139,7 @@ impl NozhikUi {
             }
         };
         Self {
+            remote: remote_panel::RemoteUi::default(),
             terminal: None,
             language: language::LanguageUi::default(),
             plugins,
@@ -185,7 +192,8 @@ impl NozhikUi {
             editor_focus: self.editor_focus.is_some()
                 && !self.search.open
                 && !self.settings_open
-                && !self.plugins_open,
+                && !self.plugins_open
+                && !self.remote.modal_open(),
             selected_file: self.selected_file.is_some(),
             project_open: self.project.is_some(),
         }

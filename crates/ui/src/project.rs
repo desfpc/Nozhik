@@ -49,6 +49,19 @@ impl NozhikUi {
             return;
         }
         let snapshot = document.buffer.snapshot();
+        if self.remote.documents.contains_key(&document.path) {
+            if self.remote.document_invalidated(&document.path) {
+                self.status = "SSH profile changed/deleted; reopen the file from SFTP before saving. Edits remain in this buffer.".into();
+                return;
+            }
+            if !self
+                .remote
+                .save(&document.path, snapshot.revision, snapshot.text)
+            {
+                self.status = "SSH queue full/stopped; file remains unsaved".into();
+            }
+            return;
+        }
         self.queue(Command::Save {
             path: document.path.clone(),
             revision: snapshot.revision,
@@ -120,7 +133,7 @@ impl NozhikUi {
             }
         }
     }
-    fn loaded_file(&mut self, path: PathBuf, text: &str, binary: bool) {
+    pub(crate) fn loaded_file(&mut self, path: PathBuf, text: &str, binary: bool) {
         if let Some(index) = self.documents.iter().position(|d| d.path == path) {
             self.open_document(index);
             return;

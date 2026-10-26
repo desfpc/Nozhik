@@ -51,7 +51,14 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
-- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, egui/eframe.
+- remote_ssh: russh/keys, russh-sftp, tokio, keyring (native OS stores), zeroize,
+  serde/serde_json, tempfile, directories, thiserror.
+  Без UI/terminal/config; перед auth обязателен доверенный host key (TOFU с явным
+  подтверждением либо legacy pin), секреты вне serde-профилей. Сохранение пароля
+  только явным opt-in в OS credential store, без plaintext fallback; native API
+  через spawn_blocking. Тесты используют injected/mock store без реального Keychain.
+- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, egui/eframe.
+  remote_shell — адаптер ExternalTransport; прямые russh channel messages принадлежат этому адаптеру.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные
   features. Обновляйте Cargo.lock. Изменения допустимых границ документируйте.

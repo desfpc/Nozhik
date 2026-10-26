@@ -1,11 +1,11 @@
 {
   "platform": "windows-x64",
-  "target": "x86_64-pc-windows-msvc",
-  "source_sha256": "1a94d287758aa060ffed556b9ff15f7eeb337b2009d27be3f1ecf0df00f29d8c",
+  "target": "x86_64-pc-windows-gnu",
+  "source_sha256": "6d52ec933abdbcff18549cac1d88d38b4db667c16c13ecffb15964982560eb92",
   "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
-  "build_host": "x86_64-pc-windows-msvc",
+  "build_host": "aarch64-apple-darwin",
   "runtime_tested": false,
   "files": {
-    "nozhik.exe": "de25752ec9b0bfda58a6b99eb3d4208adb220a4062e73a8a3111cb835b22186b"
+    "nozhik.exe": "bea0bec06a87a5e54750f29802a4fb17c64d3b9c2a8bd3fd79008bd6113550d2"
   }
 }

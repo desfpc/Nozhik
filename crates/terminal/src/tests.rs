@@ -331,3 +331,69 @@ fn system_vi_enters_alternate_screen_accepts_input_and_exits() -> TestResult {
     manager.shutdown();
     Ok(())
 }
+
+#[test]
+fn external_transport_uses_ansi_grid_resize_input_and_close() -> TestResult {
+    use crate::external::{ExternalOutput, ExternalTransport};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    struct Transport {
+        output: mpsc::Receiver<ExternalOutput>,
+        input: mpsc::Sender<Vec<u8>>,
+        sizes: mpsc::Sender<(u16, u16)>,
+        closed: Arc<AtomicBool>,
+    }
+    impl ExternalTransport for Transport {
+        fn poll(&mut self) -> crate::Result<Option<ExternalOutput>> {
+            Ok(self.output.try_recv().ok())
+        }
+        fn write(&mut self, bytes: Vec<u8>) -> crate::Result<()> {
+            self.input
+                .send(bytes)
+                .map_err(|_| crate::TerminalError::Closed)
+        }
+        fn resize(&mut self, rows: u16, cols: u16) -> crate::Result<()> {
+            self.sizes
+                .send((rows, cols))
+                .map_err(|_| crate::TerminalError::Closed)
+        }
+        fn close(&mut self) {
+            self.closed.store(true, Ordering::Release);
+        }
+    }
+    let (output, receiver) = mpsc::channel();
+    let (input, writes) = mpsc::channel();
+    let (sizes, resizes) = mpsc::channel();
+    let closed = Arc::new(AtomicBool::new(false));
+    let mut manager = TerminalManager::new(Arc::new(|| {}));
+    let id = manager.create_external(
+        SessionOptions::new(std::path::PathBuf::new()),
+        Box::new(Transport {
+            output: receiver,
+            input,
+            sizes,
+            closed: closed.clone(),
+        }),
+    )?;
+    let session = manager.session(id).ok_or("session missing")?;
+    output.send(ExternalOutput::Data(
+        b"\x1b[32mREMOTE_READY\x1b[0m".to_vec(),
+    ))?;
+    wait_for(|| text(session).contains("REMOTE_READY"))?;
+    session.write(b"typed".to_vec())?;
+    assert_eq!(writes.recv_timeout(Duration::from_secs(2))?, b"typed");
+    session.resize(40, 100)?;
+    assert_eq!(resizes.recv_timeout(Duration::from_secs(2))?, (40, 100));
+    wait_for(|| {
+        session
+            .snapshot()
+            .and_then(|s| s.grid)
+            .is_some_and(|g| g.rows == 40 && g.cols == 100)
+    })?;
+    let session = manager.remove(id).ok_or("session missing")?;
+    assert!(session.wait_closed(Duration::from_secs(2)));
+    assert!(closed.load(Ordering::Acquire));
+    Ok(())
+}

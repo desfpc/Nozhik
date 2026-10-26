@@ -6,12 +6,13 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 6: Terminal Subsystem реализован.** Одиннадцать крейтов,
+**Roadmap Phase 7: Remote Development & SSH реализован.** Двенадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
 hover и переход к определению. Встроенный PTY-терминал поддерживает локальный
-шелл, ANSI-цвета, вкладки и TUI-программы. Запуск/отладка через task runner
+шелл, ANSI-цвета, вкладки и TUI-программы. SSH: удалённый шелл, SFTP-редактор
+и локальные туннели. Запуск/отладка через task runner
 и подключения к БД ещё не реализованы.
 
 ## Скачать без сборки
@@ -67,7 +68,7 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-remote-ssh, nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
@@ -76,6 +77,7 @@ nozhik-fs-model ──► nozhik-event-bus
 nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
 nozhik-plugin-host ──► nozhik-event-bus, tokio, serde/serde_json, semver, directories
 nozhik-language-support ──► tree-sitter/php, lsp-types, tokio, ropey, serde_json
+nozhik-remote-ssh ──► russh (ring/Rust crypto), russh-sftp, tokio, serde, tempfile
 nozhik-terminal ──► portable-pty, vt100 (vte), parking_lot, nix (Unix signals)
 ```
 
@@ -89,6 +91,7 @@ crates/
   vcs/        # Git worker, status, index, diff, history, branches, remotes
   plugin_host/ # manifests, process JSON-RPC host, action/keymap registries
   language_support/ # incremental PHP syntax, stdio LSP client, background workers
+  remote_ssh/  # SSH, host key pinning, SFTP cache, loopback tunnels
   terminal/    # PTY/ConPTY, VT100 grid/scrollback, asynchronous sessions
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
@@ -415,3 +418,98 @@ foreground process group. Явно отсоединённые пользоват
 выделения/копирования текста мышью, поиска по истории, persistent sessions и полного
 набора xterm-расширений. Сетка не переформатирует историю как reflow-терминалы;
 при resize применяются правила vt100. OSC clipboard и открытие ссылок не выполняются.
+
+
+## Удалённая разработка: SSH, SFTP и туннели
+
+Кнопка **⇄ Remote Host / SSH** на левом тулстрипе открывает список серверов.
+**+ Add SSH host** сохраняет имя, Host, Port (22), User, Auth Type и правила
+Local Port Forward. Профили находятся в `ssh_hosts.json` рядом с `settings.toml`
+в каталоге конфигурации IDE; это пользовательский `config/ssh_hosts.json`,
+а не файл в рабочем проекте. Повреждённый JSON не перезаписывается автоматически.
+Форма позволяет добавлять, редактировать и удалять несколько правил проброса.
+**Edit** изменяет сохранённый хост; **Delete…** удаляет его после подтверждения.
+Смена имени/адреса/пользователя/метода входа удаляет прежний сохранённый пароль,
+закрывает старое соединение и требует нового входа. Открытые файлы сохраняют
+правки в памяти; после смены хоста их нужно заново открыть через SFTP для
+дальнейшего удалённого сохранения. Удаление профиля удаляет его сохранённый
+пароль, но оставляет отдельную запись доверия ключу сервера.
+
+Отпечаток ключа вводить не нужно. При первом подключении Nozhik получает ключ
+сервера и показывает **Trust SSH server?** с адресом и SHA256 fingerprint.
+**Trust and Continue** запоминает ключ и продолжает подключение; **Cancel**
+отменяет попытку, не сохраняя доверие и не отправляя пароль. При необходимости
+отпечаток можно сверить с администратором сервера.
+
+Подтверждённые ключи хранятся в `ssh_known_hosts.json` рядом с настройками,
+отдельно для каждой пары host/port. Следующие соединения проверяются
+автоматически. Изменившийся ключ вызывает блокировку и отдельный диалог;
+старый ключ автоматически не заменяется. Повреждённый trust-файл не
+перезаписывается. Старые профили с `host_key_sha256` продолжают проверять
+свой pin; для новых профилей поле необязательно и отсутствует в форме.
+Host certificates и политика доверия CA пока не поддерживаются.
+
+Аутентификация: **Password**, **Private Key** (OpenSSH, RSA/Ed25519, путь
+`~/.ssh/id_ed25519` или `~/.ssh/id_rsa`) и **SSH Agent**. На Unix используется
+`SSH_AUTH_SOCK`, на Windows — `\\.\pipe\openssh-ssh-agent`. Пароль или
+парольная фраза запрашиваются после проверки/подтверждения ключа сервера.
+Поле Password получает фокус автоматически; Connect или Enter продолжает вход.
+Пустая фраза допустима для незашифрованного ключа. Существующее соединение
+переиспользуется.
+
+Для сохранённого профиля доступна опция **Save password in system credential
+store**. После успешной авторизации пароль/фраза сохраняются в **macOS Keychain**,
+**Windows Credential Manager** или **Linux Secret Service** (разблокированный
+сеанс GNOME Keyring/KWallet с Secret Service API). Следующий вход использует
+сохранённый секрет после проверки ключа сервера. При неверном пароле или
+недоступном хранилище IDE запрашивает новый ввод. **Forget password** удаляет
+секрет из хранилища; отключение опции при успешном входе также удаляет старый.
+Системное хранилище может запросить разрешение/разблокировку. Ошибка доступа
+показывается пользователю; открытого файлового fallback нет.
+
+В `ssh_hosts.json` хранится только boolean `save_password`, сами секреты
+не попадают в JSON/логи; собственные временные буферы секретов очищаются при
+освобождении. При тестировании ещё не сохранённого профиля пароль используется
+только для текущего входа: сначала сохраните профиль, чтобы включить запоминание.
+
+- **Test Connection** выполняет SSH-рукопожатие, проверку ключа и авторизацию.
+- **Open Terminal** открывает вкладку `[SSH: имя]` в нижнем Terminal. Действуют
+  ANSI-цвета, scrollback, alternate screen и клавиатура существующего терминала;
+  геометрия передаётся серверу через `window-change`, TERM — `xterm-256color`.
+  Закрытие вкладки закрывает её канал; **Disconnect** закрывает весь транспорт.
+- **Browse SFTP** открывает домашний каталог (`.`). Раскрытие папки лениво
+  загружает детей; двойной клик по файлу открывает обычный TextBuffer. Файл
+  кэшируется в приватном временном каталоге; **Ctrl/Cmd+S** загружает текущий
+  снимок обратно по SFTP. Dirty снимается только для сохранённой ревизии.
+  При ошибке/обрыве правки остаются в памяти, локальная запись вместо SFTP
+  не выполняется. Для внешних изменений используйте **Refresh**.
+- **Start Tunnels** явно запускает сохранённые правила. Слушатель доступен
+  только на `127.0.0.1`; `local_port: 0` выбирает свободный порт. Фактические
+  адреса показываются в status bar. **Stop Tunnels**, Disconnect и выход из IDE
+  закрывают слушатели и активные потоки. Пример: `127.0.0.1:15432` →
+  `127.0.0.1:5432` с точки зрения SSH-сервера; клиент БД использует локальный порт.
+
+SSH/SFTP работают в фоне. Connect/auth/channel/SFTP имеют deadline 15 секунд;
+keepalive через 20 секунд закрывает транспорт после трёх пропущенных ответов.
+Кэш содержит до 128 каталогов на соединение с TTL 30 секунд; upload и Refresh
+сбрасывают его. Туннель ограничен 64 одновременными потоками.
+
+Ограничения: удалённый редактор принимает UTF-8 до 16 MiB, бинарные файлы
+отклоняются; SFTP upload перезаписывает файл с обрезанием, без атомарного rename,
+блокировки и проверки внешних изменений. При сбое возможна частичная запись
+на сервере. Remote workspace, удалённые LSP/Git, SSH config/ProxyJump,
+keyboard-interactive/2FA и автоматический reconnect пока не реализованы.
+
+
+SSH shell setup ждёт именно подтверждение PTY/shell: служебные
+`WindowAdjusted` и `XonXoff` не считаются отказом, ранний вывод сохраняется
+для терминала. Настоящие отказы различают `rejected PTY request` и
+`rejected shell request`; причиной может быть запрет на стороне сервера.
+Опциональная локальная проверка настоящим OpenSSH (Unix, требуется sshd):
+
+```sh
+cargo test -p nozhik-remote-ssh system_openssh_shell_and_sftp -- --ignored
+```
+
+Тест запускает отдельный sshd только на localhost с временными ключами и
+конфигурацией, не меняя пользовательский `~/.ssh` или системный sshd.

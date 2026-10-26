@@ -412,7 +412,8 @@ ProjectOpened/ProjectCreated отделены от Tree (раскрытие по
 `recent_projects.json`. Отдельный последовательный worker загружает, дедуплицирует
 и атомарно записывает JSON через tempfile; повреждённые файлы не перезаписывает.
 Reopen перемещает проект наверх, включая случай перевода системных часов назад.
-История видна под кнопками Project и в hover submenu File → Recent Projects,
+История и элементы открытия в Project видны только без открытого проекта;
+в hover submenu File → Recent Projects история доступна всегда,
 включая native macOS menu. При shutdown очередь записи дожидается ack до 1s.
 
 Cut/Copy обрабатывают штатные egui clipboard
@@ -451,3 +452,16 @@ request_repaint_after только при наличии срока. Для ск
 Plugin watch не публикует одинаковый snapshot каждую секунду. Background service
 health timers не требуют UI frame. LSP и terminal курсоры пока без idle blink.
 Стендовые стресс-замеры и ручные release gates — verification-checklist.md.
+
+
+### Представление дерева проекта
+
+ProjectTree::load читает только непосредственных детей на fs worker; сохраняет
+исключённые пути в snapshot (is_excluded), используя rooted incremental ignore matcher
+с родительскими/вложенными правилами. `.git` скрыта, symlinks не раскрываются.
+FileIndex по-прежнему использует фильтрованный walker: ignored/service paths
+не попадают в поиск. Watcher наблюдает отображаемые ignored paths, исключая `.git`.
+UI project_icons рисует векторные папки, документы и chevrons без зависимости
+от emoji-шрифтов; классифицирует тесты/линтеры по относительному пути. Красное
+исключение имеет приоритет над зелёным test/tool состоянием, выбранная строка
+сохраняет контрастный selection фон. Файлового I/O при рисовании нет.

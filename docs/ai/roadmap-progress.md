@@ -960,3 +960,32 @@ Native macOS release smoke с отдельными temporary settings и non-Git
 Windows/Linux GUI этой итерацией не запускались. Обе платформы пересобраны
 scripts/update-binaries.py; --check подтвердил общий source fingerprint и SHA-256
 payload. runtime_tested=false оставлен для неполной межплатформенной runtime matrix.
+
+
+### Иконки и семантические цвета Project (2026-10-26)
+
+- Векторные папки и chevrons раскрытия, компактные значки основных языков,
+  конфигурации, Markdown, Docker, SQL, изображений и архивов. Для неизвестного
+  типа — серый документ; внешние шрифты/emoji и зависимости не добавлены.
+- Ignored/service paths видны красным на приглушённом красном фоне, раскрываются
+  лениво; `.git` скрыта. Индекс поиска сохраняет прежние исключения. Snapshot
+  хранит is_excluded, учитывая вложенные ignore/negation rules. Watcher обновляет
+  и отображаемые ignored entries, кроме `.git` internals.
+- Тестовые папки/файлы, их потомки и настройки линтеров зелёные. Красное
+  исключение имеет приоритет; выбор/hover/focus остаются видимыми.
+- Project path/Open/Choose folder/Recent Projects показываются только без
+  открытого проекта; верхнее File menu сохраняет открытие и историю.
+
+Проверки: fmt, native и Windows GNU Clippy workspace/all-targets/all-features
+с -D warnings, workspace release build, git diff --check прошли. Полный прогон
+вне sandbox: 93 unit + 8 integration + 1 doc-test = 102 passed, 4 прежних system
+tests ignored. В sandbox OS watcher test дал timeout; вне sandbox прошёл.
+Тесты покрывают видимость ignored paths, потомков vendor, nested ignore/negation,
+снятие ignore при обновлении, классификацию иконок и скрытие стартовых действий.
+Нативный macOS release визуально проверен на отдельном временном проекте и
+settings: папки/стрелки, красные vendor/node_modules/.env, зелёные tests/phpstan,
+типовые значки и серый неизвестный файл, отсутствие открытия/истории над деревом.
+Тестовое окно закрыто. Windows/Linux GUI не запускались.
+Обе платформы пересобраны scripts/update-binaries.py; --check подтвердил общий
+source fingerprint и SHA-256 payload. runtime_tested=false сохранён для неполной
+межплатформенной runtime matrix.

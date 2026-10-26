@@ -1,7 +1,7 @@
 //! Lazy project tree and shared ignore policy.
 use crate::FsError;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -94,6 +94,7 @@ pub struct ProjectTree {
     pub root_path: PathBuf,
     /// Only directories discovered through expansion.
     pub directories: BTreeMap<PathBuf, DirNode>,
+    excluded: BTreeSet<PathBuf>,
 }
 impl ProjectTree {
     /// Resolves an existing directory; does not scan children.
@@ -114,9 +115,15 @@ impl ProjectTree {
         Ok(Self {
             root_path,
             directories,
+            excluded: BTreeSet::new(),
         })
     }
-    /// Loads one level, applying ignore files from this directory and ancestors.
+    /// Whether a displayed path is excluded by ignore rules or the service policy.
+    #[must_use]
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        self.excluded.contains(path)
+    }
+    /// Loads one level, retaining ignored entries for display (except `.git`).
     /// # Errors
     /// Returns traversal errors or rejects paths outside the project.
     pub fn load(&mut self, path: &Path) -> Result<(), FsError> {
@@ -126,13 +133,32 @@ impl ProjectTree {
             return Err(FsError::OutsideProject);
         }
         let mut nodes = Vec::new();
-        for entry in walker(path, Some(1)).build() {
+        let mut matcher = walker(&self.root_path, None)
+            .build_matchers()
+            .into_iter()
+            .next();
+        self.excluded.retain(|p| p.parent() != Some(path));
+        for entry in std::fs::read_dir(path)? {
             let entry = entry?;
-            if entry.depth() == 0 {
+            if entry.file_name() == ".git" {
                 continue;
             }
-            let p = entry.path().to_path_buf();
-            if entry.file_type().is_some_and(|t| t.is_dir()) {
+            let p = entry.path();
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() && !file_type.is_file() {
+                continue;
+            }
+            let relative = p
+                .strip_prefix(&self.root_path)
+                .map_err(|_| FsError::OutsideProject)?;
+            if service_path(relative)
+                || matcher
+                    .as_mut()
+                    .is_some_and(|m| m.matched(relative, file_type.is_dir()).is_ignore())
+            {
+                self.excluded.insert(p.clone());
+            }
+            if file_type.is_dir() {
                 self.directories
                     .entry(p.clone())
                     .or_insert_with(|| DirNode {
@@ -140,7 +166,7 @@ impl ProjectTree {
                         children: None,
                     });
                 nodes.push(Node::Dir(p));
-            } else if entry.file_type().is_some_and(|t| t.is_file()) {
+            } else {
                 nodes.push(Node::File(FileNode {
                     kind: FileKind::of(&p),
                     path: p,
@@ -210,7 +236,28 @@ mod tests {
             .iter()
             .filter_map(|n| n.path().file_name().and_then(|s| s.to_str()))
             .collect();
-        assert_eq!(names, ["a", "z", ".gitignore", "a.md", "b.rs"]);
+        assert_eq!(
+            names,
+            [
+                "a",
+                "node_modules",
+                "target",
+                "vendor",
+                "z",
+                ".gitignore",
+                "a.md",
+                "b.rs",
+                "hidden.log"
+            ]
+        );
+        assert!(tree.is_excluded(&root.join("hidden.log")));
+        assert!(tree.is_excluded(&root.join("vendor")));
+        assert!(!tree.is_excluded(&root.join("b.rs")));
+        std::fs::write(root.join("vendor/test.php"), "")?;
+        tree.load(&root.join("vendor"))?;
+        assert!(tree.is_excluded(&root.join("vendor/test.php")));
+        std::fs::write(root.join("a/.gitignore"), "*.rs\n!keep.rs\n")?;
+        std::fs::write(root.join("a/keep.rs"), "")?;
         assert!(tree.directories[&root.join("a")].children.is_none());
         tree.load(&root.join("a"))?;
         assert_eq!(
@@ -218,8 +265,13 @@ mod tests {
                 .children
                 .as_ref()
                 .map(Vec::len),
-            Some(1)
+            Some(3)
         );
+        assert!(tree.is_excluded(&root.join("a/nested.rs")));
+        assert!(!tree.is_excluded(&root.join("a/keep.rs")));
+        std::fs::write(root.join("a/.gitignore"), "")?;
+        tree.load(&root.join("a"))?;
+        assert!(!tree.is_excluded(&root.join("a/nested.rs")));
         Ok(())
     }
 }

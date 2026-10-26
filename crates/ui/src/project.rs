@@ -200,31 +200,33 @@ impl NozhikUi {
         self.bus.publish(Event::FileOpened(path));
     }
     pub(crate) fn project_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.project_path)
-                    .hint_text("Project folder path")
-                    .desired_width(150.0),
-            );
-            if ui.button("Open").clicked() {
-                self.open_project(PathBuf::from(self.project_path.trim()));
-            }
-        });
-        if ui.button("Choose folder…").clicked() {
-            self.choose_project_folder(ui.ctx());
-        }
-        ui.label("Recent Projects");
-        let mut recent = None;
-        egui::ScrollArea::vertical()
-            .id_salt("project_history")
-            .max_height(150.0)
-            .show(ui, |ui| {
-                recent = self.recent_projects.list(ui);
+        if self.project.is_none() {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.project_path)
+                        .hint_text("Project folder path")
+                        .desired_width(150.0),
+                );
+                if ui.button("Open").clicked() {
+                    self.open_project(PathBuf::from(self.project_path.trim()));
+                }
             });
-        if let Some(path) = recent {
-            self.open_project(path);
+            if ui.button("Choose folder…").clicked() {
+                self.choose_project_folder(ui.ctx());
+            }
+            ui.label("Recent Projects");
+            let mut recent = None;
+            egui::ScrollArea::vertical()
+                .id_salt("project_history")
+                .max_height(150.0)
+                .show(ui, |ui| {
+                    recent = self.recent_projects.list(ui);
+                });
+            if let Some(path) = recent {
+                self.open_project(path);
+            }
+            ui.separator();
         }
-        ui.separator();
         let Some(tree) = &self.project else {
             ui.weak("Choose a folder or enter its path");
             return;
@@ -266,7 +268,7 @@ fn tree_row(
         .file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy();
-    let row = ui.selectable_label(false, format!("{} {name}", if is_open { "v" } else { ">" }));
+    let row = super::project_icons::row(ui, tree, path, &name, Some(is_open), false);
     if row.clicked() || (row.has_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
         if is_open {
             expanded.remove(path);
@@ -289,9 +291,13 @@ fn tree_row(
                 Node::Dir(path) => tree_row(ui, tree, path, expanded, selected, loads, open),
                 Node::File(file) => {
                     let name = file.path.file_name().unwrap_or_default().to_string_lossy();
-                    let row = ui.selectable_label(
+                    let row = super::project_icons::row(
+                        ui,
+                        tree,
+                        &file.path,
+                        &name,
+                        None,
                         selected.as_ref() == Some(&file.path),
-                        format!("{} {name}", file.kind.marker()),
                     );
                     if row.clicked() {
                         *selected = Some(file.path.clone());
@@ -327,6 +333,39 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+        Ok(())
+    }
+    #[test]
+    fn open_project_hides_start_actions_and_history() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let context = egui::Context::default();
+        let labels = |shell: &mut NozhikUi| {
+            let output = context.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| shell.project_panel(ui));
+            });
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let empty = labels(&mut shell);
+        assert!(empty.iter().any(|s| s == "Choose folder…"));
+        assert!(empty.iter().any(|s| s == "Recent Projects"));
+        shell.open_project(dir.path().into());
+        until(&mut shell, |s| s.project.is_some())?;
+        let opened = labels(&mut shell);
+        assert!(
+            !opened
+                .iter()
+                .any(|s| matches!(s.as_str(), "Open" | "Choose folder…" | "Recent Projects"))
+        );
         Ok(())
     }
     #[test]

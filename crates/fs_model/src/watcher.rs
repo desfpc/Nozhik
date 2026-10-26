@@ -1,5 +1,4 @@
 //! Cross-platform notifications, filtered and debounced off the UI thread.
-use crate::tree::service_path;
 use notify::{RecursiveMode, Watcher};
 use nozhik_event_bus::{Event, EventBus, FileEvent};
 use std::{
@@ -79,21 +78,9 @@ fn visible(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-    if service_path(relative) {
-        return false;
-    }
-    if matches!(
-        path.file_name().and_then(|s| s.to_str()),
-        Some(".gitignore" | ".ignore")
-    ) {
-        return true;
-    }
-    // Rebuild to observe edits to ignore files, including nested and parent rules.
-    crate::tree::walker(root, None)
-        .build_matchers()
-        .into_iter()
-        .next()
-        .is_none_or(|mut matcher| !matcher.matched(relative, path.is_dir()).is_ignore())
+    // Displayed ignored entries must also refresh on create/remove/rename.
+    // Git internals remain hidden and never trigger a project rescan.
+    !relative.components().any(|c| c.as_os_str() == ".git")
 }
 
 #[cfg(test)]
@@ -129,11 +116,13 @@ mod tests {
             .build()
     }
     #[test]
-    fn filters_deleted_paths_and_service_dirs() -> Result<(), Box<dyn std::error::Error>> {
+    fn observes_ignored_entries_but_skips_git_internals() -> Result<(), Box<dyn std::error::Error>>
+    {
         let dir = tempfile::tempdir()?;
         std::fs::write(dir.path().join(".gitignore"), "*.log\n")?;
-        assert!(!visible(dir.path(), &dir.path().join("deleted.log")));
-        assert!(!visible(dir.path(), &dir.path().join("target/a.rs")));
+        assert!(visible(dir.path(), &dir.path().join("deleted.log")));
+        assert!(visible(dir.path(), &dir.path().join("target/a.rs")));
+        assert!(!visible(dir.path(), &dir.path().join(".git/index")));
         assert!(visible(dir.path(), &dir.path().join("src/main.rs")));
         Ok(())
     }

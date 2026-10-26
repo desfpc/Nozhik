@@ -12,6 +12,7 @@ mod menu_bar;
 mod plugins;
 mod project;
 mod project_dialog;
+mod project_icons;
 mod recent_projects;
 mod remote_panel;
 mod remote_shell;

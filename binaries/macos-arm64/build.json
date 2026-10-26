@@ -6,6 +6,6 @@
   "build_host": "aarch64-apple-darwin",
   "runtime_tested": false,
   "files": {
-    "nozhik": "6c05f980c3b842641d03ba2585888341859a0fa127004397388cdda707ab6873"
+    "nozhik": "703c277f6ac2d72f38ab138dee2ceee3a8c683973cdef1918335e627749a97d2"
   }
 }

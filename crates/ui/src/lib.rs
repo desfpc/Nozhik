@@ -11,6 +11,8 @@ mod layout;
 mod menu_bar;
 mod plugins;
 mod project;
+mod project_dialog;
+mod recent_projects;
 mod remote_panel;
 mod remote_shell;
 mod remote_worker;
@@ -76,6 +78,7 @@ enum RefreshState {
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
     integration: integration::Integration,
+    recent_projects: recent_projects::RecentProjects,
     layout: layout::LayoutManager,
     wake_task: Option<tokio::task::JoinHandle<()>>,
     #[cfg(target_os = "macos")]
@@ -144,6 +147,9 @@ impl NozhikUi {
             }
         };
         Self {
+            recent_projects: recent_projects::RecentProjects::start(
+                settings.path().with_file_name("recent_projects.json"),
+            ),
             integration: integration::Integration::default(),
             layout: layout::LayoutManager::default(),
             wake_task: None,

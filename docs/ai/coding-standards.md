@@ -62,7 +62,9 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
   SSH только через проверенный SshSession, query/result limits и cancellation.
 - ui: serde/serde_json/tempfile для фонового layout I/O; macOS-only muda для
-  native menu (safe wrapper, main thread). menu_bar каталог общий для реестра,
+  native menu (safe wrapper, main thread); safe objc2 AppKit для NSOpenPanel на
+  macOS, rfd native/xdg-portal для picker на Windows/Linux. Project history JSON
+  читается/записывается только последовательным worker с атомарной заменой. menu_bar каталог общий для реестра,
   embedded/native menus. Нет unconditional repaint; задавайте срок конкретной
   задачи либо callback wake. Close должен проходить dirty/revision gate.
 - ui: database, buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, egui/eframe.

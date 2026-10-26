@@ -96,35 +96,23 @@ impl NozhikUi {
                         self.refresh_project();
                     }
                 }
-                Reply::Tree(tree) => {
-                    if self
-                        .project
-                        .as_ref()
-                        .is_none_or(|p| p.root_path != tree.root_path)
-                        && let Some(manager) = &self.plugins
-                        && let Err(error) = manager.scan(Some(tree.root_path.clone()))
-                    {
-                        self.status = error.to_string();
-                    }
-                    self.vcs.set_project(&tree.root_path);
-                    if self
-                        .project
-                        .as_ref()
-                        .is_none_or(|p| p.root_path != tree.root_path)
-                    {
-                        self.expanded.clear();
-                        self.selected_file = None;
-                        self.expanded.insert(tree.root_path.clone());
-                        self.status = format!("Project: {}", tree.root_path.display());
-                    }
-                    self.loading.retain(|path| {
-                        tree.directories
-                            .get(path)
-                            .is_some_and(|dir| dir.children.is_none())
-                    });
-                    self.project = Some(tree);
-                    self.search.invalidate();
+                Reply::ProjectCreated(tree) => {
+                    self.project_created();
+                    self.recent_projects.note(tree.root_path.clone());
+                    self.project_path = tree.root_path.display().to_string();
+                    self.accept_project_tree(tree);
                 }
+                Reply::ProjectCreationError(error) => {
+                    self.integration.creating_project = false;
+                    self.integration.project_error = Some(error.clone());
+                    self.status = error;
+                }
+                Reply::ProjectOpened(tree) => {
+                    self.recent_projects.note(tree.root_path.clone());
+                    self.project_path = tree.root_path.display().to_string();
+                    self.accept_project_tree(tree);
+                }
+                Reply::Tree(tree) => self.accept_project_tree(tree),
                 Reply::Read { path, text } => self.loaded_file(path, &text, false),
                 Reply::Binary(path) => self.loaded_file(path, "", true),
                 Reply::Saved { path, revision } => {
@@ -152,6 +140,35 @@ impl NozhikUi {
                 }
             }
         }
+    }
+    fn accept_project_tree(&mut self, tree: ProjectTree) {
+        if self
+            .project
+            .as_ref()
+            .is_none_or(|p| p.root_path != tree.root_path)
+            && let Some(manager) = &self.plugins
+            && let Err(error) = manager.scan(Some(tree.root_path.clone()))
+        {
+            self.status = error.to_string();
+        }
+        self.vcs.set_project(&tree.root_path);
+        if self
+            .project
+            .as_ref()
+            .is_none_or(|p| p.root_path != tree.root_path)
+        {
+            self.expanded.clear();
+            self.selected_file = None;
+            self.expanded.insert(tree.root_path.clone());
+            self.status = format!("Project: {}", tree.root_path.display());
+        }
+        self.loading.retain(|path| {
+            tree.directories
+                .get(path)
+                .is_some_and(|dir| dir.children.is_none())
+        });
+        self.project = Some(tree);
+        self.search.invalidate();
     }
     pub(crate) fn loaded_file(&mut self, path: PathBuf, text: &str, binary: bool) {
         if let Some(index) = self.documents.iter().position(|d| d.path == path) {
@@ -193,8 +210,23 @@ impl NozhikUi {
                 self.open_project(PathBuf::from(self.project_path.trim()));
             }
         });
+        if ui.button("Choose folder…").clicked() {
+            self.choose_project_folder(ui.ctx());
+        }
+        ui.label("Recent Projects");
+        let mut recent = None;
+        egui::ScrollArea::vertical()
+            .id_salt("project_history")
+            .max_height(150.0)
+            .show(ui, |ui| {
+                recent = self.recent_projects.list(ui);
+            });
+        if let Some(path) = recent {
+            self.open_project(path);
+        }
+        ui.separator();
         let Some(tree) = &self.project else {
-            ui.weak("Enter a folder path and click Open");
+            ui.weak("Choose a folder or enter its path");
             return;
         };
         let mut loads = Vec::new();
@@ -295,6 +327,55 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+        Ok(())
+    }
+    #[test]
+    fn successful_opens_persist_history_and_reopen_without_losing_edits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let first = dir.path().join("one");
+        let second = dir.path().join("two");
+        std::fs::create_dir(&first)?;
+        std::fs::create_dir(&second)?;
+        let file = first.join("main.rs");
+        std::fs::write(&file, "a")?;
+        let bus = EventBus::new(128)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        shell.open_project(first.clone());
+        until(&mut shell, |s| s.project.is_some())?;
+        shell.open_file(file);
+        until(&mut shell, |s| !s.documents.is_empty())?;
+        shell.documents[0].buffer.insert(1, "edited")?;
+        shell.open_project(second.clone());
+        until(&mut shell, |s| {
+            s.project
+                .as_ref()
+                .is_some_and(|p| p.root_path == second.canonicalize().unwrap_or_default())
+        })?;
+        shell
+            .integration
+            .actions
+            .push(format!("ui.open_project:{}", first.display()));
+        shell.global_actions(&egui::Context::default());
+        until(&mut shell, |s| {
+            s.project
+                .as_ref()
+                .is_some_and(|p| p.root_path == first.canonicalize().unwrap_or_default())
+        })?;
+        assert!(shell.documents[0].buffer.is_dirty());
+        assert_eq!(shell.documents[0].buffer.rope().to_string(), "aedited");
+        shell.open_project(dir.path().join("missing"));
+        shell.status.clear();
+        until(&mut shell, |s| !s.status.is_empty())?;
+        // Explicit shutdown waits for all previously queued history writes.
+        shell.recent_projects.finish();
+        let entries: Vec<crate::recent_projects::RecentProject> =
+            serde_json::from_slice(&std::fs::read(dir.path().join("recent_projects.json"))?)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, first.canonicalize()?);
+        assert_eq!(entries[1].path, second.canonicalize()?);
+        assert!(entries[0].last_opened > entries[1].last_opened);
         Ok(())
     }
     #[test]

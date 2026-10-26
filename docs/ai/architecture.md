@@ -399,7 +399,23 @@ TextEditorView, локальный SQL lexer и отдельные result tabs. 
 
 `integration` связывает actions с buffer/project/VCS/database/terminal API.
 OpenPath и Create выполняются в fs_model worker: тип пути определяется вне UI,
-create_new защищает существующий файл. Cut/Copy обрабатывают штатные egui clipboard
+create_new защищает существующий файл. CreateProject валидирует один компонент
+имени, использует create_dir (без перезаписи) и открывает полученную папку.
+ProjectOpened/ProjectCreated отделены от Tree (раскрытие подкаталогов), поэтому
+история меняется только после успешного открытия; ProjectCreationError сохраняет
+форму New для повтора. New выбирает parent через ОС, затем спрашивает имя.
+`project_dialog` вызывает safe objc2 AppKit NSOpenPanel на главном потоке macOS
+(файл/папка вместе); Windows/Linux используют rfd native/xdg-portal с отдельными
+режимами папок и файлов. Отмена не запускает I/O и не меняет проект.
+
+`recent_projects` хранит canonical PathBuf + Unix milliseconds в соседнем
+`recent_projects.json`. Отдельный последовательный worker загружает, дедуплицирует
+и атомарно записывает JSON через tempfile; повреждённые файлы не перезаписывает.
+Reopen перемещает проект наверх, включая случай перевода системных часов назад.
+История видна под кнопками Project и в hover submenu File → Recent Projects,
+включая native macOS menu. При shutdown очередь записи дожидается ack до 1s.
+
+Cut/Copy обрабатывают штатные egui clipboard
 события, RequestPaste читает clipboard в winit; menu paste восстанавливает фокус
 последнего активного редактора. Recent Files ограничен 30 путями.
 

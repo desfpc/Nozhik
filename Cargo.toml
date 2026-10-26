@@ -8,6 +8,10 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSOpenPanel", "NSPanel", "NSSavePanel", "NSApplication", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL"] }
 muda = { version = "0.21.2", default-features = false }
 nozhik-database = { path = "crates/database" }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "sqlite", "chrono", "uuid", "json", "rust_decimal"] }

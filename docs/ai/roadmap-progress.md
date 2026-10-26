@@ -926,3 +926,37 @@ scripts/update-binaries.py. `--check` подтвердил одинаковый 
 и SHA-256 обоих payload. runtime_tested=false сохранён: runtime-матрица новых
 скачиваемых комплектов целиком не выполнена. Нативное меню/idle smoke проверялись
 на локальном промежуточном release build; оставшиеся GUI gates явно открыты.
+
+
+### Системный выбор папок, Recent Projects и New Project (2026-10-26)
+
+- Project: сохранён ввод пути/Open, добавлена Choose folder… с окном ОС; под
+  кнопками — прокручиваемая история успешных открытий, свежие сверху, клик открывает.
+- File: Open File / Folder… сразу открывает native picker. AppKit на macOS
+  поддерживает одновременно файлы/папки; Windows/Linux используют folder mode
+  и соседний Open File… для выбора файла. File → Recent Projects — hover submenu,
+  общий источник данных с панелью Project, включая native macOS menu.
+- File → New…: OS parent picker → имя → exclusive create_dir → открытие проекта.
+  Валидация одного компонента имени, Unicode/пробелы, запрет traversal/Windows
+  reserved names; existing directory не перезаписывается, ошибка сохраняет форму.
+- Отдельные fs_model replies ProjectOpened/ProjectCreated/ProjectCreationError:
+  раскрытие дерева не обновляет MRU, ошибки создания не смешиваются с Save gate.
+- recent_projects.json рядом с settings: canonical paths, Unix milliseconds,
+  дедупликация/сортировка, ordered background I/O, atomic tempfile replacement,
+  malformed-file preservation, wake callback и bounded shutdown flush.
+  Уже открытые документы и dirty text сохраняются при переключении проекта.
+
+Проверки: fmt, native macOS и Windows GNU Clippy workspace/all-targets/all-features
+с -D warnings, workspace release build, git diff --check прошли. Полный прогон
+вне sandbox: 91 unit + 8 integration + 1 doc-test = 100 passed, 4 прежних system
+теста ignored. В sandbox watcher test упёрся в timeout; вне sandbox прошёл.
+После финальных изменений отдельно повторены 31 UI unit + 3 stress tests.
+
+Native macOS release smoke с отдельными temporary settings и non-Git папками:
+проверены File menu, настоящее NSOpenPanel, выбор/открытие папки, порядок истории,
+открытие из Recent Projects, форма New с выбором parent и вводом имени через UI,
+создание/открытие новой папки и её добавление в MRU. Визуально проверена панель
+с кнопкой и историей; тестовое приложение завершено через File → Exit.
+Windows/Linux GUI этой итерацией не запускались. Обе платформы пересобраны
+scripts/update-binaries.py; --check подтвердил общий source fingerprint и SHA-256
+payload. runtime_tested=false оставлен для неполной межплатформенной runtime matrix.

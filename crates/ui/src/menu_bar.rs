@@ -6,8 +6,11 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
     (
         "File",
         &[
+            ("ui.new_project", "New…", ""),
             ("ui.new_file", "New File", ""),
             ("ui.open", "Open File / Folder…", ""),
+            ("ui.open_file_dialog", "Open File…", ""),
+            ("ui.recent_projects", "Recent Projects", ""),
             ("ui.save_file", "Save", "editorOpen"),
             ("ui.save_all", "Save All", ""),
             ("ui.close_tab", "Close Tab", "editorOpen"),
@@ -103,9 +106,16 @@ impl NozhikUi {
         let bindings = manager.keymap().bindings().unwrap_or_default();
         #[cfg(target_os = "macos")]
         if let Some(native) = &mut self.native_menu {
-            let actions = native.tick(&available, &bindings);
+            let actions = native.tick(&available, &bindings, &self.recent_projects.entries);
             for id in actions {
-                self.action(&id);
+                if id.starts_with("ui.open_project:") {
+                    if !self.global_modal() {
+                        self.integration.actions.push(id);
+                        ctx.request_repaint();
+                    }
+                } else {
+                    self.action(&id);
+                }
             }
             return;
         }
@@ -116,6 +126,25 @@ impl NozhikUi {
                     for (title, items) in MENUS {
                         ui.menu_button(*title, |ui| {
                             for (id, title, _) in *items {
+                                if *id == "ui.recent_projects" {
+                                    ui.add_enabled_ui(!self.global_modal(), |ui| {
+                                        ui.menu_button(*title, |ui| {
+                                            egui::ScrollArea::vertical().max_height(400.0).show(
+                                                ui,
+                                                |ui| {
+                                                    if let Some(path) =
+                                                        self.recent_projects.list(ui)
+                                                    {
+                                                        self.open_project(path);
+                                                        ctx.request_repaint();
+                                                        ui.close();
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                    continue;
+                                }
                                 let enabled =
                                     available.iter().any(|a| a.id == *id) && !self.global_modal();
                                 if ui
@@ -152,6 +181,9 @@ pub mod native {
         items: Vec<(&'static str, &'static str, MenuItem)>,
         events: mpsc::Receiver<String>,
         signature: String,
+        recent: Submenu,
+        recent_entries: Option<Vec<crate::recent_projects::RecentProject>>,
+        recent_enabled: bool,
     }
     impl NativeMenu {
         pub fn new(ctx: &egui::Context) -> muda::Result<Self> {
@@ -168,9 +200,14 @@ pub mod native {
                 items.push((id, title, item));
             }
             menu.append(&application)?;
+            let recent = Submenu::new("Recent Projects", true);
             for (title, entries) in MENUS {
                 let submenu = Submenu::new(*title, true);
                 for (id, title, _) in *entries {
+                    if *id == "ui.recent_projects" {
+                        submenu.append(&recent)?;
+                        continue;
+                    }
                     let item = MenuItem::with_id(*id, *title, true, None);
                     submenu.append(&item)?;
                     items.push((*id, *title, item));
@@ -189,9 +226,45 @@ pub mod native {
                 items,
                 events,
                 signature: String::new(),
+                recent,
+                recent_entries: None,
+                recent_enabled: true,
             })
         }
-        pub fn tick(&mut self, available: &[Action], bindings: &[KeyBinding]) -> Vec<String> {
+        pub fn tick(
+            &mut self,
+            available: &[Action],
+            bindings: &[KeyBinding],
+            projects: &[crate::recent_projects::RecentProject],
+        ) -> Vec<String> {
+            let enabled = available.iter().any(|a| a.id == "ui.recent_projects");
+            if enabled != self.recent_enabled {
+                self.recent.set_enabled(enabled);
+                self.recent_enabled = enabled;
+            }
+            if self.recent_entries.as_deref() != Some(projects) {
+                self.recent_entries = Some(projects.to_vec());
+                while self.recent.remove_at(0).is_some() {}
+                if projects.is_empty()
+                    && let Err(e) =
+                        self.recent
+                            .append(&MenuItem::new("No recent projects", false, None))
+                {
+                    eprintln!("Recent projects menu: {e}");
+                }
+                for project in projects {
+                    let path = project.path.display();
+                    let item = MenuItem::with_id(
+                        format!("ui.open_project:{path}"),
+                        path.to_string(),
+                        true,
+                        None,
+                    );
+                    if let Err(e) = self.recent.append(&item) {
+                        eprintln!("Recent projects menu: {e}");
+                    }
+                }
+            }
             let signature = format!(
                 "{:?}{:?}",
                 available.iter().map(|a| &a.id).collect::<Vec<_>>(),

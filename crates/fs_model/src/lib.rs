@@ -9,7 +9,7 @@ use ropey::Rope;
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, OnceLock, mpsc},
     thread,
 };
@@ -39,10 +39,51 @@ pub enum FsError {
     #[error("Path is outside the project")]
     OutsideProject,
 }
+/// Validates a single project directory name on every supported OS.
+///
+/// # Errors
+/// Rejects empty names, traversal, separators and Windows reserved names.
+pub fn validate_project_name(name: &str) -> Result<(), FsError> {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| (b'1'..=b'9').contains(b)));
+    if name.trim().is_empty()
+        || name != name.trim()
+        || name.ends_with('.')
+        || name
+            .chars()
+            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+        || matches!(name, "." | "..")
+        || reserved
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Enter a project name without separators or reserved characters",
+        )
+        .into());
+    }
+    Ok(())
+}
 /// UI-to-worker commands, processed serially so saves cannot overtake one another.
 pub enum Command {
     /// Replace the open project.
     OpenProject(PathBuf),
+    /// Create a project directory exclusively, then open it.
+    CreateProject {
+        /// Existing parent directory chosen by the user.
+        parent: PathBuf,
+        /// A single portable directory name.
+        name: String,
+    },
     /// Load one directory's children.
     LoadDir(PathBuf),
     /// Refresh index and previously loaded directories.
@@ -72,6 +113,12 @@ pub enum Command {
 }
 /// Reliable command completions, separate from best-effort bus notifications.
 pub enum Reply {
+    /// A project was successfully opened (distinct from loading tree children).
+    ProjectOpened(ProjectTree),
+    /// Successfully created and opened a new project.
+    ProjectCreated(ProjectTree),
+    /// Project creation failed; the UI may keep its form open.
+    ProjectCreationError(String),
     /// New tree snapshot.
     Tree(ProjectTree),
     /// Refreshed index and loaded directories after filesystem invalidation.
@@ -125,6 +172,7 @@ impl FileSystem {
                 wakeup: notification.clone(),
             };
             while let Ok(command) = requests.recv() {
+                let creating = matches!(command, Command::CreateProject { .. });
                 match worker.execute(command) {
                     Ok(replies) => {
                         for reply in replies {
@@ -134,7 +182,12 @@ impl FileSystem {
                         }
                     }
                     Err(error) => {
-                        if results.send(Reply::Error(error.to_string())).is_err() {
+                        let reply = if creating {
+                            Reply::ProjectCreationError(error.to_string())
+                        } else {
+                            Reply::Error(error.to_string())
+                        };
+                        if results.send(reply).is_err() {
                             return;
                         }
                     }
@@ -181,6 +234,27 @@ struct Worker {
     bus: EventBus,
 }
 impl Worker {
+    fn create_project(&mut self, parent: &Path, name: &str) -> Result<Vec<Reply>, FsError> {
+        validate_project_name(name)?;
+        let parent = parent.canonicalize()?;
+        if !parent.is_dir() {
+            return Err(FsError::NotDirectory(parent));
+        }
+        let path = parent.join(name);
+        std::fs::create_dir(&path)?;
+        self.execute(Command::OpenProject(path)).map(|replies| {
+            replies
+                .into_iter()
+                .map(|reply| {
+                    if let Reply::ProjectOpened(tree) = reply {
+                        Reply::ProjectCreated(tree)
+                    } else {
+                        reply
+                    }
+                })
+                .collect()
+        })
+    }
     fn execute(&mut self, command: Command) -> Result<Vec<Reply>, FsError> {
         let reply = match command {
             Command::OpenProject(root) => {
@@ -205,8 +279,9 @@ impl Worker {
                 };
                 self.index = index;
                 self.tree = Some(tree.clone());
-                Reply::Tree(tree)
+                Reply::ProjectOpened(tree)
             }
+            Command::CreateProject { parent, name } => return self.create_project(&parent, &name),
             Command::LoadDir(path) => {
                 let Some(tree) = &mut self.tree else {
                     return Ok(Vec::new());
@@ -301,6 +376,53 @@ fn read_text(path: &std::path::Path) -> Result<String, FsError> {
 mod tests {
     use super::*;
     #[test]
+    fn create_project_exclusive_and_open_path_modes() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let worker = FileSystem::start(EventBus::new(16)?);
+        let next = || {
+            worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(5))
+        };
+        for name in [
+            "",
+            "..",
+            "../escape",
+            "a/b",
+            "a\\b",
+            "CON",
+            "nul.txt",
+            "x:",
+            "bad.",
+        ] {
+            assert!(validate_project_name(name).is_err(), "{name}");
+        }
+        assert!(worker.send(Command::CreateProject {
+            parent: dir.path().into(),
+            name: "Новый проект".into()
+        }));
+        let Reply::ProjectCreated(tree) = next()? else {
+            return Err("Expected opened project".into());
+        };
+        let project = dir.path().join("Новый проект").canonicalize()?;
+        assert_eq!(tree.root_path, project);
+        let file = project.join("keep.txt");
+        std::fs::write(&file, "keep")?;
+        assert!(worker.send(Command::CreateProject {
+            parent: dir.path().into(),
+            name: "Новый проект".into()
+        }));
+        assert!(matches!(next()?, Reply::ProjectCreationError(_)));
+        assert_eq!(std::fs::read_to_string(&file)?, "keep");
+        assert!(worker.send(Command::OpenPath(file)));
+        assert!(matches!(next()?, Reply::Read { text, .. } if text == "keep"));
+        assert!(worker.send(Command::OpenPath(project)));
+        assert!(matches!(next()?, Reply::ProjectOpened(_)));
+        assert!(worker.send(Command::OpenProject(dir.path().join("missing"))));
+        assert!(matches!(next()?, Reply::Error(_)));
+        Ok(())
+    }
+    #[test]
     fn background_index_refresh_and_read() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("main.rs");
@@ -312,7 +434,7 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(5))
         };
         assert!(worker.send(Command::OpenProject(dir.path().into())));
-        assert!(matches!(next()?, Reply::Tree(_)));
+        assert!(matches!(next()?, Reply::ProjectOpened(_)));
         assert!(worker.send(Command::Search {
             token: 1,
             query: "mnrs".into()

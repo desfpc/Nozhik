@@ -11,7 +11,7 @@ pub enum CloseTarget {
 }
 #[derive(Clone, Copy)]
 enum PathAction {
-    Open,
+    NewProject,
     New,
     SaveSql(usize),
 }
@@ -25,6 +25,9 @@ pub struct Integration {
     pub last_editor: Option<egui::Id>,
     path_action: Option<PathAction>,
     path: String,
+    project_parent: Option<PathBuf>,
+    pub creating_project: bool,
+    pub project_error: Option<String>,
     path_focus: bool,
     pub close: Option<CloseTarget>,
     waiting: bool,
@@ -209,17 +212,36 @@ impl NozhikUi {
     pub(crate) fn global_actions(&mut self, ctx: &egui::Context) {
         for action in std::mem::take(&mut self.integration.actions) {
             match action.as_str() {
-                "ui.new_file" | "ui.open" => {
-                    self.integration.path_action = Some(if action == "ui.open" {
-                        PathAction::Open
-                    } else {
-                        PathAction::New
-                    });
+                "ui.open" => self.pick_path(crate::project_dialog::Picker::Open, ctx),
+                "ui.open_file_dialog" => self.pick_path(crate::project_dialog::Picker::File, ctx),
+                "ui.new_project" => {
+                    match crate::project_dialog::pick(
+                        crate::project_dialog::Picker::Folder,
+                        self.project.as_ref().map(|p| p.root_path.as_path()),
+                    ) {
+                        Ok(Some(parent)) => {
+                            self.integration.project_error = None;
+                            self.integration.project_parent = Some(parent);
+                            self.integration.path.clear();
+                            self.integration.path_action = Some(PathAction::NewProject);
+                            self.integration.path_focus = true;
+                        }
+                        Ok(None) => {}
+                        Err(e) => self.status = e,
+                    }
+                }
+                "ui.new_file" => {
+                    self.integration.path_action = Some(PathAction::New);
                     self.integration.path_focus = true;
                     self.integration.path = self
                         .project
                         .as_ref()
                         .map_or_else(String::new, |p| p.root_path.display().to_string());
+                }
+                action if action.starts_with("ui.open_project:") => {
+                    if let Some(path) = action.strip_prefix("ui.open_project:") {
+                        self.open_project(PathBuf::from(path));
+                    }
                 }
                 "ui.save_all" => self.save_all(),
                 "ui.close_tab" => {
@@ -302,6 +324,7 @@ impl NozhikUi {
                 }
                 "ui.go_file" => self.search.open_filter(2),
                 "ui.recent_files" => self.search.open_filter(6),
+                "ui.recent_projects" => self.left = Some(LeftTool::Project),
                 "ui.definition" => {
                     if let Some(i) = self.active
                         && let Some(d) = self.documents.get(i)
@@ -348,6 +371,7 @@ impl NozhikUi {
     }
     pub(crate) fn integration_tick(&mut self, ctx: &egui::Context) {
         self.layout.tick(ctx);
+        self.recent_projects.tick(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.integration.confirmed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.integration.close.is_none() {
@@ -444,24 +468,63 @@ impl NozhikUi {
         let mut cancel = false;
         let modal = egui::Modal::new(egui::Id::new("path_dialog")).show(ctx, |ui| {
             ui.heading(match action {
-                PathAction::Open => "Open file or folder",
+                PathAction::NewProject => "New project",
                 PathAction::New => "New file",
                 PathAction::SaveSql(_) => "Save SQL console",
             });
-            ui.label("Absolute path");
-            let input = ui.text_edit_singleline(&mut self.integration.path);
-            accept = ui.button("Open / Save").clicked()
+            if matches!(action, PathAction::NewProject) {
+                if let Some(parent) = &self.integration.project_parent {
+                    ui.label(format!("Parent: {}", parent.display()));
+                }
+                ui.label("Project name");
+            } else {
+                ui.label("Absolute path");
+            }
+            if matches!(action, PathAction::NewProject)
+                && let Some(error) = &self.integration.project_error
+            {
+                ui.colored_label(crate::theme::ERROR, error);
+            }
+            let input = ui.add_enabled(
+                !self.integration.creating_project,
+                egui::TextEdit::singleline(&mut self.integration.path),
+            );
+            if self.integration.path_focus {
+                input.request_focus();
+                self.integration.path_focus = false;
+            }
+            accept = ui
+                .add_enabled(
+                    !self.integration.creating_project,
+                    egui::Button::new(if matches!(action, PathAction::NewProject) {
+                        "Create project"
+                    } else {
+                        "Open / Save"
+                    }),
+                )
+                .clicked()
                 || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            cancel = ui.button("Cancel").clicked();
+            if self.integration.creating_project {
+                ui.spinner();
+            }
+            cancel = ui
+                .add_enabled(
+                    !self.integration.creating_project,
+                    egui::Button::new("Cancel"),
+                )
+                .clicked();
         });
-        if accept {
+        if accept && !self.integration.creating_project {
             let path = PathBuf::from(&self.integration.path);
-            if !path.is_absolute() {
+            if !matches!(action, PathAction::NewProject) && !path.is_absolute() {
                 self.status = "Enter an absolute path".into();
                 return;
             }
             match action {
-                PathAction::Open => self.queue(nozhik_fs_model::Command::OpenPath(path)),
+                PathAction::NewProject => {
+                    self.create_project();
+                    return;
+                }
                 PathAction::New => self.queue(nozhik_fs_model::Command::Create(path)),
                 PathAction::SaveSql(i) => {
                     if let Some(tab) = self.database.tabs.get_mut(i) {
@@ -472,9 +535,33 @@ impl NozhikUi {
             }
             self.integration.path_action = None;
         }
-        if cancel || modal.should_close() {
+        if (cancel || modal.should_close()) && !self.integration.creating_project {
             self.integration.path_action = None;
             self.integration.waiting = false;
+        }
+    }
+    fn create_project(&mut self) {
+        if let Err(e) = nozhik_fs_model::validate_project_name(&self.integration.path) {
+            self.integration.project_error = Some(e.to_string());
+            return;
+        }
+        self.integration.project_error = None;
+        if let Some(parent) = self.integration.project_parent.clone() {
+            self.integration.creating_project =
+                self.fs.send(nozhik_fs_model::Command::CreateProject {
+                    parent,
+                    name: self.integration.path.clone(),
+                });
+            if !self.integration.creating_project {
+                self.integration.project_error = Some("Filesystem worker stopped".into());
+            }
+        }
+    }
+    pub(crate) fn project_created(&mut self) {
+        if self.integration.creating_project {
+            self.integration.creating_project = false;
+            self.integration.path_action = None;
+            self.integration.project_error = None;
         }
     }
     pub(crate) fn find_bar(&mut self, ui: &mut egui::Ui) {
@@ -566,6 +653,7 @@ impl NozhikUi {
             task.abort();
         }
         self.layout.finish();
+        self.recent_projects.finish();
         self.shutdown_language();
         if let Some(panel) = &mut self.terminal {
             panel.shutdown();
@@ -608,6 +696,45 @@ mod tests {
         let bus = EventBus::new(128)?;
         let settings = ConfigManager::from_path(path.join("settings.toml"), bus.clone())?;
         Ok(NozhikUi::new(bus, settings, Config::default()))
+    }
+    #[test]
+    fn new_project_form_retries_errors_and_opens_created_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let bus = nozhik_event_bus::EventBus::new(128)?;
+        let settings =
+            nozhik_config::ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        shell.integration.path_action = Some(PathAction::NewProject);
+        shell.integration.project_parent = Some(dir.path().into());
+        shell.integration.path = "../escape".into();
+        shell.create_project();
+        assert!(shell.integration.project_error.is_some());
+        assert!(!shell.integration.creating_project);
+        std::fs::create_dir(dir.path().join("existing"))?;
+        shell.integration.path = "existing".into();
+        shell.create_project();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.integration.creating_project && Instant::now() < deadline {
+            shell.receive_files();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(shell.integration.project_error.is_some());
+        assert!(shell.integration.path_action.is_some());
+        assert_eq!(shell.integration.path, "existing");
+        shell.integration.path = "Новый проект".into();
+        shell.create_project();
+        while shell.integration.creating_project && Instant::now() < deadline {
+            shell.receive_files();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(shell.integration.path_action.is_none());
+        assert!(shell.integration.project_error.is_none());
+        assert_eq!(
+            shell.project.as_ref().map(|p| &p.root_path),
+            Some(&dir.path().join("Новый проект").canonicalize()?)
+        );
+        Ok(())
     }
     #[test]
     fn menu_catalog_dispatches_and_save_all_waits_for_current_revision()

@@ -18,6 +18,14 @@
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
+`app/assets` хранит исходную WebP-иконку и готовые PNG/ICO/ICNS. Composition root
+декодирует встроенный PNG через eframe и задаёт viewport icon. Windows build.rs
+встраивает ICO через SDK rc.exe (MSVC) или MinGW windres (GNU); runtime-зависимостей
+не добавлено. scripts/update-binaries.py дополнительно упаковывает macOS
+Nozhik.app.zip с executable, Info.plist и ICNS для Finder/Dock; архив и отдельный
+CLI executable входят в SHA-256 metadata. Пакет получает локальную ad-hoc подпись
+для целостности ресурсов; Developer ID и notarization пока отсутствуют.
+
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
 с системным Rust crate `core`. Обратные зависимости и циклы запрещены.
 Новые общие трейты добавляются в core при появлении реального потребителя;

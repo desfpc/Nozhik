@@ -3,13 +3,18 @@
 | Платформа | Скачать | Метаданные |
 | --- | --- | --- |
 | macOS Apple Silicon (ARM64) | [nozhik](https://github.com/desfpc/Nozhik/raw/refs/heads/master/binaries/macos-arm64/nozhik) | [build.json](macos-arm64/build.json) |
+| macOS приложение с иконкой | [Nozhik.app.zip](https://github.com/desfpc/Nozhik/raw/refs/heads/master/binaries/macos-arm64/Nozhik.app.zip) | тот же build.json |
 | Windows x64 | [nozhik.exe](https://github.com/desfpc/Nozhik/raw/refs/heads/master/binaries/windows-x64/nozhik.exe) | [build.json](windows-x64/build.json) |
 
 Ссылки скачивания относятся к опубликованной ветке `master`; локальные изменения
 станут доступны по ним только после push. Бинарники включены непосредственно в Git.
 macOS Intel, Linux, установщики, подпись и notarization пока не поставляются.
 
-macOS: скачайте `nozhik`, затем выполните в каталоге загрузки:
+macOS: скачайте и распакуйте `Nozhik.app.zip`, перенесите `Nozhik.app` в
+Applications и запустите. Пакет включает иконку Finder/Dock и локальную ad-hoc
+подпись, без Developer ID и notarization. При блокировке запуска используйте системный раздел
+Privacy & Security → Open Anyway для доверенной локальной сборки.
+Для запуска из терминала также доступен отдельный `nozhik`:
 
 ```sh
 chmod +x nozhik

@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -12,6 +13,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
@@ -88,6 +90,50 @@ def gnu_runtime(binary, directory):
             pending.append(copied)
 
 
+def macos_bundle(binary, directory):
+    """Ship a Finder/Dock application alongside the command-line executable."""
+    packages = json.loads(run("cargo", "metadata", "--no-deps", "--format-version=1",
+                              stdout=subprocess.PIPE, text=True).stdout)["packages"]
+    version = next(package["version"] for package in packages if package["name"] == "app")
+    info = plistlib.dumps({
+        "CFBundleName": "Nozhik",
+        "CFBundleDisplayName": "Nozhik",
+        "CFBundleIdentifier": "dev.Nozhik.Nozhik",
+        "CFBundleExecutable": "nozhik",
+        "CFBundleIconFile": "nozhik.icns",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "LSMinimumSystemVersion": "11.0",
+        "NSHighResolutionCapable": True,
+    })
+    contents = {
+        "Info.plist": (info, 0o644),
+        "MacOS/nozhik": (binary.read_bytes(), 0o755),
+        "Resources/nozhik.icns": ((ROOT / "crates/app/assets/nozhik.icns").read_bytes(), 0o644),
+    }
+    with tempfile.TemporaryDirectory(prefix="nozhik-app-") as temporary:
+        root = Path(temporary)
+        bundle = root / "Nozhik.app"
+        for name, (body, mode) in contents.items():
+            path = bundle / "Contents" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            path.chmod(mode)
+        # ARM64 executables carry a linker ad-hoc signature. Seal the complete
+        # bundle so verification also covers its plist and icon resources.
+        run("codesign", "--force", "--sign", "-", str(bundle))
+        run("codesign", "--verify", "--deep", "--strict", str(bundle))
+        with zipfile.ZipFile(directory / "Nozhik.app.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(bundle.rglob("*")):
+                if path.is_file():
+                    entry = zipfile.ZipInfo(path.relative_to(root).as_posix(), date_time=(2026, 1, 1, 0, 0, 0))
+                    entry.create_system = 3
+                    entry.external_attr = path.stat().st_mode << 16
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                    archive.writestr(entry, path.read_bytes())
+
+
 def build(target):
     platform, name = TARGETS[target]
     before = source_hash()
@@ -123,6 +169,7 @@ def build(target):
         validate_binary(payload, target)
         if target.endswith("apple-darwin"):
             payload.chmod(0o755)
+            macos_bundle(payload, staging)
         if target.endswith("windows-gnu"):
             gnu_runtime(payload, staging)
         metadata = {
@@ -137,7 +184,7 @@ def build(target):
         (staging / "build.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         # Remove only previously generated payloads, after a successful build.
         for previous in destination.iterdir():
-            if previous.name in {"build.json", "nozhik", "nozhik.exe"} or previous.suffix == ".dll":
+            if previous.name in {"build.json", "nozhik", "nozhik.exe", "Nozhik.app.zip"} or previous.suffix == ".dll":
                 previous.unlink()
         for artifact in staging.iterdir():
             shutil.copy2(artifact, destination / artifact.name)

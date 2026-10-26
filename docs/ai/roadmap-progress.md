@@ -1,5 +1,26 @@
 # Roadmap и прогресс
 
+## Иконка приложения (2026-10-26)
+
+Из предоставленной владельцем WebP подготовлены прозрачные PNG/ICO/ICNS
+с сохранением пропорций и квадратными полями. app задаёт встроенную viewport
+icon; Windows build.rs добавляет семь размеров ICO в PE resources через
+MinGW windres или Windows SDK rc.exe. Новых Rust-зависимостей нет.
+update-binaries.py дополнительно создаёт Nozhik.app.zip с Info.plist, ICNS
+и локальной ad-hoc подписью полного bundle; Developer ID/notarization нет.
+
+Проверки: fmt, Clippy workspace/all-targets/all-features с -D warnings для
+macOS ARM64 и Windows GNU, полный workspace test (102 passed, 4 прежних ignored),
+workspace release build и git diff --check прошли. Обе платформы пересобраны;
+--check подтвердил source fingerprint и SHA-256 payload. Проверены Windows
+ICON/GROUP_ICON resources, ZIP integrity, plist, ICNS и executable permissions,
+codesign --verify --deep --strict после распаковки архива.
+macOS .app успешно запущен через LaunchServices вне sandbox на временном
+проекте с отдельными settings; окно визуально проверено и закрыто Cmd+Q.
+Снимок Dock через UI automation получить не удалось (timeout), поэтому
+отображение иконки в Dock визуально не подтверждено. Windows GUI/MSVC build
+не запускались; runtime_tested=false сохранён для неполной OS-матрицы.
+
 ## Общий план
 
 Этапы 1–9 — предварительная последовательность, не обещание готовых функций.

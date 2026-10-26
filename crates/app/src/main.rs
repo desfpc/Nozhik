@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         }
     });
     let options = eframe::NativeOptions {
-        viewport: egui_viewport(),
+        viewport: egui_viewport()?,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -73,9 +73,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn egui_viewport() -> eframe::egui::ViewportBuilder {
-    eframe::egui::ViewportBuilder::default()
+fn egui_viewport() -> Result<eframe::egui::ViewportBuilder> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/window-icon.png"))
+        .context("Cannot decode the application icon")?;
+    Ok(eframe::egui::ViewportBuilder::default()
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 540.0])
         .with_title("Nozhik")
+        .with_icon(icon))
 }

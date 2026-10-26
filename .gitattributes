@@ -2,3 +2,8 @@
 binaries/macos-arm64/nozhik binary
 binaries/windows-x64/*.exe binary
 binaries/windows-x64/*.dll binary
+*.webp binary
+*.png binary
+*.ico binary
+*.icns binary
+*.zip binary

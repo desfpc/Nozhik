@@ -16,14 +16,21 @@ hover и переход к определению. Встроенный PTY-те
 дерево схем, SQL-консоль и виртуализированный Data Grid. Запуск/отладка через
 task runner ещё не реализованы.
 
-## Скачать без сборки
+## Локальные бинарники
 
-Готовые [macOS ARM64 и Windows x64 бинарники](binaries/README.md) хранятся в
-`binaries/` вместе с SHA-256 исходников и файлов. После каждой правки исходников
-обновляются обе сборки: локально через `scripts/update-binaries.py` и автоматически
-после push через GitHub Actions. Инструкция запуска и ограничения — в каталоге.
-Для macOS также доступен `Nozhik.app.zip` с иконкой Finder/Dock; Windows `.exe`
-содержит ту же иконку, которая используется для окна приложения.
+`binaries/` исключён из Git. После каждой доработки обновляйте локальные
+сборки и проверяйте их соответствие исходникам:
+
+```sh
+python3 scripts/update-binaries.py --target aarch64-apple-darwin
+python3 scripts/update-binaries.py --target x86_64-pc-windows-gnu
+python3 scripts/update-binaries.py --check
+```
+
+macOS: `binaries/macos-arm64/nozhik` и `Nozhik.app.zip` для Finder/Dock.
+Windows: `binaries/windows-x64/nozhik.exe`. CI сохраняет сборки как временные
+artifacts и не коммитит их в репозиторий. Скрипт проверяет SHA-256 исходников
+и готовых файлов; успешная сборка не заменяет тесты и линтинг.
 
 ## Сборка и запуск
 

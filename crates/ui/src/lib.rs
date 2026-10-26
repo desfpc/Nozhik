@@ -22,6 +22,7 @@ mod sql_console;
 mod terminal_panel;
 mod terminal_view;
 pub mod theme;
+mod tool_icons;
 mod vcs_panel;
 
 use nozhik_buffer::TextBuffer;

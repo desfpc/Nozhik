@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build repository downloads, or verify their source and payload SHA-256 hashes."""
+"""Build local binaries, or verify their source and payload SHA-256 hashes."""
 
 import argparse
 import hashlib
@@ -153,7 +153,7 @@ def build(target):
     run(*command, env=env)
     after = source_hash()
     if before != after:
-        raise ValueError("Sources changed during the build; rerun before committing")
+        raise ValueError("Sources changed during the build; rerun to refresh local binaries")
     target_dir = Path(env.get("CARGO_TARGET_DIR", "target"))
     if not target_dir.is_absolute():
         target_dir = ROOT / target_dir

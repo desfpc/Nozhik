@@ -260,13 +260,13 @@ impl VcsPanel {
         self.branch_controls(ui);
     }
     fn branch_controls(&mut self, ui: &mut egui::Ui) {
-        let label = format!("⑂ {} v", self.branch());
+        let label = format!("     {} v", self.branch());
         let branches = self
             .repo
             .as_ref()
             .map(|r| r.branches.clone())
             .unwrap_or_default();
-        ui.menu_button(label, |ui| {
+        let branch_menu = ui.menu_button(label, |ui| {
             ui.add(egui::TextEdit::singleline(&mut self.branch_filter).hint_text("Find a branch"));
             let filter = self.branch_filter.to_lowercase();
             for branch in branches
@@ -296,6 +296,12 @@ impl VcsPanel {
                 ui.close();
             }
         });
+        crate::tool_icons::paint(
+            ui.painter(),
+            branch_menu.response.rect.left_center() + egui::vec2(14.0, 0.0),
+            crate::tool_icons::Icon::Git,
+            crate::theme::TEXT,
+        );
         let can_network =
             self.pending.is_empty() && self.repo.as_ref().is_some_and(|r| r.has_origin);
         let push = self.repo.as_ref().is_some_and(|r| {
@@ -304,11 +310,7 @@ impl VcsPanel {
         if ui
             .add_enabled(
                 can_network,
-                egui::Button::new(if push {
-                    "↑ Push origin"
-                } else {
-                    "↓ Fetch origin"
-                }),
+                egui::Button::new(if push { "Push origin" } else { "Fetch origin" }),
             )
             .clicked()
         {

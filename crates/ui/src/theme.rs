@@ -1,10 +1,10 @@
 //! `JetBrains` New UI dark palette, expressed in sRGB.
 use egui::{Color32, Context, Stroke, Visuals};
 
-/// Window and editor background: #1E1F22.
-pub const BACKGROUND: Color32 = Color32::from_rgb(30, 31, 34);
-/// Tool windows and status bar: #2B2D30.
-pub const PANEL: Color32 = Color32::from_rgb(43, 45, 48);
+/// Editor and terminal background: #1E1F20.
+pub const BACKGROUND: Color32 = Color32::from_rgb(30, 31, 32);
+/// Tool window background: #18191A.
+pub const PANEL: Color32 = Color32::from_rgb(24, 25, 26);
 /// Dividers: #393B40.
 pub const BORDER: Color32 = Color32::from_rgb(57, 59, 64);
 /// Active selection: #2E436E.
@@ -33,7 +33,7 @@ pub const DIFF_ADD: Color32 = Color32::from_rgb(27, 59, 40);
 /// Diff deletion background.
 pub const DIFF_DELETE: Color32 = Color32::from_rgb(68, 34, 38);
 /// Logical corner radius shared by controls and windows.
-pub const RADIUS: u8 = 4;
+pub const RADIUS: u8 = 8;
 /// Width of visible draggable panel separators in logical pixels.
 pub const SPLITTER: f32 = 5.0;
 /// Base terminal palette; extended ANSI colors are protocol-defined.
@@ -62,7 +62,7 @@ pub const CARET: Color32 = Color32::from_rgba_premultiplied(85, 85, 85, 85);
 pub fn apply(ctx: &Context) {
     let mut visuals = Visuals::dark();
     visuals.override_text_color = Some(TEXT);
-    visuals.panel_fill = BACKGROUND;
+    visuals.panel_fill = CHROME;
     visuals.window_fill = PANEL;
     visuals.extreme_bg_color = BACKGROUND;
     visuals.faint_bg_color = PANEL;
@@ -71,6 +71,7 @@ pub fn apply(ctx: &Context) {
     visuals.widgets.inactive.weak_bg_fill = BACKGROUND;
     visuals.widgets.hovered.weak_bg_fill = HOVER;
     visuals.widgets.active.weak_bg_fill = ACCENT;
+    visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS);
     visuals.window_corner_radius = egui::CornerRadius::same(RADIUS);
     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(RADIUS);
     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(RADIUS);
@@ -97,4 +98,21 @@ pub fn syntax_color(token: &str) -> Color32 {
         "variable" | "property" => Color32::from_rgb(199, 125, 187),
         _ => TEXT,
     }
+}
+
+/// Outer toolbar and the gutters between rounded tool windows.
+pub const CHROME: Color32 = Color32::from_rgb(38, 40, 42);
+
+/// Shared dock surface; the outer margin keeps rounded corners visible.
+pub fn dock_frame(fill: Color32) -> egui::Frame {
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(RADIUS)
+        .inner_margin(8)
+        .outer_margin(egui::Margin::same(2))
+}
+
+/// Compact rail surrounding the work area.
+pub fn rail_frame() -> egui::Frame {
+    egui::Frame::new().fill(CHROME).inner_margin(4)
 }

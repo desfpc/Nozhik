@@ -1,3 +1,4 @@
+use crate::tool_icons::{self, Icon};
 use crate::{
     LeftTool, NozhikUi, SAVE_ACTION, SEARCH_ACTION, SETTINGS_ACTION,
     search_everywhere::SearchTarget, theme,
@@ -166,7 +167,8 @@ impl NozhikUi {
 
     fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(44.0)
+            .exact_height(36.0)
+            .frame(theme::rail_frame())
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     if cfg!(target_os = "macos") {
@@ -177,19 +179,22 @@ impl NozhikUi {
                     });
                     self.vcs.toolbar(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("⚙").on_hover_text("Settings").clicked() {
+                        if tool_icons::button(ui, Icon::Settings, false, "Settings")
+                            .on_hover_text("Settings")
+                            .clicked()
+                        {
                             self.action(SETTINGS_ACTION);
                         }
                         if ui
-                            .button("⌕")
+                            .add(Icon::Search)
                             .on_hover_text("Search Everywhere · Double Shift")
                             .clicked()
                         {
                             self.action(SEARCH_ACTION);
                         }
-                        ui.add_enabled(false, egui::Button::new("♧"))
+                        ui.add_enabled(false, Icon::Debug)
                             .on_hover_text("Debug · planned");
-                        ui.add_enabled(false, egui::Button::new("▶"))
+                        ui.add_enabled(false, Icon::Run)
                             .on_hover_text("Run · planned");
                         ui.menu_button("Current File v", |ui| {
                             ui.weak("Run configurations are planned");
@@ -206,7 +211,7 @@ impl NozhikUi {
     fn panels(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
-            .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(4))
+            .frame(egui::Frame::new().fill(theme::CHROME).inner_margin(4))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Nozhik").on_hover_text("Nozhik v0.1.0-RC1");
@@ -247,7 +252,8 @@ impl NozhikUi {
                 });
             });
         egui::TopBottomPanel::bottom("bottom_strip")
-            .exact_height(32.0)
+            .exact_height(30.0)
+            .frame(theme::rail_frame())
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     for label in [crate::terminal_panel::TERMINAL_LABEL, "! Problems"] {
@@ -282,6 +288,8 @@ impl NozhikUi {
             let panel = egui::TopBottomPanel::bottom("bottom_dock")
                 .resizable(true)
                 .default_height(viewport.height() * self.layout.value.bottom)
+                .show_separator_line(false)
+                .frame(theme::dock_frame(theme::PANEL))
                 .show(ctx, |ui| {
                     if label == crate::terminal_panel::TERMINAL_LABEL {
                         let panel = self
@@ -323,20 +331,18 @@ impl NozhikUi {
     )]
     fn side_panels(&mut self, ctx: &Context) {
         egui::SidePanel::left("left_strip")
-            .exact_width(42.0)
+            .exact_width(36.0)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(theme::rail_frame())
             .show(ctx, |ui| {
                 for (icon, title, tool) in [
-                    ("▣", "Project", LeftTool::Project),
-                    ("⑂", "Git · Changes / History", LeftTool::Commit),
-                    ("☷", "Structure", LeftTool::Structure),
-                    ("⇄", "Remote Host / SSH", LeftTool::Remote),
+                    (Icon::Project, "Project", LeftTool::Project),
+                    (Icon::Git, "Git · Changes / History", LeftTool::Commit),
+                    (Icon::Structure, "Structure", LeftTool::Structure),
+                    (Icon::Remote, "Remote Host / SSH", LeftTool::Remote),
                 ] {
-                    if ui
-                        .selectable_label(self.left == Some(tool), icon)
-                        .on_hover_text(title)
-                        .clicked()
-                    {
+                    if tool_icons::button(ui, icon, self.left == Some(tool), title).clicked() {
                         self.left = if self.left == Some(tool) {
                             None
                         } else {
@@ -346,15 +352,13 @@ impl NozhikUi {
                 }
             });
         egui::SidePanel::right("right_strip")
-            .exact_width(42.0)
+            .exact_width(36.0)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(theme::rail_frame())
             .show(ctx, |ui| {
-                for (icon, title) in [("▤", "Database"), ("♧", "Notifications")] {
-                    if ui
-                        .selectable_label(self.right == Some(title), icon)
-                        .on_hover_text(title)
-                        .clicked()
-                    {
+                for (icon, title) in [(Icon::Database, "Database"), (Icon::Bell, "Notifications")] {
+                    if tool_icons::button(ui, icon, self.right == Some(title), title).clicked() {
                         self.right = if self.right == Some(title) {
                             None
                         } else {
@@ -377,6 +381,8 @@ impl NozhikUi {
                 .default_width(viewport.width() * self.layout.value.right)
                 .width_range(150.0..=viewport.width() * 0.4)
                 .resizable(true)
+                .show_separator_line(false)
+                .frame(theme::dock_frame(theme::PANEL))
                 .show(ctx, |ui| {
                     ui.label(title);
                     ui.separator();
@@ -403,7 +409,8 @@ impl NozhikUi {
                 .resizable(true)
                 .default_width(viewport.width() * self.layout.value.left)
                 .width_range(150.0..=viewport.width() * 0.4)
-                .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(8))
+                .show_separator_line(false)
+                .frame(theme::dock_frame(theme::PANEL))
                 .show(ctx, |ui| {
                     ui.label(match tool {
                         LeftTool::Project => "Project v",
@@ -437,14 +444,14 @@ impl NozhikUi {
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(theme::BACKGROUND))
+                .frame(theme::dock_frame(theme::BACKGROUND))
                 .show(ctx, |ui| {
                     self.vcs.center(ui, f32::from(self.config.font_size));
                 });
             return;
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BACKGROUND))
+            .frame(theme::dock_frame(theme::BACKGROUND))
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     self.database_tabs(ui);
@@ -542,6 +549,10 @@ impl NozhikUi {
 }
 
 impl eframe::App for NozhikUi {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::CHROME.to_normalized_gamma_f32()
+    }
+
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.shutdown_systems();
     }

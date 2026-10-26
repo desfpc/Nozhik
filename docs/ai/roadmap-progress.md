@@ -1010,3 +1010,29 @@ settings: папки/стрелки, красные vendor/node_modules/.env, з
 Обе платформы пересобраны scripts/update-binaries.py; --check подтвердил общий
 source fingerprint и SHA-256 payload. runtime_tested=false сохранён для неполной
 межплатформенной runtime matrix.
+
+
+### Оформление по референсу и локальные бинарники (2026-10-26)
+
+- `binaries/` удалён из индекса Git с сохранением локальных файлов и добавлен
+  в .gitignore; CI больше не создаёт коммиты бинарников, сохраняет artifacts.
+  README и AGENTS.md закрепляют локальную сборку обеих платформ после доработок.
+- Единые скруглённые поверхности Project/Git/Remote, Database, редактора и
+  терминала, промежутки между ними, компактные rails/toolbar и строки дерева.
+  Палитра адаптирована к референсу; новых функций нет.
+- Векторные иконки Project, Git, Structure, Remote, Database, Notifications,
+  Settings, Search, Run/Debug и Git menu вместо отсутствующих Unicode-глифов.
+
+Проверки: fmt, workspace Clippy all-targets/all-features с -D warnings,
+workspace release build и git diff --check прошли. Полный workspace test run
+вне sandbox: 93 unit + 8 integration + 1 doc-test = 102 passed, 4 прежних system
+теста ignored. В sandbox FSEvents/localhost SSH ограничены; полный прогон вне
+sandbox успешен. Обе платформы пересобраны update-binaries.py; --check подтвердил
+общий source fingerprint и SHA-256 payload локальных сборок.
+
+Нативная визуальная проверка macOS release с временными проектом/settings:
+Project, раскрытие папки и открытие PHP-файла, редактор, Database и Terminal,
+скругления/отступы и иконки боковых rails и toolbar. После финального исправления
+Git-иконки приложение перезапущено и отсутствие квадратов подтверждено.
+Тестовое приложение закрыто. Windows/Linux GUI не запускались;
+runtime_tested=false сохранён для неполной runtime matrix.

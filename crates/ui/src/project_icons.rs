@@ -124,7 +124,7 @@ pub fn row(
     let font = FontId::proportional(14.0);
     let text = ui.painter().layout_no_wrap(name.into(), font, color);
     let width = (text.size().x + 58.0).max(ui.available_width());
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name)
     });

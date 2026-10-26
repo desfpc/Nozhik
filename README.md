@@ -6,14 +6,15 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 7: Remote Development & SSH реализован.** Двенадцать крейтов,
+**Roadmap Phase 8: Database Tooling реализован.** Тринадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
 hover и переход к определению. Встроенный PTY-терминал поддерживает локальный
 шелл, ANSI-цвета, вкладки и TUI-программы. SSH: удалённый шелл, SFTP-редактор
-и локальные туннели. Запуск/отладка через task runner
-и подключения к БД ещё не реализованы.
+и локальные туннели. Встроенный клиент PostgreSQL, MySQL/MariaDB и SQLite:
+дерево схем, SQL-консоль и виртуализированный Data Grid. Запуск/отладка через
+task runner ещё не реализованы.
 
 ## Скачать без сборки
 
@@ -68,7 +69,7 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-remote-ssh, nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-database, nozhik-remote-ssh, nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
@@ -78,6 +79,7 @@ nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
 nozhik-plugin-host ──► nozhik-event-bus, tokio, serde/serde_json, semver, directories
 nozhik-language-support ──► tree-sitter/php, lsp-types, tokio, ropey, serde_json
 nozhik-remote-ssh ──► russh (ring/Rust crypto), russh-sftp, tokio, serde, tempfile
+nozhik-database ──► sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls), nozhik-remote-ssh, keyring
 nozhik-terminal ──► portable-pty, vt100 (vte), parking_lot, nix (Unix signals)
 ```
 
@@ -91,6 +93,7 @@ crates/
   vcs/        # Git worker, status, index, diff, history, branches, remotes
   plugin_host/ # manifests, process JSON-RPC host, action/keymap registries
   language_support/ # incremental PHP syntax, stdio LSP client, background workers
+  database/    # SQL pools, SSH forwarding, typed results, catalog metadata, worker
   remote_ssh/  # SSH, host key pinning, SFTP cache, loopback tunnels
   terminal/    # PTY/ConPTY, VT100 grid/scrollback, asynchronous sessions
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
@@ -513,3 +516,50 @@ cargo test -p nozhik-remote-ssh system_openssh_shell_and_sftp -- --ignored
 
 Тест запускает отдельный sshd только на localhost с временными ключами и
 конфигурацией, не меняя пользовательский `~/.ssh` или системный sshd.
+
+
+## Встроенный клиент баз данных (Phase 8)
+
+**Database** на правом тулстрипе открывает Database Explorer в стиле DataGrip.
+Кнопка **+** создаёт подключение PostgreSQL, MySQL/MariaDB или SQLite (локальный
+путь либо `:memory:`). Укажите имя, host/port/user/database; **Test Connection**
+проверяет вход и чтение каталога, **Save** сохраняет профиль. Для существующего
+профиля нажмите **Connect**; **Connect with password…** позволяет повторить вход
+с новым паролем после отказа сохранённого. **↻** обновляет метаданные.
+
+Профили находятся в `database_connections.json` рядом с `settings.toml` в каталоге
+config пользователя. JSON содержит `name`, `driver` (`Postgres`/`Mysql`/`Sqlite`),
+`host`, `port`, `user`, `database`, `ssh_profile_id` и `save_password`.
+Сохранение атомарно; повреждённый JSON не перезаписывается. Пароли остаются
+в памяти сессии. **Save password in system credential store** — явный opt-in
+в Keychain / Windows Credential Manager / Linux Secret Service, доступный после
+успешного теста именно этого профиля и пароля. Открытого пароля в JSON нет.
+
+**Use SSH Tunnel** выбирает существующий SSH-профиль. Штатный SSH-flow проверяет
+ключ хоста, при необходимости запрашивает доверие и пароль/ключ. После авторизации
+создаётся отдельный loopback-туннель `127.0.0.1:0` к host/port БД; пул владеет
+туннелем до отключения. SSH-профили и пароли БД независимы. SQLite работает локально.
+
+Дерево показывает Online/Offline → схемы/базы → Tables/Views → колонки, типы,
+nullable и PK. Контекстное меню таблицы: **Open Table (Select top 1000)** открывает
+результат, **New SQL Console** создаёт вкладку с Rope-редактором и SQL-подсветкой.
+Выберите соединение и схему, нажмите **▶ Execute** или **Ctrl/Cmd+Enter**.
+Выполняется выделенный SQL либо выражение под курсором; Ctrl/Cmd+A позволяет
+выполнить весь скрипт. Кавычки, dollar-quoted строки и комментарии защищают
+вложенные `;` при выборе выражения. Схема применяется на том же SQL-соединении,
+что и запрос (PostgreSQL search_path / MySQL USE); для SQLite используйте
+квалифицированные `schema.table` имена, как в генерируемом preview.
+
+Каждый набор результатов получает свою вкладку внизу консоли. Data Grid рисует
+только видимые строки и колонки; заголовки содержат имя/тип. Клик по заголовку
+переключает Asc/Desc/None (сортировка загруженных строк). Клик выделяет ячейку,
+Ctrl/Cmd+C копирует значение; контекстное меню копирует строку CSV/TSV с
+экранированием. Нижняя часть показывает число строк, elapsed ms и affected rows.
+**Cancel** отменяет ожидание запроса; уже закоммиченные изменения могут остаться.
+
+Выдача ограничена 10 000 строками / 16 МиБ сохранённых значений с пометкой
+TRUNCATED. Результаты только для чтения; постраничная подгрузка, редактирование
+ячеек, отдельные постоянные SQL-сессии/транзакции на вкладку и SQL LSP не входят
+в эту версию. Транзакционный скрипт выполняйте одним запуском. SQLite JSON остаётся
+Text, поскольку движок хранит его как TEXT; нативные PostgreSQL/MySQL JSON
+возвращаются как Json. Неподдержанные vendor-типы дают ошибку декодирования.

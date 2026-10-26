@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, Copy)]
 pub enum Intent {
     Test,
+    Database(u64),
     Terminal,
     Browse,
     Tunnels,
@@ -37,6 +38,8 @@ pub enum Reply {
     ProfilesChanged(Vec<SshProfile>),
     CredentialsRequired(SshProfile, Intent, String),
     Connected(String),
+    DatabaseSession(u64, SshSession),
+    DatabaseFailed(u64, String),
     Disconnected(String),
     Shell(String, RemoteShell),
     Listed(String, String, Vec<RemoteFileEntry>),
@@ -92,6 +95,9 @@ impl Worker {
                         tokio::select! {
                             command = commands.recv() => {
                                 let Some(command) = command else { break; };
+                                let database_request = match &command {
+                                    Command::Verify(_, Intent::Database(id)) | Command::Trust(_, _, Intent::Database(id)) | Command::Connect(_, _, Intent::Database(id)) => Some(*id), _ => None,
+                                };
                                 let refresh_profiles = matches!(&command, Command::Connect(..));
                                 let result = tokio::time::timeout(std::time::Duration::from_secs(35), state.execute(command)).await;
                                 let reply = match result {
@@ -100,6 +106,9 @@ impl Worker {
                                     Ok(Err(e)) => Reply::Error(e.to_string()),
                                     Err(e) => Reply::Error(e.to_string()),
                                 };
+                                if let Some(id) = database_request && let Reply::Error(error) | Reply::HostKeyChanged(error) = &reply {
+                                    if sender.send(Reply::DatabaseFailed(id, error.clone())).await.is_err() { break; } wake();
+                                }
                                 if refresh_profiles && let Ok(profiles) = state.saved_profiles().await {
                                     if sender.send(Reply::Profiles(profiles)).await.is_err() { break; } wake();
                                 }
@@ -386,6 +395,7 @@ impl State {
             .ok_or_else(|| nozhik_remote_ssh::Error::Invalid("SSH disconnected".into()))?
             .clone();
         match intent {
+            Intent::Database(id) => Ok(Reply::DatabaseSession(id, session)),
             Intent::Test => Ok(Reply::Connected(profile.name)),
             Intent::Terminal => Ok(Reply::Shell(
                 profile.name,

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-database.workspace = true
 zeroize.workspace = true
 nozhik-remote-ssh.workspace = true
 ropey.workspace = true

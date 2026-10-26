@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "crates/buffer", "crates/ui", "crates/fs_model", "crates/vcs", "crates/plugin_host", "crates/language_support", "crates/terminal", "crates/remote_ssh"]
+members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "crates/buffer", "crates/ui", "crates/fs_model", "crates/vcs", "crates/plugin_host", "crates/language_support", "crates/terminal", "crates/remote_ssh", "crates/database"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,13 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+nozhik-database = { path = "crates/database" }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "sqlite", "chrono", "uuid", "json", "rust_decimal"] }
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["rt"] }
+chrono = "0.4"
+uuid = "1"
+rust_decimal = "1"
 nozhik-remote-ssh = { path = "crates/remote_ssh" }
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "3.0.1"

@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 7
+# Архитектура Nozhik — Phase 8
 
 ## Границы крейтов
 
@@ -14,7 +14,8 @@
 | nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
-| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh |
+| nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -334,3 +335,52 @@ entry; если credential store отказывает в удалении, оп�
 остаться с preference=true, но отсутствие entry безопасно приводит к запросу
 ввода. JSON и OS store не имеют общей транзакции. Trust records хранятся отдельно
 и не удаляются вместе с профилем (один сервер может использоваться несколькими).
+
+
+## Database Tooling (Phase 8)
+
+`database` независим от egui, buffer, config и event_bus. `ConnectionProfile`
+содержит публичные настройки и optional SSH profile name; пароли — `Secret`
+из remote_ssh, с redacted Debug и zeroize. Сериализация профилей не содержит
+секретов. Атомарный JSON расположен рядом с settings в `database_connections.json`.
+OS credentials используют отдельный service `dev.Nozhik.Nozhik.Database` и tuple
+name/driver/host/port/user/database. Native credential/file I/O — spawn_blocking;
+opt-in сохранение требует успешного теста того же профиля и пароля. JSON и OS
+store не имеют общей транзакции; ошибка JSON может оставить неиспользуемый entry.
+
+`Connection` владеет enum SQLx pool (PG/MySQL максимум 4, SQLite 1) и optional
+`TunnelHandle`. Только авторизованный `SshSession` из существующего remote worker
+может открыть loopback port 0 → direct-tcpip → remote DB endpoint. Новый
+`Intent::Database(request_id)` проходит штатные TOFU/credential dialogs; UI передаёт
+clone session в database worker, не получая russh handles. Никакого обхода host trust.
+
+`worker::Worker` владеет отдельным current-thread Tokio runtime + LocalSet,
+bounded command/reply очередями по 32, максимум 16 query tasks. Connect/Test
+ограничены 45s, refresh метаданных 30s. Repaint callback будит egui. Query ID
+монотонный, принадлежит вкладке; закрытие вкладки/Disconnect/Drop отменяет работу.
+Раз в 5s проверяются idle server connections и tunnel lifetime; занятый пул
+не считается offline. Проверка ping ограничена 2s на соединение.
+
+`query` использует raw SQL streaming с отдельным QueryResult на statement:
+ColumnInfo { name, data_type }, rows Vec<Vec<DbValue>>, execution_time_ms,
+rows_affected, truncated. Сохраняется максимум 10 000 строк / 16 МиБ значений
+на запрос; это лимит retained results, не максимального размера одного SQL-пакета.
+CancellationToken обрывает ожидание; серверное соединение после отмены/ошибки/
+лимита закрывается, SQLite использует safe SQLx progress handler, чтобы прервать
+VM без потери in-memory БД. Отмена не откатывает уже завершённые autocommit statements.
+Схема PG/MySQL устанавливается перед каждым запуском на той же pool connection;
+переход к Default schema сбрасывает состояние предыдущей вкладки.
+
+`DatabaseSchemaTree` → SchemaInfo → TableInfo { is_view, columns } → SchemaColumn
+{ name, data_type, nullable, is_primary_key }. PostgreSQL использует information_schema
+с join полного constraint identity, MySQL/MariaDB — information_schema с явным
+UTF-8 CAST для бинарных catalog columns, SQLite — database_list/sqlite_master/
+table_info. Идентификаторы в preview/PRAGMA цитируются по диалекту, catalog filters
+используют bind parameters. Tree принадлежит UI как готовый snapshot.
+
+`database_panel` маршрутизирует профили/тесты/SSH, сохраняет форму при ошибках и
+сверяет тест с текущими полями. `sql_console` использует штатные TextBuffer и
+TextEditorView, локальный SQL lexer и отдельные result tabs. `data_grid` хранит
+порядок индексов строк, сортирует загруженный snapshot и рисует только пересечение
+двумерного viewport. Копирование выполняется по исходному значению, preview ячейки
+ограничен 256 символами. Результат и текст остаются при скрытии/смене вкладки.

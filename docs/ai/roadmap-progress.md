@@ -15,10 +15,11 @@
 | 4.1 | Tree-sitter, подсветка, синтаксические индексы | Подсветка включена в этап 5; индексы отложены |
 | 5 | Tree-sitter Syntax Highlighting & LSP Client Core (PHP) | Реализован; рефакторинг отложен |
 | 6 | Terminal Subsystem: PTY, ANSI grid, вкладки, TUI | Реализован; ограничения ниже |
-| 6.1 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
+| 6.1 | БД: подключения, схема, SQL-консоль, результаты | Реализован в этапе 8 |
 | 7 | Remote Development & SSH: профили, remote shell, SFTP, local forwarding | Реализован; ограничения ниже |
 | 7.1 | Task runner, запуск и отладка | Не начат |
-| 8 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
+| 8 | Database Tooling: PostgreSQL/MySQL/SQLite, SSH, Explorer, SQL, Data Grid | Реализован; ограничения ниже |
+| 8.1 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
 | 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
 
 ## Phase 0 — реализовано
@@ -761,3 +762,102 @@ worker tests. macOS ARM64 и Windows x64 GNU бинарники обновлен
 --check подтвердил общий source fingerprint и payload hashes. Реальные Keychain/
 Credential Manager/Secret Service и GUI вручную не проверялись; OS API тестируются
 через изолированные mock/injected stores, Windows API проверен cross-build.
+
+
+## Phase 8 — Database Tooling
+
+- [x] Тринадцатый crate nozhik-database, SQLx 0.8.6 с Tokio/Rustls и тремя
+  драйверами, chrono/uuid/JSON/exact decimal; независим от egui/config/event_bus.
+- [x] Валидируемые ConnectionProfile, атомарный database_connections.json рядом
+  с settings.toml; malformed preservation, duplicate rejection. Session-only
+  Secret; opt-in OS credential store после успешного теста того же профиля/пароля.
+- [x] Enum PgPool/MySqlPool/SqlitePool, срок ожидания, owned SSH loopback tunnel
+  на свободном порту; существующий TOFU/login flow, отдельный пароль БД.
+- [x] DbDriverType, DbValue (Null/Bool/Int/Float/Text/Bytes/DateTime/Json),
+  ColumnInfo, QueryResult со временем, affected rows и признаком truncated.
+- [x] information_schema PostgreSQL/MySQL/MariaDB; SQLite database_list,
+  sqlite_master/table_info; namespaces, Tables/Views, ordered columns, nullability/PK.
+- [x] Bounded worker и фоновые query tasks, cancellation_token, SQLite VM progress
+  cancellation, закрытие серверного соединения при отмене, disconnect/shutdown.
+- [x] Database Explorer справа, New Connection/Test/Save, SSH host selector,
+  Online/Offline, Refresh/Disconnect, контекстные Open Table / SQL Console.
+- [x] Data Grid с виртуализацией обеих осей, sticky headers, имя/тип,
+  Asc/Desc/None, numeric sorting, selection, Ctrl/Cmd+C, CSV/TSV row copy.
+- [x] Rope SQL editor tabs, SQL lexical highlighting, connection/schema toolbar,
+  Execute и Ctrl/Cmd+Enter, selection/caret statement, отдельные result tabs.
+
+### Контракты, форматы и ограничения
+
+Подробная архитектура — [architecture.md](architecture.md#database-tooling-phase-8).
+Tree: DatabaseSchemaTree.schemas → SchemaInfo.tables → TableInfo.columns;
+TableInfo.is_view определяет категорию, SchemaColumn содержит nullable/PK.
+Все preview identifiers экранируются; catalog имена передаются bind parameters.
+Postgres показывает схемы подключённой базы, MySQL — доступные базы,
+SQLite — attached namespaces. Для SQLite активную namespace задают квалифицированным
+именем в SQL; PG/MySQL selector применяет search_path/USE на pool connection.
+
+Worker queues 32/32, максимум 16 query tasks, retained results 10 000 rows / 16 MiB.
+UI коррелирует ответы по request ID, отменяет закрытую вкладку и не меняет её
+SQL-буфер при ответе. Data Grid сортирует только полученные строки, не БД.
+Нет editable cells, server-side pagination, SQL completion/LSP, persisted console
+sessions, отдельных транзакционных SQL-сессий на вкладку, connection edit/delete
+или настройки TLS в форме. SQL lexer не полноценный AST процедурных SQL-диалектов.
+Транзакции выполняются внутри одного запуска скрипта; отмена/лимит/ошибка не
+гарантируют откат уже выполненных операторов и не запускают скрипт повторно.
+
+SQLx выдаёт native types; SQLite JSON остаётся Text (runtime TEXT), SQLite
+Boolean/DateTime учитывают declared column type. Exact decimal и unsigned overflow
+выдаются Text без перевода в float; Decimal имеет предел точности rust_decimal,
+вендорные enum/array/spatial/interval и прочие неподдержанные типы дают явную
+ошибку декодирования. Для одиночного пустого SELECT колонки получаются describe;
+пустой SELECT внутри multi-statement скрипта может вернуть пустые descriptors.
+Лимит значений применяется после получения строки от драйвера. Schema introspection
+полная, с запросом колонок каждой таблицы; на очень больших каталогах нет lazy load.
+SQL-подсветка лексическая, пересчитывается при изменении ревизии консоли.
+
+### Проверки Phase 8
+
+Тесты проверяют все три serde-профиля, duplicate/invalid/malformed preservation,
+SQLite create/insert/typed rows, NULL/Boolean/DateTime/bytes/Unicode, scripts,
+empty SELECT columns, PK/not-null/view introspection, file reconnect, syntax error
+без потери in-memory данных, cancellation и row limit. Worker тестирует request
+correlation и отказ сохранения непроверенного пароля без обращения к OS store.
+Headless egui проверяет Explorer/console flow, Execute shortcut без вставки
+перевода строки, selection SQL, SQL quotes/comments/dollar strings, numeric sorting,
+CSV quoting, bounded viewport paint и focused clipboard copy.
+
+Отдельные ignored system tests запускаются против изолированных временных БД:
+
+```sh
+NOZHIK_TEST_PG_PORT=<localhost-port> NOZHIK_TEST_MYSQL_PORT=<localhost-port> \
+  cargo test -p nozhik-database system_ -- --ignored
+```
+
+Порты принадлежат отдельным тестовым контейнерам, database=nozhik,
+Postgres user=nozhik, MySQL/MariaDB user=root, password=nozhik-test-only.
+Тесты создают только таблицу phase8 в этой изолированной БД. Проверяются native
+JSON/NULL/date/decimal/unsigned types, schema introspection и cancel sleep.
+SSH system test поднимает настоящий localhost russh server с временным host key
+и передаёт PostgreSQL wire protocol через authenticated direct-tcpip до БД;
+целевой host db.internal проверяется сервером, не разрешается локальным DNS.
+
+На этой машине прошли отдельные прогоны с PostgreSQL 12.2, MySQL 8.0.46 и
+MariaDB 12.3.2, а также PostgreSQL через SSH. Контейнеры временные, с отдельными
+случайными loopback-портами; пользовательские БД не использовались.
+Реальные OS credential stores и нативные GUI не проверялись; GUI Windows/Linux
+и GitHub CI этой итерацией также не запускались.
+
+
+Итоговая верификация (2026-10-26): fmt, Clippy workspace/all-targets/all-features
+с `-D warnings` для native macOS ARM64 и Windows x64 GNU прошли. Полный workspace
+прогон вне sandbox: 81 unit + 5 integration + 1 doc-test, без failures;
+4 system tests по умолчанию ignored (два прежних и два database). Оба database
+system tests отдельно прошли на PostgreSQL/MySQL, затем MySQL-драйвер дополнительно
+проверен на MariaDB. Headless clipboard/viewport test также прошёл.
+`cargo build --workspace --release --offline` успешен. Нативное GUI и реальные
+OS credential stores не запускались; наличие CI не объявляется его успешным прогоном.
+
+Обе release-платформы обновлены через scripts/update-binaries.py.
+`--check` подтвердил общий source fingerprint и SHA-256 payload; проверены Mach-O
+ARM64 и PE32+ x86-64. runtime_tested=false сохраняется: нативные окна не запускались.
+Тестовые контейнеры и их временные volumes удалены.

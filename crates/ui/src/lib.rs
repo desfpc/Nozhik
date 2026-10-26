@@ -1,5 +1,7 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
+mod data_grid;
+mod database_panel;
 mod diff_view;
 pub mod editor_view;
 mod language;
@@ -9,6 +11,7 @@ mod remote_panel;
 mod remote_shell;
 mod remote_worker;
 pub mod search_everywhere;
+mod sql_console;
 mod terminal_panel;
 mod terminal_view;
 pub mod theme;
@@ -68,6 +71,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    database: database_panel::DatabaseUi,
     remote: remote_panel::RemoteUi,
     terminal: Option<terminal_panel::TerminalPanel>,
     language: language::LanguageUi,
@@ -139,6 +143,7 @@ impl NozhikUi {
             }
         };
         Self {
+            database: database_panel::DatabaseUi::default(),
             remote: remote_panel::RemoteUi::default(),
             terminal: None,
             language: language::LanguageUi::default(),
@@ -185,21 +190,25 @@ impl NozhikUi {
 
     fn action_context(&self) -> ActionContext {
         ActionContext {
-            editor_open: self
-                .active
-                .and_then(|i| self.documents.get(i))
-                .is_some_and(|d| d.open && !d.binary),
-            editor_focus: self.editor_focus.is_some()
+            editor_open: self.database.active.is_none()
+                && self
+                    .active
+                    .and_then(|i| self.documents.get(i))
+                    .is_some_and(|d| d.open && !d.binary),
+            editor_focus: self.database.active.is_none()
+                && self.editor_focus.is_some()
                 && !self.search.open
                 && !self.settings_open
                 && !self.plugins_open
-                && !self.remote.modal_open(),
+                && !self.remote.modal_open()
+                && !self.database.modal_open(),
             selected_file: self.selected_file.is_some(),
             project_open: self.project.is_some(),
         }
     }
 
     fn open_document(&mut self, index: usize) {
+        self.database.active = None;
         if let Some(document) = self.documents.get_mut(index) {
             document.open = true;
             self.active = Some(index);

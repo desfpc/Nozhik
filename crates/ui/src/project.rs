@@ -158,6 +158,7 @@ impl NozhikUi {
             binary,
         });
         self.active = self.documents.len().checked_sub(1);
+        self.database.active = None;
         self.bus.publish(Event::FileOpened(path));
     }
     pub(crate) fn project_panel(&mut self, ui: &mut egui::Ui) {

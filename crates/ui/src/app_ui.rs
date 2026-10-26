@@ -33,7 +33,7 @@ impl NozhikUi {
             self.last_shift = None;
         }
         self.shift_down = shift;
-        if self.remote.modal_open() {
+        if self.remote.modal_open() || self.database.modal_open() {
             return;
         }
         if !self.search.open
@@ -272,7 +272,8 @@ impl NozhikUi {
                         let enabled = !self.search.open
                             && !self.settings_open
                             && !self.plugins_open
-                            && !self.remote.modal_open();
+                            && !self.remote.modal_open()
+                            && !self.database.modal_open();
                         let (collapse, error) =
                             panel.show(ui, root, f32::from(self.config.font_size), enabled);
                         if collapse {
@@ -340,7 +341,11 @@ impl NozhikUi {
                 .show(ctx, |ui| {
                     ui.label(title);
                     ui.separator();
-                    ui.weak("Tool window placeholder");
+                    if title == "Database" {
+                        self.database_panel(ui);
+                    } else {
+                        ui.weak("Tool window placeholder");
+                    }
                 });
         }
         if let Some(tool) = self.left {
@@ -373,6 +378,10 @@ impl NozhikUi {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Routes existing file and database tabs through one central panel"
+    )]
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
@@ -386,13 +395,14 @@ impl NozhikUi {
             .frame(egui::Frame::new().fill(theme::BACKGROUND))
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
+                    self.database_tabs(ui);
                     let mut close = None;
                     for (index, document) in
                         self.documents.iter().enumerate().filter(|(_, d)| d.open)
                     {
                         if ui
                             .selectable_label(
-                                self.active == Some(index),
+                                self.active == Some(index) && self.database.active.is_none(),
                                 format!(
                                     "{}{}",
                                     document.name,
@@ -406,6 +416,7 @@ impl NozhikUi {
                             .clicked()
                         {
                             self.active = Some(index);
+                            self.database.active = None;
                         }
                         if ui
                             .small_button("×")
@@ -423,11 +434,22 @@ impl NozhikUi {
                     }
                 });
                 ui.separator();
+                if self.database.active.is_some() {
+                    self.editor_focus = None;
+                    let enabled = !self.search.open
+                        && !self.settings_open
+                        && !self.plugins_open
+                        && !self.remote.modal_open()
+                        && !self.database.modal_open();
+                    self.database_editor(ui, enabled);
+                    return;
+                }
                 if let Some(index) = self.active {
                     let enabled = !self.search.open
                         && !self.settings_open
                         && !self.plugins_open
-                        && !self.remote.modal_open();
+                        && !self.remote.modal_open()
+                        && !self.database.modal_open();
                     if self.documents[index].binary {
                         ui.label("Binary file not supported");
                         return;
@@ -472,6 +494,7 @@ impl eframe::App for NozhikUi {
         if let Some(panel) = &mut self.terminal {
             panel.shutdown();
         }
+        self.database.shutdown();
         self.remote.shutdown();
         self.shutdown_language();
     }
@@ -482,6 +505,7 @@ impl eframe::App for NozhikUi {
         self.shortcuts(ctx);
         self.receive_events();
         self.receive_files();
+        self.database_tick(ctx);
         self.receive_remote(ctx);
         self.language_tick(ctx);
         if let Some(panel) = &mut self.terminal

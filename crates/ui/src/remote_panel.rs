@@ -82,6 +82,15 @@ impl Form {
     }
 }
 impl RemoteUi {
+    pub fn database_profiles(&self) -> &[SshProfile] {
+        &self.profiles
+    }
+    pub fn connect_database(&self, name: &str, id: u64) -> bool {
+        self.profiles
+            .iter()
+            .find(|p| p.name == name)
+            .is_some_and(|p| self.connect(p.clone(), Intent::Database(id)))
+    }
     pub const fn modal_open(&self) -> bool {
         self.form.is_some()
             || self.login.is_some()
@@ -216,6 +225,8 @@ impl NozhikUi {
             Reply::CredentialsRequired(profile, intent, error) => {
                 self.remote.require_credentials(profile, intent, error);
             }
+            Reply::DatabaseFailed(id, error) => self.database.cancel_ssh(id, error),
+            Reply::DatabaseSession(id, session) => self.database.accept_ssh(id, session),
             Reply::Connected(name) => {
                 self.remote.connected.insert(name.clone());
                 self.status = format!("SSH {name}: Connected");
@@ -433,6 +444,10 @@ impl NozhikUi {
             self.status = "SSH queue full/stopped".into();
         }
         if cancel {
+            if let Some((_, _, Intent::Database(id))) = &self.remote.trust {
+                self.database
+                    .cancel_ssh(*id, "SSH connection cancelled".into());
+            }
             self.remote.cancel_trust();
             self.status = "SSH connection cancelled; host was not trusted".into();
         }
@@ -585,6 +600,9 @@ impl NozhikUi {
             }
         }
         if dismiss {
+            if let Some((_, Intent::Database(id))) = &self.remote.login {
+                self.database.cancel_ssh(*id, "SSH login cancelled".into());
+            }
             self.remote.login = None;
             self.remote.secret.zeroize();
         }

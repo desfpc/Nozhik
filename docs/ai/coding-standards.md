@@ -57,7 +57,11 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   подтверждением либо legacy pin), секреты вне serde-профилей. Сохранение пароля
   только явным opt-in в OS credential store, без plaintext fallback; native API
   через spawn_blocking. Тесты используют injected/mock store без реального Keychain.
-- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, egui/eframe.
+- database: sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls, chrono/uuid/JSON/decimal),
+  remote_ssh, tokio/tokio-util, futures-util, keyring, serde/serde_json, tempfile,
+  thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
+  SSH только через проверенный SshSession, query/result limits и cancellation.
+- ui: database, buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, egui/eframe.
   remote_shell — адаптер ExternalTransport; прямые russh channel messages принадлежат этому адаптеру.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные

@@ -47,7 +47,9 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
-- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, egui/eframe.
+- language_support: tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror.
+  Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
+- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, egui/eframe.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные
   features. Обновляйте Cargo.lock. Изменения допустимых границ документируйте.

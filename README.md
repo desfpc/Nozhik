@@ -6,11 +6,19 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 4: Plugin & Action Architecture реализован.** Девять крейтов,
+**Roadmap Phase 5: Tree-sitter Syntax Highlighting & LSP Client Core реализован.** Десять крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
-и встроенный Git-клиент. LSP, терминал, запуск/отладка и подключения к БД
+и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
+hover и переход к определению. Терминал, запуск/отладка и подключения к БД
 ещё не реализованы.
+
+## Скачать без сборки
+
+Готовые [macOS ARM64 и Windows x64 бинарники](binaries/README.md) хранятся в
+`binaries/` вместе с SHA-256 исходников и файлов. После каждой правки исходников
+обновляются обе сборки: локально через `scripts/update-binaries.py` и автоматически
+после push через GitHub Actions. Инструкция запуска и ограничения — в каталоге.
 
 ## Сборка и запуск
 
@@ -58,7 +66,7 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
@@ -66,6 +74,7 @@ nozhik-buffer ──► nozhik-event-bus, nozhik-core
 nozhik-fs-model ──► nozhik-event-bus
 nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
 nozhik-plugin-host ──► nozhik-event-bus, tokio, serde/serde_json, semver, directories
+nozhik-language-support ──► tree-sitter/php, lsp-types, tokio, ropey, serde_json
 ```
 
 ```text
@@ -77,6 +86,7 @@ crates/
   fs_model/   # lazy tree, ignore, index, watcher, background I/O
   vcs/        # Git worker, status, index, diff, history, branches, remotes
   plugin_host/ # manifests, process JSON-RPC host, action/keymap registries
+  language_support/ # incremental PHP syntax, stdio LSP client, background workers
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
 docs/ai/
@@ -269,7 +279,8 @@ Binary/oversized diff показывает заглушку; текстовая 
 Все вызовы расширений выполняются в фоновом host с JSON-RPC/stdio, очередью,
 таймаутом 3 секунды и лимитом ответа 64 KiB. Падение расширения переводит его
 в Failed и удаляет вклады. Процесс работает с правами пользователя;
-OS sandbox и языковые/LSP/БД API ещё не реализованы.
+OS sandbox и произвольные языковые/LSP/БД API для внешних плагинов ещё не реализованы.
+Встроенная PHP-поддержка использует отдельный language_support и LSP-протокол.
 
 **Settings → Plugins…** или команда **Plugins** в Search Everywhere открывает
 список с версией, автором, статусом и переключателем Enabled. Можно включать
@@ -307,3 +318,51 @@ Double Shift доступен в обоих. Внутренние сочетан
 
 Полный манифест, IPC-протокол и примеры API:
 [руководство автора расширений](docs/ai/plugin-authoring-guide.md).
+
+
+## Поддержка языков: PHP
+
+Встроенная конфигурация `org.nozhik.php` связывает `.php` и `.phtml` с PHP.
+Tree-sitter и bundled `highlights.scm` работают без внешнего сервера: ключевые слова,
+строки, комментарии, функции, типы и переменные окрашены палитрой Darcula/New UI.
+Разбор выполняется в отдельном worker с повторным использованием изменённого дерева;
+UI применяет только диапазоны актуальной ревизии и рисует видимые строки.
+Вложенные HTML/CSS/JavaScript грамматики пока не подключены.
+
+Для диагностики и интеллектуальных функций установите один LSP-сервер и добавьте
+его executable в `PATH`, с которым запускается Nozhik:
+
+- [Phpactor](https://phpactor.readthedocs.io/en/master/usage/getting-started.html):
+  IDE запускает `phpactor language-server` ([stdio](https://phpactor.readthedocs.io/en/master/lsp/running.html)).
+- [Intelephense](https://github.com/bmewburn/intelephense-docs/blob/master/installation.md):
+  установите Node.js/npm, затем `npm install -g intelephense`; IDE запускает
+  `intelephense --stdio`.
+
+Phpactor имеет приоритет при наличии обоих. На Windows ищутся `.exe`, `.cmd`,
+`.bat`; на Unix требуется executable permission. После изменения PATH перезапустите
+IDE. При отсутствии сервера статус и stderr показывают инструкцию установки,
+подсветка остаётся доступной. Сервер запускается при первом PHP-документе проекта;
+смена проекта пересоздаёт сервер. Файл для LSP может ещё не существовать на диске.
+
+Ошибки/предупреждения отображаются волнистыми линиями и маркерами gutter;
+наведение на диапазон показывает сообщение. Статус-бар считает диагностики
+открытых PHP-вкладок. Ввод букв, `$`, `\`, `->`, `::` запрашивает completion после
+200 мс покоя. Стрелки выбирают подсказку, Enter/Tab принимают, Esc закрывает;
+поддерживаются серверные textEdit и дополнительные правки (например imports)
+одной undo-транзакцией. При наведении показывается hover с базовым Markdown
+(заголовки, код, жирный текст, списки). Ctrl/Cmd+клик или F12 открывает первый
+результат definition и прокручивает редактор к строке.
+
+LSP использует UTF-16, stdio JSON-RPC Content-Length, initialize/initialized,
+didOpen/didChange/didClose и shutdown/exit. didChange объединяется за 200 мс;
+перед интерактивным запросом отправляется актуальная версия. Full и incremental
+синхронизация выбираются по capabilities сервера (incremental — замена прежнего
+документа целиком). Запросы имеют таймаут 5 секунд; зависший сервер не блокирует
+рендеринг и Tree-sitter. При выходе cleanup ограничен по времени, затем процесс
+принудительно завершается. LSP-сервер работает с правами пользователя.
+
+Текущий объём — LSP client core: snippets/resolve, code actions, rename/refactoring,
+semantic tokens, диагностика закрытых файлов, пользовательские LSP settings и
+автоматический restart после падения пока отсутствуют. PHP contribution встроен
+и не управляется переключателем executable-плагинов в Settings. Локальная библиотека
+предоставляет `LanguageService::with_server` для явного пути/аргументов сервера.

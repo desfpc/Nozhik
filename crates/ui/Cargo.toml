@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-language-support.workspace = true
 nozhik-plugin-host.workspace = true
 nozhik-vcs.workspace = true
 nozhik-fs-model.workspace = true

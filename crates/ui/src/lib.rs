@@ -2,6 +2,7 @@
 mod app_ui;
 mod diff_view;
 pub mod editor_view;
+mod language;
 mod plugins;
 mod project;
 pub mod search_everywhere;
@@ -60,6 +61,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    language: language::LanguageUi,
     plugins: Option<PluginManager>,
     plugins_open: bool,
     plugin_tab: Option<String>,
@@ -127,6 +129,7 @@ impl NozhikUi {
             }
         };
         Self {
+            language: language::LanguageUi::default(),
             plugins,
             plugins_open: false,
             plugin_tab: None,
@@ -154,7 +157,7 @@ impl NozhikUi {
             shift_down: false,
             last_shift: None,
             status: "Open a project folder".into(),
-            editor: editor_view::TextEditorView,
+            editor: editor_view::TextEditorView::default(),
         }
     }
 

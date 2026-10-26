@@ -35,3 +35,18 @@ pub fn apply(ctx: &Context) {
         style.spacing.item_spacing = egui::vec2(6.0, 4.0);
     });
 }
+
+/// Maps Tree-sitter captures onto the New UI / Darcula syntax palette.
+#[must_use]
+pub fn syntax_color(token: &str) -> Color32 {
+    match token.split('.').next().unwrap_or(token) {
+        "keyword" | "tag" => Color32::from_rgb(207, 142, 109),
+        "string" => Color32::from_rgb(106, 171, 115),
+        "comment" => Color32::from_rgb(122, 126, 133),
+        "function" | "constructor" => Color32::from_rgb(86, 168, 245),
+        "type" | "module" => Color32::from_rgb(181, 182, 227),
+        "number" | "constant" => Color32::from_rgb(42, 172, 184),
+        "variable" | "property" => Color32::from_rgb(199, 125, 187),
+        _ => TEXT,
+    }
+}

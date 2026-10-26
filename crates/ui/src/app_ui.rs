@@ -189,6 +189,31 @@ impl NozhikUi {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Nozhik");
+                    let errors = self
+                        .language
+                        .views
+                        .values()
+                        .flat_map(|v| &v.diagnostics)
+                        .filter(|d| {
+                            d.severity
+                                == Some(
+                                    nozhik_language_support::lsp_types::DiagnosticSeverity::ERROR,
+                                )
+                        })
+                        .count();
+                    let warnings = self
+                        .language
+                        .views
+                        .values()
+                        .flat_map(|v| &v.diagnostics)
+                        .filter(|d| {
+                            d.severity
+                                == Some(
+                                    nozhik_language_support::lsp_types::DiagnosticSeverity::WARNING,
+                                )
+                        })
+                        .count();
+                    ui.label(format!("Errors: {errors}  Warnings: {warnings}"));
                     ui.weak(&self.status);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label("Rust 2024");
@@ -366,12 +391,14 @@ impl NozhikUi {
                         .id()
                         .with(("editor", self.documents[index].buffer.snapshot().buffer_id));
                     self.editor_focus = ui.memory(|m| m.has_focus(editor_id)).then_some(editor_id);
-                    if let Err(error) = self.editor.show(
+                    let document = &mut self.documents[index];
+                    if let Err(error) = self.editor.show_language(
                         ui,
-                        &mut self.documents[index].buffer,
+                        &mut document.buffer,
                         f32::from(self.config.font_size),
                         self.config.tab_width,
                         enabled,
+                        self.language.views.get_mut(&document.path),
                     ) {
                         self.status = error.to_string();
                     }
@@ -396,12 +423,17 @@ impl NozhikUi {
 }
 
 impl eframe::App for NozhikUi {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.shutdown_language();
+    }
+
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         let wake_context = ctx.clone();
         self.fs.set_wakeup(move || wake_context.request_repaint());
         self.shortcuts(ctx);
         self.receive_events();
         self.receive_files();
+        self.language_tick(ctx);
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
         self.top_bar(ctx);
         self.panels(ctx);

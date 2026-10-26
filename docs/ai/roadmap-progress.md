@@ -12,8 +12,8 @@
 | 3 | Проекты, файловый I/O, файловое дерево, watcher, поиск | Реализован; ограничения ниже |
 | 3.4 | VCS Engine & GitHub Desktop UI | Реализован; ограничения ниже |
 | 4 | Plugin & Action Architecture: manifests, process host, actions, keymaps | Реализован; ограничения ниже |
-| 4.1 | Tree-sitter, подсветка, синтаксические индексы | Не начат |
-| 5 | LSP, диагностика, completion, переходы и рефакторинг | Не начат |
+| 4.1 | Tree-sitter, подсветка, синтаксические индексы | Подсветка включена в этап 5; индексы отложены |
+| 5 | Tree-sitter Syntax Highlighting & LSP Client Core (PHP) | Реализован; рефакторинг отложен |
 | 6 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
 | 7 | Terminal, task runner, запуск и отладка | Не начат; Git вынесен в 3.4 |
 | 8 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
@@ -378,3 +378,125 @@ std-only fixture через rustc и проверяет настоящий IPC, 
 3s timeout, 64 KiB лимит и отмену ожидающей инициализации при Drop хоста.
 UI тестируется headless через egui RawInput; ручной запуск нативного окна,
 Windows/Linux и матрица CI в этой итерации не проверялись.
+
+
+## Phase 5 — Tree-sitter Syntax Highlighting & LSP Client Core
+
+- [x] Десятый крейт `nozhik-language-support`, Tree-sitter 0.25 / PHP 0.24,
+  lsp-types 0.95 (структуры LSP 3.17), Tokio process/io-util; обновлён Cargo.lock.
+- [x] `highlighter.rs`: bundled highlights.scm, минимальная contiguous InputEdit,
+  повторное использование tree; фоновые query captures нормализуются в отсортированные
+  непересекающиеся UTF-8 диапазоны. Viewport выбирает их бинарным поиском.
+- [x] `lsp/client.rs`: Content-Length framing, UTF-8 byte length, fragmented reads,
+  дополнительные headers, лимиты 8 KiB headers / 16 MiB body; response ID routing,
+  concurrent requests, отдельные notifications, remote errors, EOF и 5s timeout.
+- [x] `lsp/manager.rs`: discovery phpactor/intelephense, rootUri, initialize/initialized,
+  capabilities UTF-16/no snippets, версии документов, didOpen/Change/Close,
+  full/incremental sync, shutdown/exit и kill-on-drop.
+- [x] Отдельные syntax thread и LSP actor с собственным current-thread runtime;
+  отмена ожидающего RPC при Drop/смене проекта, bounded cleanup при выходе.
+- [x] Встроенная языковая конфигурация `org.nozhik.php`: `.php` / `.phtml`,
+  phpactor language-server, fallback intelephense --stdio, инструкция при отсутствии.
+- [x] UI: Darcula syntax colors и italic comments, маркеры gutter, красные/жёлтые
+  волнистые линии, сообщения diagnostics при наведении, counters status bar.
+- [x] Completion с иконками/подписями/detail, prefix/filter/sort, стрелками,
+  Enter/Tab/Esc, textEdit/insertReplace и additionalTextEdits одной транзакцией.
+- [x] Hover с базовым Markdown; Ctrl/Cmd+клик/F12 → первый definition Location/Link,
+  файловое открытие через fs_model и прокрутка к строке.
+
+### Контракты и конкуренция
+
+`LanguageService::start(root, wake)` не выполняет I/O на UI-потоке.
+`with_server(root, Some(ServerCommand { program, args }), wake)` позволяет явно
+выбрать executable (в том числе mock). UI передаёт Rope snapshots только при
+смене ревизии. `send(Command) -> bool` использует две очереди ёмкостью 64;
+при false UI повторяет snapshot/close. Частичная доставка между очередями
+допускает idempotent повтор. Все I/O и parse происходят вне egui; completed events
+передаются через mpsc, wake вызывает request_repaint. UI drain ограничен 128 events
+за кадр. LSP actor последователен для editor requests; reader транспорта
+независим и маршрутизирует параллельные request IDs/серверные уведомления.
+
+| Команда | Результат / смысл |
+| --- | --- |
+| Sync { uri, revision, text: Rope } | didOpen для нового URI; incremental parse сразу, didChange после 200 ms покоя |
+| Close(uri) | Удаление parser/document state, didClose; UI удаляет diagnostics |
+| Request { uri, revision, token, position, kind } | Completion / Hover / Definition typed response; перед запросом flush актуального текста |
+| Event::Highlights { uri, revision, spans } | Отсортированные nonoverlapping UTF-8 byte ranges + query token names |
+| Event::Diagnostics { uri, revision, items } | Типизированные LSP diagnostics, версия сверяется при наличии |
+| Event::Response { uri, revision, token, data } | Типизированный ответ исходного UI-запроса |
+| Event::Error(String) | Ошибка сервера/парсера/установки в status и stderr |
+
+Интерактивные completion/hover запросы также ждут 200 ms покоя; definition
+выполняется сразу. UI проверяет document revision, отдельные request tokens и
+completion caret, отбрасывая устаревшие результаты. При смене проекта заменяется
+весь service/receiver. Закрытие вкладки сохраняет авторитетный TextBuffer, но
+освобождает его языковое состояние; повторное открытие отправляет didOpen.
+
+Byte offsets Buffer остаются UTF-8; `position`, `byte_offset`, `byte_range`
+конвертируют LSP UTF-16 с проверкой surrogate boundaries, порядка range и CRLF.
+LSP versions — отдельный i32 счётчик, UI revision — u64. Для incremental servers
+didChange заменяет весь предыдущий документ одним range; это корректный LSP
+incremental пакет, не минимальный diff. Серверные configuration requests получают
+null defaults, workDoneProgress/create — ack, прочие requests — MethodNotFound.
+
+Drop неблокирующе сигнализирует stop; actor отменяет текущую операцию и пытается
+закрыть документы/shutdown/exit в пределах 2 секунд. Client kill_on_drop — fallback.
+`eframe::App::on_exit` ждёт cleanup максимум 3 секунды; обычные кадры не ждут.
+
+### Ограничения
+
+Встроенная PHP-конфигурация отделена от plugin_host NDJSON RPC; её нельзя выключить
+через переключатель executable-плагинов. Пользовательские language settings,
+completion resolve/snippets/commands, code actions, rename/refactoring, semantic
+index/tokens, injected HTML/CSS/JS грамматики, restart/retry упавшего сервера пока
+не входят в этот этап. Hover поддерживает базовое подмножество Markdown.
+Definition выбирает первый результат. Diagnostics без server version нельзя
+строго сопоставить исходной ревизии: они относятся к последнему синхронизированному
+снимку; versioned diagnostics проверяются строго. Лимитированные headers/body
+не заменяют OS sandbox. Очень большие файлы всё ещё требуют performance budgets:
+полный query pass и materialization строки остаются в worker, не в UI.
+
+### Верификация Phase 5 (2026-10-26)
+
+Новые behavioral tests: PHP query tokens и incremental/fresh equivalence с
+Unicode; UTF-16/CRLF/invalid ranges; completion replacement/import edits;
+framing с трёхбайтовым reader buffer, Unicode и склеенными пакетами,
+missing/duplicate/oversized/truncated lengths. Std-only mock компилируется rustc
+во временный executable и проверяет настоящий stdio initialize, virtual didOpen,
+publishDiagnostics, параллельные completion/hover, document versions/close/shutdown.
+Второй worker test проверяет coalescing трёх правок в один didChange после 200 ms,
+правильный incremental range и shutdown/exit. Headless egui test рисует PHP syntax,
+diagnostics и popup, затем выбирает/принимает completion стрелкой и Enter,
+проверяет замену префикса без newline и undo.
+
+Реальные phpactor/intelephense, нативное окно и Windows/Linux вручную не проверялись.
+
+Финальная локальная проверка на macOS arm64 / Rust 1.99.1: прошли
+`cargo fmt --all -- --check`,
+`cargo clippy --locked --workspace --all-targets --all-features --offline -- -D warnings`,
+`cargo test --locked --workspace --all-features --offline`
+(48 unit + 5 integration + 1 doc-test),
+`cargo build --locked --workspace --release --offline`, `git diff --check`.
+Полный test run выполнен вне sandbox: внутри него существующий тест FSEvents
+не получает файловые события. Проверки реальных LSP и платформенной CI-матрицы
+этим прогоном не заявляются.
+
+
+### Готовые бинарники в репозитории
+
+По требованию владельца добавлены `binaries/macos-arm64/nozhik` (Mach-O ARM64)
+и `binaries/windows-x64/nozhik.exe` (PE32+ x86-64, cross-build MinGW-w64 на macOS).
+Обе release-сборки настоящие, привязаны к одинаковому fingerprint build inputs;
+`build.json` хранит target/host/rustc и SHA-256 файлов. Проверены архитектуры и
+динамические зависимости: macOS использует системные dylib/frameworks,
+Windows — системные DLL/UCRT; дополнительные MinGW runtime DLL не понадобились.
+GUI этих сборок на целевых ОС не запускался; runtime_tested остаётся false.
+
+`scripts/update-binaries.py` собирает и обновляет каталог только после успеха;
+`--check` проверяет freshness, архитектуру и payload hashes без компиляции.
+Root AGENTS.md требует обновления обеих платформ после изменения build inputs.
+`.gitattributes` фиксирует LF, бинарные файлы исключены из text conversion.
+Workflow binaries.yml при push исходников собирает macOS ARM64 и Windows x64
+на соответствующих runners, проверяет и коммитит оба каталога в ту же ветку.
+Есть защита от устаревшего run и рекурсивного rebuild; CI ещё не запускался.
+Скачивание с GitHub возможно после публикации локального коммита через push.

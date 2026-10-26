@@ -1,0 +1,4 @@
+* text=auto eol=lf
+binaries/macos-arm64/nozhik binary
+binaries/windows-x64/*.exe binary
+binaries/windows-x64/*.dll binary

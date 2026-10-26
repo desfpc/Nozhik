@@ -1,0 +1,96 @@
+name: Update repository binaries
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.gitattributes'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'scripts/update-binaries.py'
+      - '.github/workflows/binaries.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build release and record source/payload hashes
+        run: python scripts/update-binaries.py --target ${{ matrix.target }}
+      - name: Verify generated download
+        run: python scripts/update-binaries.py --check --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nozhik-${{ matrix.platform }}
+          path: binaries/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  commit:
+    if: github.ref_type == 'branch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove previous generated payloads
+        run: git rm -r --ignore-unmatch binaries/macos-arm64 binaries/windows-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: nozhik-macos-arm64
+          path: binaries/macos-arm64/
+      - uses: actions/download-artifact@v4
+        with:
+          name: nozhik-windows-x64
+          path: binaries/windows-x64/
+      - name: Verify and commit current binaries
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH_NAME"
+          if [ "$(git rev-parse FETCH_HEAD)" != "$SOURCE_SHA" ]; then
+            echo 'Branch advanced; its newer run will publish binaries.'
+            exit 0
+          fi
+          chmod +x binaries/macos-arm64/nozhik
+          python3 scripts/update-binaries.py --check
+          git add --all binaries/macos-arm64 binaries/windows-x64
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore(binaries): update downloads for ${SOURCE_SHA:0:12}"
+          git push origin "HEAD:refs/heads/$BRANCH_NAME"

@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 4
+# Архитектура Nozhik — Phase 5
 
 ## Границы крейтов
 
@@ -11,7 +11,8 @@
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host |
+| nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -70,7 +71,7 @@ Legacy `BufferModified` сохранён для совместимости. Те
 BufferId — u64 newtype; уникальность и запрет повторного использования должен
 обеспечить будущий BufferStore. Ноль сейчас допустим. Position: line и column
 с нуля; column измеряется в UTF-8 байтах внутри строки. Это не графемы,
-экранные колонки или UTF-16 координаты LSP. Конверсия LSP появится отдельно.
+экранные колонки или UTF-16 координаты LSP. Конверсия LSP UTF-16 принадлежит language_support.
 Span — полуинтервал [start, end), порядок проверяется конструктором и serde.
 Position дополнительно содержит абсолютный `byte_offset: usize`; при установке
 курсоров TextBuffer проверяет согласованность всех трёх координат.
@@ -205,3 +206,17 @@ ActionRegistry и KeymapRegistry — Arc/RwLock снимки; блокировк
 
 Граница изоляции — отдельный процесс с правами пользователя, без sandbox.
 Протокол, ограничения и API: [руководство](plugin-authoring-guide.md).
+
+
+## Языковая подсистема (Phase 5)
+
+UI language state передаёт Rope/revision через LanguageService в независимые
+syntax worker и async LSP actor. Tree-sitter parser/tree принадлежит документу
+в worker, stdio Child — LspManager в actor. Отдельный transport reader
+демультиплексирует JSON-RPC responses и notifications. LSP не использует
+plugin_host NDJSON: Content-Length framing и lifecycle — отдельный протокол.
+UI получает spans/diagnostics и typed response events с URI/revision/token,
+проверяет актуальность и рисует только viewport. На смене проекта service
+отменяется; на выходе bounded shutdown/exit завершается kill-on-drop fallback.
+Полные форматы команд/событий и границы реализации:
+[roadmap Phase 5](roadmap-progress.md#phase-5--tree-sitter-syntax-highlighting--lsp-client-core).

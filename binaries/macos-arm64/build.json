@@ -1,0 +1,11 @@
+{
+  "platform": "macos-arm64",
+  "target": "aarch64-apple-darwin",
+  "source_sha256": "1b647d34a8695d9975a12ad1cc63e8d0696bd2a88ad092782e75c88fe8925e7a",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "build_host": "aarch64-apple-darwin",
+  "runtime_tested": false,
+  "files": {
+    "nozhik": "7f9d692799a10d6b89a5d9b5ede9eae502aeb0945270324b5f8d252d78be5cc6"
+  }
+}

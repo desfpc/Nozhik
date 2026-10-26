@@ -49,7 +49,9 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
 - language_support: tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
-- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, egui/eframe.
+- terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
+  Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
+- ui: buffer, core, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, egui/eframe.
 - app: собирает системы, владеет runtime и окном, добавляет контекст ошибок.
 - Новая зависимость должна иметь конкретную необходимость и минимальные
   features. Обновляйте Cargo.lock. Изменения допустимых границ документируйте.

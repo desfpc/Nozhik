@@ -223,7 +223,7 @@ fn defaults(profile: KeymapProfile) -> Vec<KeyBinding> {
     } else {
         entries.push(("P", true, "ui.search_everywhere", ""));
     }
-    entries
+    let mut bindings: Vec<_> = entries
         .into_iter()
         .map(|(key, shift, action, when)| KeyBinding {
             chord: KeyChord {
@@ -235,5 +235,15 @@ fn defaults(profile: KeymapProfile) -> Vec<KeyBinding> {
             action: action.into(),
             when: When(when.into()),
         })
-        .collect()
+        .collect();
+    bindings.push(KeyBinding {
+        chord: KeyChord {
+            key: "F12".into(),
+            alt: true,
+            ..KeyChord::default()
+        },
+        action: "ui.terminal".into(),
+        when: When::default(),
+    });
+    bindings
 }

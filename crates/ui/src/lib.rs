@@ -6,6 +6,8 @@ mod language;
 mod plugins;
 mod project;
 pub mod search_everywhere;
+mod terminal_panel;
+mod terminal_view;
 pub mod theme;
 mod vcs_panel;
 
@@ -61,6 +63,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    terminal: Option<terminal_panel::TerminalPanel>,
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
     plugins_open: bool,
@@ -110,6 +113,7 @@ impl NozhikUi {
                     (SAVE_ACTION, "Save File", "editorOpen"),
                     ("ui.project", "Toggle Project Window", ""),
                     ("ui.git", "Toggle Git Window", ""),
+                    ("ui.terminal", "Toggle Terminal Window", ""),
                     ("ui.plugins", "Plugins", ""),
                 ] {
                     if let Err(error) = manager.actions().register(Action {
@@ -129,6 +133,7 @@ impl NozhikUi {
             }
         };
         Self {
+            terminal: None,
             language: language::LanguageUi::default(),
             plugins,
             plugins_open: false,

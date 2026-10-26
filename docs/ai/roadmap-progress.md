@@ -14,8 +14,9 @@
 | 4 | Plugin & Action Architecture: manifests, process host, actions, keymaps | Реализован; ограничения ниже |
 | 4.1 | Tree-sitter, подсветка, синтаксические индексы | Подсветка включена в этап 5; индексы отложены |
 | 5 | Tree-sitter Syntax Highlighting & LSP Client Core (PHP) | Реализован; рефакторинг отложен |
-| 6 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
-| 7 | Terminal, task runner, запуск и отладка | Не начат; Git вынесен в 3.4 |
+| 6 | Terminal Subsystem: PTY, ANSI grid, вкладки, TUI | Реализован; ограничения ниже |
+| 6.1 | БД: подключения, схема, SQL-консоль, результаты | Не начат |
+| 7 | Task runner, запуск и отладка | Не начат; терминал реализован в 6, Git в 3.4 |
 | 8 | Развитие API расширений, темы, marketplace | Фундамент плагинов/keymap вынесен в этап 4 |
 | 9 | Профилирование, accessibility, безопасность, упаковка и релизы | Не начат |
 
@@ -500,3 +501,112 @@ Workflow binaries.yml при push исходников собирает macOS AR
 на соответствующих runners, проверяет и коммитит оба каталога в ту же ветку.
 Есть защита от устаревшего run и рекурсивного rebuild; CI ещё не запускался.
 Скачивание с GitHub возможно после публикации локального коммита через push.
+
+
+## Phase 6 — Terminal Subsystem
+
+- [x] Одиннадцатый workspace crate `nozhik-terminal`; portable-pty 0.9,
+  vt100 0.16.2 поверх vte 0.15, parking_lot и Unix-only nix signal API.
+- [x] `pty.rs`: native Unix PTY / Windows ConPTY, SHELL/COMSPEC discovery,
+  cwd проекта, TERM/COLORTERM, split reader/writer, закрытие slave после spawn.
+- [x] `grid.rs`: VT100 parser adapter, 16/256/RGB colors, SGR attributes,
+  cursor/hide, wide/combining Unicode, bounded scrollback, normal/alternate grid,
+  application cursor и bracketed paste modes, OSC title, DSR/DA responses.
+- [x] `session.rs`: background control/start/resize/poll/kill/reap, независимые
+  reader/parser и writer, bounded queues/backpressure, immutable Arc snapshots.
+- [x] `manager.rs`: уникальные TerminalSessionId, до 16 параллельных сессий,
+  create/remove/lookup/events/shutdown, отмена создания при раннем закрытии.
+- [x] `terminal_panel.rs`: вкладки/+/close/collapse, cwd tooltip и OSC titles,
+  автозакрытие по exit с кодом в status bar; hidden sessions продолжают работать.
+- [x] `terminal_view.rs`: cell-aligned monospace painting, ANSI palette,
+  фон/стили/блочный курсор, scrollback wheel, geometry → PTY resize,
+  focus lock и клавиатурный encoder, UTF-8 и bracketed paste.
+- [x] `ui.terminal` в ActionRegistry/Search Everywhere и Alt+F12 в штатных
+  JetBrains/VSCode keymaps; Custom сохраняет явные пользовательские bindings.
+
+### Потоки, события и инварианты
+
+`TerminalManager::create(SessionOptions)` выделяет ID и планирует запуск без I/O
+на UI. Для каждой сессии control worker владеет MasterPty/Child и опрашивает
+try_wait каждые 20 ms; writer пишет пользовательский ввод и device query replies,
+reader обрабатывает выходные chunks до 8192 bytes через VT100/vte и материализует
+TerminalGrid. Parser защищён parking_lot mutex между reader/control workers.
+UI не захватывает parser lock: `snapshot()` использует try_lock только на
+готовом SessionSnapshot и клонирует Arc<Grid>. При занятости остаётся предыдущий
+снимок. Wake вызывается после освобождения locks, запросив egui repaint.
+
+| API / событие | Контракт |
+| --- | --- |
+| SessionOptions { cwd, shell, rows, cols } | Native cwd, optional explicit program/args; default shell определяется worker |
+| write(Vec<u8>) | До 64 KiB целиком; очередь 64 batches; Busy/Closed/Invalid вместо частичной отправки |
+| resize(rows, cols) | 1..=200 rows, 1..=500 cols; очередь control 128; resize PTY и сетки только в worker |
+| scroll(i32) | Положительное число — в scrollback, отрицательное — к live screen; alternate игнорирует |
+| SessionSnapshot { state, grid: Option<Arc<TerminalGrid>> } | Starting/Running(pid)/Exited(code)/Failed(message)/Closed; grid отсутствует до первого вывода |
+| TerminalGrid | rows×cols row-major TerminalCell; UTF-8 cell.text, char, fg/bg, SGR style, wide/continuation, cursor и modes |
+| Started { id, pid } | Spawn завершился успешно |
+| Exited { id, code } | Child reaped; UI удаляет соответствующую вкладку |
+| Error { id, message } | Ошибка spawn/read/write/resize/poll; видна в status/stderr |
+
+Lifecycle events идут через отдельный mpsc, grid — авторитетный snapshot.
+UI drain ограничен 128 событиями за кадр. Reader выполняет весь ANSI parse вне UI;
+виртуальная сетка охватывает viewport и scrollback до 3000 строк. SGR intensity
+в vt100 выбирает bold либо dim; остальные flags комбинируются. Wide/combining
+символы сохраняются в cell.text; UI не рисует continuation повторно. Внутренний
+wrap-pending cursor vt100 нормализуется к последней видимой колонке snapshot/DSR.
+
+close/Drop выставляют независимый stop flag, поэтому насыщенная input queue не
+мешает завершению. Unix shutdown посылает HUP foreground process group, завершает
+и reaps shell, затем завершает оставшийся foreground group; Windows использует
+Child termination и закрытие ConPTY. Workers получают ограниченное время для
+завершения reader/writer; `TerminalManager::shutdown()` ждёт максимум 3 секунды
+суммарно при App::on_exit. Обычный frame/закрытие вкладки не ждёт. Умерший shell
+не перезапускается автоматически. Явно detached процессы не отслеживаются.
+
+При смене проекта существующие терминалы сохраняют свои cwd; новая вкладка
+получает актуальный project root. Без проекта панель показывает приглашение,
+процесс не запускается. Скрытие панели не меняет lifetime сессий.
+
+### Проверки Phase 6
+
+Unit-тесты: ANSI 16/256/RGB, SGR flags, cursor/clear/hide, split UTF-8,
+wide/combining cells, OSC title, DSR/DA replies; 3000-line scrollback, alternate
+screen и restore cursor после resize. Настоящие PTY тестируют echo, kernel winsize,
+две сессии и выборочное закрытие, сохранение второй сессии, exit code/reap,
+ошибку отсутствующего executable и close при startup. Unix-тест проверяет Ctrl+C
+через line discipline и close при насыщенной очереди записи. UI тесты проверяют
+control/functional/application keys, UTF-8/paste и Alt+F12 → Action → bottom panel
+через headless egui. Отдельный ignored test запускается явно при наличии vi:
+
+```sh
+cargo test -p nozhik-terminal system_vi -- --ignored
+```
+
+На локальном macOS этот тест прошёл с `/usr/bin/vi`: alternate screen, ввод текста,
+выход `:q!`, успешный exit/reap без user config/viminfo/swap files.
+
+### Границы версии
+
+Нет TUI mouse protocol forwarding, mouse selection/copy, history search,
+persistent terminal sessions, полной реализации расширений xterm и history reflow.
+OSC clipboard не обрабатывается. Геометрия ограничена 200×500, сессий максимум 16;
+очереди и scrollback ограничены, но это не OS sandbox. Внешние cargo/composer/htop,
+шелл и их конфигурации принадлежат пользователю. GUI Windows/Linux и реальные
+PowerShell/cmd/ConPTY здесь вручную не запускались; Windows cross-build проверяется
+отдельно, наличие CI matrix не объявляется успешным platform run.
+
+
+### Верификация Phase 6 (2026-10-26)
+
+На macOS arm64 / Rust 1.99.1 прошли `cargo fmt --all -- --check`,
+Clippy workspace/all-targets/all-features с `-D warnings` для native macOS и
+cross target `x86_64-pc-windows-gnu`. Полный workspace test run прошёл вне sandbox:
+56 unit + 5 integration + 1 doc-test; один system_vi test в обычном прогоне ignored,
+затем отдельно запущен с `--ignored` и прошёл. Внутри sandbox прежний FSEvents test
+завершается timeout; PTY-тесты прошли и внутри sandbox.
+
+Release macOS ARM64 и Windows x64 GNU пересобраны через update-binaries.py;
+обе build.json metadata содержат одинаковый source fingerprint. `--check`
+проверяет актуальность и payload SHA-256; Mach-O ARM64 и PE32+ x86-64 проверены.
+Реальные GUI Windows/Linux, ConPTY/PowerShell/cmd и GitHub CI в этой итерации
+не выполнялись. Нативное окно macOS также вручную не открывалось; проверка vi
+использовала настоящую PTY и виртуальную сетку без GUI.

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "crates/buffer", "crates/ui", "crates/fs_model", "crates/vcs", "crates/plugin_host", "crates/language_support"]
+members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "crates/buffer", "crates/ui", "crates/fs_model", "crates/vcs", "crates/plugin_host", "crates/language_support", "crates/terminal"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,11 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+nozhik-terminal = { path = "crates/terminal" }
+portable-pty = "0.9"
+nix = { version = "0.28", features = ["signal"] }
+vt100 = "0.16.2"
+parking_lot = "0.12"
 nozhik-language-support = { path = "crates/language_support" }
 tree-sitter = "0.25"
 tree-sitter-php = "0.24.2"

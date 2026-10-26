@@ -95,6 +95,17 @@ impl NozhikUi {
                             self.search.open = false;
                             self.settings_open = true;
                         }
+                        "ui.terminal" => {
+                            self.bottom =
+                                if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL) {
+                                    None
+                                } else {
+                                    Some(crate::terminal_panel::TERMINAL_LABEL)
+                                };
+                            if let Some(panel) = &mut self.terminal {
+                                panel.focus = true;
+                            }
+                        }
                         "ui.plugins" => self.plugins_open = true,
                         "ui.git" => {
                             self.left = if self.left == Some(LeftTool::Commit) {
@@ -226,7 +237,7 @@ impl NozhikUi {
             .exact_height(32.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for label in ["⌘ Terminal", "! Problems"] {
+                    for label in [crate::terminal_panel::TERMINAL_LABEL, "! Problems"] {
                         if ui
                             .selectable_label(self.bottom == Some(label), label)
                             .clicked()
@@ -236,6 +247,11 @@ impl NozhikUi {
                             } else {
                                 Some(label)
                             };
+                            if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
+                                && let Some(panel) = &mut self.terminal
+                            {
+                                panel.focus = true;
+                            }
                         }
                     }
                 });
@@ -245,9 +261,26 @@ impl NozhikUi {
                 .resizable(true)
                 .default_height(160.0)
                 .show(ctx, |ui| {
-                    ui.label(label);
-                    ui.separator();
-                    ui.weak("Tool window placeholder");
+                    if label == crate::terminal_panel::TERMINAL_LABEL {
+                        let panel = self
+                            .terminal
+                            .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+                        let root = self.project.as_ref().map(|p| p.root_path.as_path());
+                        let enabled =
+                            !self.search.open && !self.settings_open && !self.plugins_open;
+                        let (collapse, error) =
+                            panel.show(ui, root, f32::from(self.config.font_size), enabled);
+                        if collapse {
+                            self.bottom = None;
+                        }
+                        if let Some(error) = error {
+                            self.status = error;
+                        }
+                    } else {
+                        ui.label(label);
+                        ui.separator();
+                        ui.weak("Tool window placeholder");
+                    }
                 });
         }
         self.side_panels(ctx);
@@ -424,6 +457,9 @@ impl NozhikUi {
 
 impl eframe::App for NozhikUi {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(panel) = &mut self.terminal {
+            panel.shutdown();
+        }
         self.shutdown_language();
     }
 
@@ -434,6 +470,11 @@ impl eframe::App for NozhikUi {
         self.receive_events();
         self.receive_files();
         self.language_tick(ctx);
+        if let Some(panel) = &mut self.terminal
+            && let Some(message) = panel.tick()
+        {
+            self.status = message;
+        }
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
         self.top_bar(ctx);
         self.panels(ctx);
@@ -491,6 +532,44 @@ mod tests {
     use super::*;
     use nozhik_config::{Config, ConfigManager};
     use nozhik_event_bus::EventBus;
+
+    #[test]
+    fn terminal_keymap_toggles_panel_without_spawning_outside_a_project()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bus = EventBus::new(32)?;
+        let dir = tempfile::tempdir()?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        for expected_open in [true, false] {
+            let input = egui::RawInput {
+                modifiers: egui::Modifiers::ALT,
+                events: vec![egui::Event::Key {
+                    key: Key::F12,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                }],
+                ..Default::default()
+            };
+            let _frame = ctx.run(input, |ctx| {
+                shell.shortcuts(ctx);
+                shell.receive_events();
+                shell.panels(ctx);
+                shell.editor_area(ctx);
+            });
+            assert_eq!(
+                shell.bottom == Some(crate::terminal_panel::TERMINAL_LABEL),
+                expected_open
+            );
+        }
+        assert!(shell.terminal.is_some());
+        if let Some(panel) = &mut shell.terminal {
+            panel.shutdown();
+        }
+        Ok(())
+    }
 
     #[test]
     fn modal_bus_shortcuts_and_empty_workspace_render() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,4 +1,4 @@
-# Архитектура Nozhik — Phase 5
+# Архитектура Nozhik — Phase 6
 
 ## Границы крейтов
 
@@ -12,7 +12,8 @@
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
-| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support |
+| nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
+| nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
 
 Папка `crates/core` имеет имя пакета `nozhik-core`, чтобы не конфликтовать
@@ -220,3 +221,19 @@ UI получает spans/diagnostics и typed response events с URI/revision/t
 отменяется; на выходе bounded shutdown/exit завершается kill-on-drop fallback.
 Полные форматы команд/событий и границы реализации:
 [roadmap Phase 5](roadmap-progress.md#phase-5--tree-sitter-syntax-highlighting--lsp-client-core).
+
+
+## Терминал (Phase 6)
+
+TerminalPanel лениво создаёт TerminalManager; new SessionOptions получает cwd
+проекта, а shell discovery и PTY spawn выполняются background control worker.
+Master/Child не попадают в egui. Reader/parsing и writer разделены, поэтому
+насыщенная запись не блокирует polling/close. VT100 (на vte) владеет normal/alternate
+screens и 3000 строками истории. Reader/control публикуют Arc<TerminalGrid>;
+UI читает готовый snapshot через try_lock и рисует cell-aligned monospace grid.
+Отдельные lifecycle events Started/Exited/Error коррелируются TerminalSessionId.
+Alt+F12 разрешается глобальным Keymap в ui.terminal; фокусированный terminal
+encoder передаёт control/escape/UTF-8 bytes через bounded queue в PTY writer.
+Resize панели обновляет PTY и emulator в control worker. Tab close сигнализирует
+stop без ожидания, App::on_exit выполняет bounded manager shutdown.
+Контракты и ограничения: [roadmap Phase 6](roadmap-progress.md#phase-6--terminal-subsystem).

@@ -6,12 +6,13 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**Roadmap Phase 5: Tree-sitter Syntax Highlighting & LSP Client Core реализован.** Десять крейтов,
+**Roadmap Phase 6: Terminal Subsystem реализован.** Одиннадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
-hover и переход к определению. Терминал, запуск/отладка и подключения к БД
-ещё не реализованы.
+hover и переход к определению. Встроенный PTY-терминал поддерживает локальный
+шелл, ANSI-цвета, вкладки и TUI-программы. Запуск/отладка через task runner
+и подключения к БД ещё не реализованы.
 
 ## Скачать без сборки
 
@@ -66,7 +67,7 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
@@ -75,6 +76,7 @@ nozhik-fs-model ──► nozhik-event-bus
 nozhik-vcs ──► git2 (vendored libgit2/OpenSSL)
 nozhik-plugin-host ──► nozhik-event-bus, tokio, serde/serde_json, semver, directories
 nozhik-language-support ──► tree-sitter/php, lsp-types, tokio, ropey, serde_json
+nozhik-terminal ──► portable-pty, vt100 (vte), parking_lot, nix (Unix signals)
 ```
 
 ```text
@@ -87,6 +89,7 @@ crates/
   vcs/        # Git worker, status, index, diff, history, branches, remotes
   plugin_host/ # manifests, process JSON-RPC host, action/keymap registries
   language_support/ # incremental PHP syntax, stdio LSP client, background workers
+  terminal/    # PTY/ConPTY, VT100 grid/scrollback, asynchronous sessions
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
 docs/ai/
@@ -179,8 +182,8 @@ Ctrl/Cmd+Shift+O и Ctrl/Cmd+E пока открывают тот же поис�
 пусты до появления синтаксического индекса; Files ищет по всем путям проекта,
 Text — по содержимому буферов в памяти, Actions — по зарегистрированным действиям.
 Include non-project items зарезервирован для будущего индекса. Шестерёнка открывает настройки размера шрифта и отступа
-текущей сессии. Боковые кнопки открывают Project и Git, остальные tool windows
-пока представлены заглушками.
+текущей сессии. Боковые кнопки открывают Project и Git, нижняя кнопка Terminal — PTY-терминал;
+остальные tool windows пока представлены заглушками.
 
 ## Работа с проектами и файлами
 
@@ -366,3 +369,49 @@ semantic tokens, диагностика закрытых файлов, поль�
 автоматический restart после падения пока отсутствуют. PHP contribution встроен
 и не управляется переключателем executable-плагинов в Settings. Локальная библиотека
 предоставляет `LanguageService::with_server` для явного пути/аргументов сервера.
+
+
+## Встроенный терминал
+
+Откройте проект и нажмите **Alt+F12** (на Mac — Option+F12, при необходимости Fn)
+или **Terminal** на нижнем тулстрипе. Терминал открывается в текущем проектном
+каталоге. В Search Everywhere → Actions доступно действие `ui.terminal`; его
+сочетание можно изменить в пользовательском Keymap. JetBrains/VSCode profiles
+включают Alt+F12 по умолчанию; Custom использует только явные bindings.
+
+Верхняя строка панели содержит вкладки, **+** для новой сессии, **×/Close** для
+завершения сессии и **—** для сворачивания панели. Скрытые сессии продолжают работать.
+Новая вкладка получает имя Terminal N; OSC title от шелла/TUI может заменить его.
+При завершении шелла вкладка закрывается, код выхода отображается в статусе.
+При смене проекта существующие терминалы сохраняют свои cwd, новые открываются
+в новом проекте. Изменение высоты панели/размера окна меняет геометрию PTY.
+
+macOS/Linux используют `$SHELL` с login-аргументом `-l`, fallback — `/bin/zsh`
+на macOS и `/bin/bash` на Linux. Windows использует `%COMSPEC%`, а при его отсутствии
+ищет PowerShell, затем cmd.exe. Windows backend — ConPTY; нужен
+[Windows 10 1809+ либо Windows 11](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole).
+Используется окружение процесса IDE, `TERM=xterm-256color`, `COLORTERM=truecolor`.
+Можно запускать установленные `git`, `composer`, `cargo`, `vi`, `htop` и другие
+консольные программы; установка этих программ остаётся задачей пользователя.
+
+Клик по сетке передаёт терминалу фокус. Работают Unicode-ввод, Enter, Tab,
+Backspace, Escape, стрелки, Home/End, Insert/Delete, PageUp/PageDown и F1–F12.
+Ctrl+C отправляет interrupt, Ctrl+D — EOF, Ctrl+Z — suspend (Unix), Ctrl+L —
+control-byte для очистки/перерисовки шеллом. Эти байты обрабатывает активная
+программа/line discipline. Поддерживаются application cursor keys и bracketed paste.
+Вставка из системного clipboard поступает в PTY; одна порция ограничена 64 KiB,
+при переполнении очереди появляется ошибка вместо молчаливой потери ввода.
+
+ANSI 16/256 и RGB-цвета, bold/dim/italic/underline/inverse, Unicode wide/combining
+cells, статичный блочный курсор и альтернативный экран отрисовываются сеткой.
+Колесо мыши просматривает историю до 3000 строк; новый ввод возвращает live screen.
+В альтернативном экране история не прокручивается. Запуск, чтение, запись и resize
+идут в фоновых потоках; UI получает готовый Arc-снимок без ожидания блокировок.
+Закрытие вкладки/IDE останавливает шелл и освобождает PTY; на Unix также завершается
+foreground process group. Явно отсоединённые пользовательские процессы не управляются
+как отдельное дерево задач. Общий shutdown терминалов ограничен 3 секундами ожидания.
+
+Текущие границы: до 16 сессий, 200×500 видимых ячеек; нет mouse-reporting в TUI,
+выделения/копирования текста мышью, поиска по истории, persistent sessions и полного
+набора xterm-расширений. Сетка не переформатирует историю как reflow-терминалы;
+при resize применяются правила vt100. OSC clipboard и открытие ссылок не выполняются.

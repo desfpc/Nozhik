@@ -6,7 +6,7 @@
   "build_host": "aarch64-apple-darwin",
   "runtime_tested": false,
   "files": {
-    "Nozhik.app.zip": "d35817eba871b3a61a6a74c84059e7b3a8c139e2ec9319b0930122a308e67115",
-    "nozhik": "3b5287495968f2b2f1a7eb6cb94b2a0b207ef38f5b63552d5edfc21f952dd5ab"
+    "Nozhik.app.zip": "7f1ae76f056d1eae78d463aa1e2c6022bd3ca64087fe4e821219a27d39fd9629",
+    "nozhik": "e460de79c30195ed3187372375ba5152a9e8b8462de3941f901e5bd2dd4d433b"
   }
 }

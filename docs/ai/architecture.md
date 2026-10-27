@@ -488,3 +488,97 @@ egui Painter, без Unicode-глифов, внешних шрифтов или 
 обновляются macOS ARM64 и Windows x64, затем выполняется `--check`.
 CI binaries.yml публикует только artifacts с ограниченным сроком хранения,
 без записи в репозиторий. Новых функций интерфейса не добавлено.
+
+## Code Styles / formatting (2026-10-27)
+
+`config::code_style` владеет строгой JSON-схемой CodeStyle, встроенным PHP
+профилем и CodeStyles catalog. Config.file_types хранит nullable имя JSON-профиля
+и идентификатор syntax palette на расширение; отсутствие PHP/PHTML записи
+выбирает встроенный профиль, явный None отключает форматирование и Smart Paste.
+`language_support` теперь зависит также от config (типизированный CodeStyle).
+
+SettingsDialog worker читает каталоги `~/.nozhik/code_styles` и соседний с
+settings `code_styles`, сохраняет Config через ConfigManager на отдельном потоке.
+UI получает готовый каталог целиком; reload failure сохраняет прежний каталог,
+файлового I/O при отрисовке нет. Очередь сохранений последовательная, shutdown
+ждёт ответы до 1s. General/File Types UI вынесен в settings_dialog.rs.
+
+Command::Format несёт исходный snapshot, revision, token, профиль и optional
+UTF-8 range. LSP actor сначала синхронизирует snapshot и проверяет capabilities,
+затем запрашивает formatting/rangeFormatting с tabSize/insertSpaces. При отсутствии
+поддержки или отказе запроса выполняется formatting::php_edits. JSON профиль
+управляет локальным formatter; остальные vendor rules LSP задаются самим сервером.
+Локальный formatter меняет промежутки между AST-токенами, сохраняет literals и
+comments, повторно проверяет дерево и отказывает для malformed PHP. Heredoc/nowdoc
+и non-PHP markup являются защищёнными узлами; их содержимое не переписывается.
+Selection ограничивает все изменяемые диапазоны исходными границами.
+
+UI сопоставляет ответ с BufferId/revision/выбранным профилем, затем применяет
+одну EditTransaction. Smart Paste создаёт одну транзакцию для всех курсоров,
+нормализуя каждый фрагмент относительно строки своего диапазона. Без профиля
+вставляется исходный текст. syntax diagnostics передаются вместе с Highlights,
+хранятся отдельно от server diagnostics и используют общий renderer волн/tooltip,
+включая нулевой диапазон предполагаемого закрытия. Оба набора сбрасываются при edit.
+
+Settings modal ограничивает content size размерами viewport с внешним запасом.
+Правая панель использует явно вертикальную раскладку и bounded ScrollArea;
+высота разделителя задана отдельно, без зависимости от unbounded Area.
+На узких экранах категории переносятся над содержимым. Заголовок и Close
+находятся вне прокручиваемой области и остаются доступны.
+
+### Editor mouse input, formatting fallback and Smart Paste (2026-10-27)
+
+TextEditorView captures LMB through one click_and_drag Response; visible rows use
+hover only. ScrollSource enables wheel/scrollbars and disables content dragging.
+Pointer coordinates use each visible row's origin and Galley; UTF-8 conversion
+uses char boundaries. The temporary drag anchor is bound to BufferId/revision;
+CursorSet remains authoritative. Double/triple clicks select identifier/line,
+Shift extends the existing anchor. Selection changes request repaint.
+
+reformat_code synchronizes language state before submitting a request, including
+standalone files and the first invocation. Empty/no-op LSP edits invoke the local
+AST fallback; nonempty LSP edits retain priority. PHP_ONLY handles tagless code
+fragments. Whitespace edits crossing a selection boundary are clipped only when
+preserving the unselected prefix/suffix, allowing a selected method call to regain
+its indentation. The result still commits as one transaction.
+
+formatting::paste_edit replaces the entire leading whitespace when the caret is
+inside that prefix; single-line insertion therefore gets the target indentation
+exactly once. Empty target lines use the preceding nonempty line as context.
+A bounded PHP clipboard lexer computes structural nesting, excluding quotes,
+escapes and comments. This is not document parsing on the UI thread. Multiline
+literals/heredocs and empty clipboard text bypass normalization. Without a style,
+the original range and clipboard text are unchanged.
+
+### Enter indentation and partial LSP formatting (2026-10-27)
+
+TextEditorView routes Enter (after completion acceptance) through one transaction
+with per-cursor newline_text. Only the target Rope line/prefix is materialized;
+no document parser or full-buffer String is used for Enter. The clipboard lexer
+also supplies remaining bracket depth, ignoring quoted/commented delimiters.
+The configured indentation width/style and the line's LF/CRLF are preserved.
+Without a profile, the transaction contains only the newline.
+
+Nonempty server formatting edits are validated for overlap and applied to a worker
+copy of the source. normalize_lsp_indentation then uses php_edits to repair only
+existing line-leading whitespace; server token/spacing changes retain priority.
+Selected-range boundaries are mapped through server edits and remain enforced.
+The combined result becomes one original-coordinate UTF-8-safe replacement,
+therefore the existing revision/profile gate and one-step Undo are preserved.
+Unsupported local syntax keeps the server result. Empty/no-op LSP responses still
+use the complete local formatter.
+
+### Heredoc/nowdoc and mixed PHP documents (2026-10-27)
+
+The local formatter no longer rejects a whole file containing heredoc, nowdoc or
+markup. Heredoc/nowdoc/string nodes are opaque; text_interpolation preserves the
+complete PHP-close/markup/PHP-open interval. Gaps beside markup/tag transitions
+and mixed-document outer whitespace are preserved. PHP token gaps elsewhere still
+use CodeStyle and AST scope depth, including blocks spanning multiple PHP islands.
+Reparse validation compares both the AST shape and ordered raw protected payloads.
+
+Before accepting server formatting, normalize_lsp_indentation checks that literal
+and markup bytes are unchanged. A server result that rewrites a payload falls back
+to local formatting of the original snapshot. The caller still applies one revision-
+guarded transaction. The supplied php82-smoke.php is a data-only regression fixture;
+its PHP code is parsed/formatted, never executed by the Rust test suite.

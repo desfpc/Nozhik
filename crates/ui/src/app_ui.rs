@@ -517,6 +517,26 @@ impl NozhikUi {
                         .with(("editor", self.documents[index].buffer.snapshot().buffer_id));
                     self.integration.last_editor = Some(editor_id);
                     self.editor_focus = ui.memory(|m| m.has_focus(editor_id)).then_some(editor_id);
+                    let extension = self.documents[index]
+                        .path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    self.editor.code_style = self
+                        .settings_dialog
+                        .styles
+                        .selected(&extension, &self.config.file_types)
+                        .cloned();
+                    self.editor.proportional_font = self.config.editor_font == "proportional";
+                    if let Some(language) = self.language.views.get_mut(&self.documents[index].path)
+                    {
+                        language.syntax_theme = self
+                            .config
+                            .file_types
+                            .get(&extension)
+                            .map_or_else(|| "default".into(), |s| s.syntax_theme.clone());
+                    }
                     let document = &mut self.documents[index];
                     if let Err(error) = self.editor.show_language(
                         ui,
@@ -578,6 +598,7 @@ impl NozhikUi {
             self.status = message;
         }
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
+        self.settings_tick(ctx);
         self.menu_bar(ctx);
         self.top_bar(ctx);
         self.panels(ctx);
@@ -601,29 +622,7 @@ impl NozhikUi {
         if let Some((token, query)) = self.search.take_request() {
             self.queue(Command::Search { token, query });
         }
-        if self.settings_open {
-            let modal = egui::Modal::new(egui::Id::new("settings")).show(ctx, |ui| {
-                ui.heading("Settings · current session");
-                if ui.button("Plugins…").clicked() { self.plugins_open = true; self.settings_open = false; }
-                ui.weak("Keymap: ~/.nozhik/keymap.json · JetBrains / VSCode / Custom · reloads every second");
-                let mut config = self.config.clone();
-                ui.add(egui::Slider::new(&mut config.font_size, 6..=96).text("Editor font size"));
-                ui.add(egui::Slider::new(&mut config.tab_width, 1..=16).text("Tab width"));
-                if config != self.config {
-                    match self.settings.replace(config.clone()) {
-                        Ok(()) => self.config = config,
-                        Err(error) => self.status = error.to_string(),
-                    }
-                }
-                ui.weak("New UI Dark · settings are kept in memory for this session");
-                if ui.button("Close").clicked() {
-                    self.settings_open = false;
-                }
-            });
-            if modal.should_close() {
-                self.settings_open = false;
-            }
-        }
+        self.settings_window(ctx);
         self.plugins_window(ctx);
         self.integration_dialogs(ctx);
         if !self.integration.actions.is_empty() {

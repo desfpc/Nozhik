@@ -37,6 +37,13 @@ impl Highlighter {
             source: String::new(),
         })
     }
+    /// Diagnostics for the most recently parsed snapshot.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<crate::lsp_types::Diagnostic> {
+        self.tree.as_ref().map_or_else(Vec::new, |tree| {
+            crate::structural::diagnostics(tree, &self.source)
+        })
+    }
     /// Reparses a minimal contiguous replacement using the previous edited tree.
     /// # Errors
     /// Returns cancellation if the parser could not produce a tree.

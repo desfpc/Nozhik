@@ -1,0 +1,8 @@
+{
+  "language": "php",
+  "name": "PSR-12",
+  "indent": { "style": "spaces", "size": 4 },
+  "braces": { "classes": "next_line", "functions": "next_line", "control_structures": "same_line" },
+  "spacing": { "around_operators": true, "after_comma": true, "inside_parentheses": false },
+  "empty_lines": { "after_namespace": 1, "between_methods": 1 }
+}

@@ -19,11 +19,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Client-generated JSON uses compact numeric IDs; notifications have none.
         let id = body.split("\"id\":").nth(1).map(|s| s.split(|c:char| !c.is_ascii_digit()).next().unwrap_or("0"));
         let result = if body.contains("\"initialize\"") {
-            Some("{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{},\"hoverProvider\":true,\"definitionProvider\":true}}".to_string())
+            Some("{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{},\"hoverProvider\":true,\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":true}}".to_string())
         } else if body.contains("\"textDocument/completion\"") {
             Some("[{\"label\":\"hello\",\"kind\":2,\"insertText\":\"hello()\"}]".to_string())
         } else if body.contains("\"textDocument/hover\"") {
             Some("{\"contents\":{\"kind\":\"markdown\",\"value\":\"**hello**\"}}".to_string())
+        } else if body.contains("\"textDocument/formatting\"") || body.contains("\"textDocument/rangeFormatting\"") {
+            if std::env::args().nth(2).as_deref() == Some("format-edit") {
+                Some(r#"[{"range":{"start":{"line":0,"character":6},"end":{"line":0,"character":6}},"newText":"/* LSP */ "}]"#.to_string())
+            } else { Some("[]".to_string()) }
         } else if body.contains("\"shutdown\"") { Some("null".to_string()) }
         else if body.contains("\"exit\"") { return Ok(()); }
         else { None };

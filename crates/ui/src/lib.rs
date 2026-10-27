@@ -18,6 +18,7 @@ mod remote_panel;
 mod remote_shell;
 mod remote_worker;
 pub mod search_everywhere;
+mod settings_dialog;
 mod sql_console;
 mod terminal_panel;
 mod terminal_view;
@@ -113,6 +114,7 @@ pub struct NozhikUi {
     bottom: Option<&'static str>,
     search: search_everywhere::SearchEverywhere,
     settings_open: bool,
+    settings_dialog: settings_dialog::SettingsDialog,
     shift_down: bool,
     last_shift: Option<f64>,
     status: String,
@@ -149,6 +151,10 @@ impl NozhikUi {
             }
         };
         Self {
+            settings_dialog: settings_dialog::SettingsDialog::start(
+                settings.path().to_path_buf(),
+                bus.clone(),
+            ),
             recent_projects: recent_projects::RecentProjects::start(
                 settings.path().with_file_name("recent_projects.json"),
             ),

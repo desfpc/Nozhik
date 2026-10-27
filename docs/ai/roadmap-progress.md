@@ -1036,3 +1036,128 @@ Project, раскрытие папки и открытие PHP-файла, ре�
 Git-иконки приложение перезапущено и отсутствие квадратов подтверждено.
 Тестовое приложение закрыто. Windows/Linux GUI не запускались;
 runtime_tested=false сохранён для неполной runtime matrix.
+
+### Code Styles, форматирование и Settings (2026-10-27)
+
+- config::code_style: строгий JSON CodeStyle, встроенный php_psr12.json,
+  каталог по расширениям, background scan home/config directories, явный None
+  и отсутствие профиля без принудительного форматирования. Выбор профиля и
+  syntax palette сериализуется в settings.toml/JSON.
+- code.reformat в общем menu/action catalog и Ctrl/Cmd+Alt+L в keymap defaults.
+  Форматируется selection или весь буфер. Приоритет LSP formatting/rangeFormatting,
+  fallback PHP Tree-sitter whitespace formatter по правилам JSON, проверка AST
+  после форматирования, одна транзакция Undo. Stale responses проверяются по
+  token, BufferId, revision и текущему профилю. Mixed HTML/heredoc/malformed PHP
+  локальный formatter не поддерживает; произвольные vendor LSP rules зависят
+  от настроек сервера, через protocol передаются tabSize/insertSpaces.
+- Smart Paste нормализует внешний отступ и сохраняет относительную вложенность,
+  отдельный контекст каждого курсора и единая транзакция. None оставляет clipboard
+  без изменений. Однострочная вставка остаётся дословной.
+- AST ERROR/MISSING и unmatched {}, (), [] без строк/комментариев; маркеры
+  opening/expected closing, красные волны и tooltip. Parser diagnostics отделены
+  от LSP и не исчезают при получении server diagnostics.
+- settings_dialog.rs: General / File Types & Code Styles, font family/size,
+  текущая New UI Dark theme, выбор JSON-профиля и syntax palette, Reload profiles,
+  фоновые последовательные atomic saves и bounded shutdown flush.
+
+Верификация: 111 passed, 0 failed, 4 прежних system tests ignored в полном
+workspace/all-features прогоне вне sandbox. В sandbox OS watcher упёрся в timeout;
+вне sandbox прошёл. Новые тесты проверяют PSR-12 output и идемпотентность,
+selection boundaries, literals/comments/for headers, unclosed delimiters,
+Smart Paste/None, single Undo, disk profile selection/persistence и настоящие
+formatting/rangeFormatting requests к mock stdio LSP. fmt, native macOS и Windows
+GNU Clippy workspace/all-targets/all-features с -D warnings прошли.
+Нативное GUI и Windows/Linux runtime этой итерацией не запускались.
+
+Финальные macOS ARM64 и Windows x64 GNU binaries обновлены через
+scripts/update-binaries.py; --check подтвердил общий source fingerprint и
+контрольные суммы обоих комплектов. После выделения General UI в helper отдельно
+повторены 34 UI unit + 3 stress tests вне sandbox: все прошли. При попытке этого
+повтора в sandbox два localhost SSH теста получили PermissionDenied; вне sandbox
+ошибка не воспроизводится. runtime_tested=false: межплатформенная GUI-матрица
+не запускалась.
+
+### Исправление размеров Settings (2026-10-27)
+
+Устранено разрастание модального окна по высоте из-за вертикального Separator
+в unbounded Area. Размеры ограничены viewport, обе панели имеют конечную высоту,
+содержимое настроек прокручивается с явно вертикальной раскладкой. На узких
+экранах категории отображаются сверху; заголовок и Close не прокручиваются.
+Регрессионный headless egui тест воспроизвёл прежнее превышение высоты, затем
+проверил обе категории в 1440×900, 800×600 и 420×280: границы модального окна,
+видимость полей и настоящие pointer press/release на Close.
+
+Проверки исправления: полный workspace/all-features прогон вне sandbox —
+112 passed, 0 failed, 4 прежних ignored. fmt, native и Windows GNU Clippy
+workspace/all-targets/all-features с -D warnings и git diff --check прошли.
+Обе release-платформы пересобраны update-binaries.py; --check подтвердил исходники
+и SHA-256 обоих комплектов. На отдельной нативной macOS release-копии с временными
+проектом/settings визуально проверены General, File Types & Code Styles и Close;
+тестовый экземпляр завершён через Cmd+Q. Windows/Linux GUI не запускались.
+
+### Editor mouse input / Reformat Code / Smart Paste fixes (2026-10-27)
+
+- LMB places the caret; drag selects across rows without panning; Shift-click,
+  Unicode identifier double-click, whole-line triple-click, wheel on both axes.
+- Empty and no-op LSP formatting responses now fall back to Tree-sitter.
+  Tagless PHP snippets are supported; selected method calls regain AST indentation
+  while neighboring lines remain unchanged. The action initializes/synchronizes
+  language state and applies one undoable transaction to the active buffer.
+- Single-line and malformed multiline paste normalize target indentation; replacing
+  the entire leading prefix prevents doubled indentation. The PHP fragment lexer
+  repairs structural nesting while preserving quoted delimiters. Multiline literals
+  and heredocs remain verbatim; None retains the original clipboard and range.
+- Regressions cover the exact Sample/test/doSomething output (4/8 spaces), inserting
+  $user->save() at columns 0/3/8 of an 8-space prefix, crooked nested blocks,
+  Event::Paste and Undo, pointer click/drag/word/line/Shift/wheel, real action routing,
+  empty-LSP fallback and nonempty-LSP priority with a mock stdio server.
+
+Full workspace/all-features tests outside sandbox: 118 passed, 0 failed, 4 existing
+system tests ignored. Native and Windows GNU Clippy all-targets/all-features with
+-D warnings, fmt and git diff --check passed. Workspace release build succeeded.
+
+Both local release platforms were rebuilt with scripts/update-binaries.py; --check
+verified the common source fingerprint and both payload checksums. Native macOS
+release smoke on an isolated temporary project/settings confirmed Cmd+Alt+L on
+Sample.php, drag selection without panning, clipboard paste of $user->save() into
+an empty method line with 8-space indentation, and Undo back to the original clean
+buffer. The test app was closed via Cmd+Q; temporary files were removed.
+Windows/Linux GUI were not run; runtime_tested=false remains for the full matrix.
+
+### Enter indentation / typed print inside if (2026-10-27)
+
+The exact check($condition, $message) example is covered: AST formatting restores
+8 spaces before print('test'). Enter now inserts the newline and profile-based
+indentation atomically, preserving LF/CRLF and ignoring quoted/commented brackets.
+Without a profile, Enter stays literal. A regression types the example character
+by character into a dirty editor buffer, invokes code.reformat via ActionRegistry,
+waits for the worker revision, and checks that one Undo restores the typed source.
+Nonempty/partial LSP results additionally receive local structural indentation
+repairs, while server token/spacing changes and selection boundaries are preserved.
+
+Verification: full workspace/all-features run outside sandbox — 122 passed,
+0 failed, 4 existing system tests ignored. Native/Windows GNU Clippy with all
+features/targets and -D warnings, fmt, git diff --check and workspace release build
+passed. The initial sandbox-only UI run hit localhost SSH PermissionDenied; the
+full run outside sandbox passed. Both local binaries were rebuilt via
+update-binaries.py and --check verified the common source fingerprint and payload
+checksums. Native GUI was not rerun for this change; keyboard behavior is covered
+by real egui key/text events and the asynchronous action/worker regression.
+
+### Formatting PHP around heredoc/nowdoc and markup (2026-10-27)
+
+Removed the file-wide markup/heredoc rejection. Literal bodies, delimiters and
+flexible closing indentation remain byte-for-byte unchanged while surrounding PHP
+is formatted. Mixed HTML/PHP preserves markup and tag boundaries. A protected-text
+comparison also rejects LSP payload rewrites and selects the local fallback.
+Regression fixtures include the exact supplied php82-smoke.php (data only, never
+executed), its INI payload, print indentation, idempotence, nowdoc, CRLF, selection
+inside a payload, malformed heredoc rejection and mixed HTML/PHP.
+
+Verification: 127 passed, 0 failed, 4 existing system tests ignored in the full
+workspace/all-features run outside sandbox. Native/Windows GNU Clippy with all
+features/targets and -D warnings, fmt, git diff --check and workspace release build
+passed. macOS ARM64 and Windows x64 binaries were rebuilt with update-binaries.py;
+--check verified common source fingerprint and payload checksums. The supplied
+file is unchanged and matches the regression fixture byte-for-byte. Native GUI
+was not rerun for this parser/formatting change; no PHP test script was executed.

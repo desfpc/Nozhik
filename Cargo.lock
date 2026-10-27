@@ -3031,6 +3031,7 @@ name = "nozhik-language-support"
 version = "0.1.0"
 dependencies = [
  "lsp-types",
+ "nozhik-config",
  "ropey",
  "serde_json",
  "tempfile",

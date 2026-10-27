@@ -212,6 +212,7 @@ impl NozhikUi {
     pub(crate) fn global_actions(&mut self, ctx: &egui::Context) {
         for action in std::mem::take(&mut self.integration.actions) {
             match action.as_str() {
+                "code.reformat" => self.reformat_code(ctx),
                 "ui.open" => self.pick_path(crate::project_dialog::Picker::Open, ctx),
                 "ui.open_file_dialog" => self.pick_path(crate::project_dialog::Picker::File, ctx),
                 "ui.new_project" => {
@@ -652,6 +653,7 @@ impl NozhikUi {
         if let Some(task) = self.wake_task.take() {
             task.abort();
         }
+        self.settings_dialog.finish();
         self.layout.finish();
         self.recent_projects.finish();
         self.shutdown_language();

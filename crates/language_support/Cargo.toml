@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-config = { path = "../config" }
 tree-sitter.workspace = true
 tree-sitter-php.workspace = true
 lsp-types.workspace = true

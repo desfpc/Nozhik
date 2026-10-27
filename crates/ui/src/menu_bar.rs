@@ -51,7 +51,10 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
     ),
     (
         "Code",
-        &[("ui.definition", "Go to Definition", "editorOpen")],
+        &[
+            ("ui.definition", "Go to Definition", "editorOpen"),
+            ("code.reformat", "Reformat Code", "editorOpen"),
+        ],
     ),
     (
         "Git",

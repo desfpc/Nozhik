@@ -251,6 +251,16 @@ fn defaults(profile: KeymapProfile) -> Vec<KeyBinding> {
         .collect();
     bindings.push(KeyBinding {
         chord: KeyChord {
+            key: "L".into(),
+            primary: true,
+            alt: true,
+            ..KeyChord::default()
+        },
+        action: "code.reformat".into(),
+        when: When("editorOpen".into()),
+    });
+    bindings.push(KeyBinding {
+        chord: KeyChord {
             key: "F12".into(),
             alt: true,
             ..KeyChord::default()

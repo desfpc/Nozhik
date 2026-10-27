@@ -3,11 +3,16 @@ use crate::theme;
 use egui::{Event, FontId, Key, Sense, Stroke, Ui, text::CCursor};
 use nozhik_buffer::{BufferError, Cursor, EditTransaction, TextBuffer, TextEdit};
 
-/// Stateless view; caret, selections and history live in the buffer.
+/// Virtualized view; text, caret, selections and history live in the buffer.
 #[derive(Default)]
 pub struct TextEditorView {
     /// Pending navigation target; scrolled into view on the next frame.
     pub reveal_line: Option<usize>,
+    /// Active declarative profile; absent means verbatim paste.
+    pub code_style: Option<nozhik_config::code_style::CodeStyle>,
+    /// Render editor text using the proportional built-in family.
+    pub proportional_font: bool,
+    mouse_anchor: Option<(nozhik_core::BufferId, u64, usize)>,
 }
 
 impl TextEditorView {
@@ -46,7 +51,7 @@ impl TextEditorView {
         mut language: Option<&mut crate::language::EditorLanguage>,
     ) -> Result<(), BufferError> {
         let id = ui.id().with(("editor", buffer.snapshot().buffer_id));
-        let response = ui.interact(ui.available_rect_before_wrap(), id, Sense::click());
+        let response = ui.interact(ui.available_rect_before_wrap(), id, Sense::click_and_drag());
         if response.clicked() && enabled {
             response.request_focus();
         }
@@ -125,7 +130,20 @@ impl TextEditorView {
                     continue;
                 }
                 let trigger = matches!(&event, Event::Text(s) if s.chars().last().is_some_and(|c| c.is_alphanumeric() || matches!(c,'_'|'$'|'>'|':'|'\\')));
-                Self::input(buffer, event, tab_width)?;
+                if let Event::Paste(text) = event {
+                    Self::paste(buffer, &text, self.code_style.as_ref())?;
+                } else if matches!(
+                    event,
+                    Event::Key {
+                        key: Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                ) {
+                    Self::newline(buffer, self.code_style.as_ref())?;
+                } else {
+                    Self::input(buffer, event, tab_width)?;
+                }
                 if let Some(state) = language.as_deref_mut() {
                     state.completions.clear();
                     state.request = None;
@@ -140,7 +158,7 @@ impl TextEditorView {
             }
         }
         ui.spacing_mut().item_spacing.y = 0.0;
-        let mut click = None;
+        let mut hit_rows = Vec::new();
         let cursors = buffer.cursors().as_slice().to_vec();
         let revision = buffer.snapshot().revision;
         if let Some(state) = language.as_deref_mut()
@@ -149,16 +167,20 @@ impl TextEditorView {
             state.revision = revision;
             state.spans.clear();
             state.diagnostics.clear();
+            state.syntax.clear();
             state.hover = None;
         }
         let reveal = self.reveal_line.take();
         let mut popup_origin = None;
         let mut hovered_byte = None;
-        let mut scroll = egui::ScrollArea::both();
+        let mut scroll = egui::ScrollArea::both().scroll_source(egui::scroll_area::ScrollSource {
+            drag: false,
+            ..egui::scroll_area::ScrollSource::default()
+        });
         if let Some(line) = reveal {
             scroll = scroll.vertical_scroll_offset(line as f32 * (font_size + 7.0));
         }
-        scroll.id_salt(id).auto_shrink([false, false]).show_rows(
+        let viewport = scroll.id_salt(id).auto_shrink([false, false]).show_rows(
             ui,
             font_size + 7.0,
             buffer.rope().len_lines(),
@@ -184,12 +206,26 @@ impl TextEditorView {
                         let span = visible_spans
                             .iter()
                             .find(|s| s.range.contains(&(start + range[0])));
-                        let color = span.map_or(theme::TEXT, |s| theme::syntax_color(&s.token));
+                        let color = if language.as_ref().is_some_and(|s| s.syntax_theme == "plain")
+                        {
+                            theme::TEXT
+                        } else {
+                            let color = span.map_or(theme::TEXT, |s| theme::syntax_color(&s.token));
+                            if language.as_ref().is_some_and(|s| s.syntax_theme == "muted") {
+                                color.gamma_multiply(0.75)
+                            } else {
+                                color
+                            }
+                        };
                         job.append(
                             &text[range[0]..range[1]],
                             0.0,
                             egui::TextFormat {
-                                font_id: FontId::monospace(font_size),
+                                font_id: if self.proportional_font {
+                                    FontId::proportional(font_size)
+                                } else {
+                                    FontId::monospace(font_size)
+                                },
                                 color,
                                 italics: span.is_some_and(|s| s.token == "comment"),
                                 ..Default::default()
@@ -199,7 +235,7 @@ impl TextEditorView {
                     let galley = ui.fonts(|fonts| fonts.layout_job(job));
                     let width = ui.available_width().max(galley.size().x + 90.0);
                     let (rect, row) =
-                        ui.allocate_exact_size(egui::vec2(width, font_size + 7.0), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, font_size + 7.0), Sense::hover());
                     if reveal == Some(line) {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
@@ -217,7 +253,7 @@ impl TextEditorView {
                         );
                     }
                     if let Some(state) = &language {
-                        for diagnostic in &state.diagnostics {
+                        for diagnostic in state.diagnostics.iter().chain(&state.syntax) {
                             if line < diagnostic.range.start.line as usize
                                 || line > diagnostic.range.end.line as usize
                             {
@@ -347,28 +383,13 @@ impl TextEditorView {
                             }
                         }
                     }
-                    if enabled && row.clicked() {
-                        row.request_focus();
-                        ui.memory_mut(|memory| memory.request_focus(id));
-                        if let Some(pos) = row.interact_pointer_pos() {
-                            let index = galley.cursor_from_pos(pos - origin).index;
-                            let byte = text
-                                .char_indices()
-                                .nth(index)
-                                .map_or(text.len(), |(byte, _)| byte);
-                            if ui.input(|i| i.modifiers.command) {
-                                if let Some(state) = language.as_deref_mut() {
-                                    state.request_at = None;
-                                    state.request = Some((
-                                        nozhik_language_support::RequestKind::Definition,
-                                        start + byte,
-                                    ));
-                                }
-                            } else {
-                                click = Some((start + byte, ui.input(|i| i.modifiers.shift)));
-                            }
-                        }
-                    }
+                    hit_rows.push(HitRow {
+                        start,
+                        text: text.into(),
+                        rect,
+                        origin,
+                        galley: galley.clone(),
+                    });
                     ui.painter().galley(origin, galley, theme::TEXT);
                 }
             },
@@ -421,21 +442,156 @@ impl TextEditorView {
                 }
             }
         }
-        if let Some((byte, extend)) = click {
+        let changed = self.pointer_input(
+            ui,
+            buffer,
+            &response,
+            viewport.inner_rect,
+            &hit_rows,
+            enabled,
+        )?;
+        if changed {
             if let Some(state) = language {
                 state.completions.clear();
                 state.token = 0;
                 state.request = None;
             }
-            let head = buffer.position_at(byte)?;
-            let anchor = if extend {
-                buffer.cursors().as_slice()[0].anchor
-            } else {
-                head
-            };
-            buffer.set_cursors(vec![Cursor { anchor, head }])?;
+        } else if enabled
+            && response.clicked_by(egui::PointerButton::Primary)
+            && ui.input(|i| i.modifiers.command)
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some(byte) = hit_byte(&hit_rows, pos)
+            && let Some(state) = language
+        {
+            state.request_at = None;
+            state.request = Some((nozhik_language_support::RequestKind::Definition, byte));
         }
         Ok(())
+    }
+
+    fn pointer_input(
+        &mut self,
+        ui: &Ui,
+        buffer: &mut TextBuffer,
+        response: &egui::Response,
+        viewport: egui::Rect,
+        rows: &[HitRow],
+        enabled: bool,
+    ) -> Result<bool, BufferError> {
+        let snapshot = buffer.snapshot();
+        if !enabled
+            || self.mouse_anchor.is_some_and(|(id, revision, _)| {
+                id != snapshot.buffer_id || revision != snapshot.revision
+            })
+        {
+            self.mouse_anchor = None;
+        }
+        if !enabled {
+            return Ok(false);
+        }
+        let pointer = ui.input(|i| i.pointer.clone());
+        let mut changed = false;
+        if pointer.button_pressed(egui::PointerButton::Primary)
+            && response.is_pointer_button_down_on()
+            && !ui.input(|i| i.modifiers.command)
+            && let Some(pos) = pointer.press_origin().filter(|p| viewport.contains(*p))
+            && let Some(byte) = hit_byte(rows, pos)
+        {
+            let anchor = if ui.input(|i| i.modifiers.shift) {
+                buffer.cursors().as_slice()[0].anchor.byte_offset
+            } else {
+                byte
+            };
+            self.mouse_anchor = Some((snapshot.buffer_id, snapshot.revision, anchor));
+            response.request_focus();
+        }
+        if let Some((_, _, anchor)) = self.mouse_anchor
+            && let Some(pos) = pointer.interact_pos()
+            && let Some(byte) = hit_byte(rows, pos)
+        {
+            let mut range = anchor..byte;
+            if response.triple_clicked_by(egui::PointerButton::Primary) {
+                let line = buffer.rope().byte_to_line(byte);
+                range = buffer.rope().line_to_byte(line)
+                    ..(buffer.rope().line_to_byte(line) + buffer.rope().line(line).len_bytes());
+            } else if response.double_clicked_by(egui::PointerButton::Primary) {
+                range = word_range(buffer, byte);
+            }
+            let cursor = Cursor {
+                anchor: buffer.position_at(range.start)?,
+                head: buffer.position_at(range.end)?,
+            };
+            if buffer.cursors().as_slice() != [cursor] {
+                buffer.set_cursors(vec![cursor])?;
+                ui.ctx().request_repaint();
+                changed = true;
+            }
+        }
+        if pointer.button_released(egui::PointerButton::Primary) || !pointer.primary_down() {
+            self.mouse_anchor = None;
+        }
+        Ok(changed)
+    }
+
+    fn newline(
+        buffer: &mut TextBuffer,
+        style: Option<&nozhik_config::code_style::CodeStyle>,
+    ) -> Result<(), BufferError> {
+        let edits = buffer
+            .cursors()
+            .as_slice()
+            .iter()
+            .map(|cursor| {
+                let range = cursor.anchor.byte_offset.min(cursor.head.byte_offset)
+                    ..cursor.anchor.byte_offset.max(cursor.head.byte_offset);
+                let line = buffer.rope().byte_to_line(range.start);
+                let start = buffer.rope().line_to_byte(line);
+                let before = buffer.rope().byte_slice(start..range.start).to_string();
+                let ending = if buffer.rope().line(line).to_string().ends_with("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                let text =
+                    nozhik_language_support::formatting::newline_text(&before, ending, style);
+                TextEdit { range, text }
+            })
+            .collect();
+        buffer.apply_transaction(EditTransaction { edits, group: None })
+    }
+
+    pub(crate) fn paste(
+        buffer: &mut TextBuffer,
+        text: &str,
+        style: Option<&nozhik_config::code_style::CodeStyle>,
+    ) -> Result<(), BufferError> {
+        let source = buffer.rope().to_string();
+        let edits = buffer
+            .cursors()
+            .as_slice()
+            .iter()
+            .map(|c| {
+                let range = c.anchor.byte_offset.min(c.head.byte_offset)
+                    ..c.anchor.byte_offset.max(c.head.byte_offset);
+                let (range, text) =
+                    nozhik_language_support::formatting::paste_edit(&source, range, text, style);
+                TextEdit { range, text }
+            })
+            .collect();
+        buffer.apply_transaction(EditTransaction { edits, group: None })
+    }
+
+    pub(crate) fn apply_format(
+        buffer: &mut TextBuffer,
+        edits: Vec<(std::ops::Range<usize>, String)>,
+    ) -> Result<(), BufferError> {
+        buffer.apply_transaction(EditTransaction {
+            edits: edits
+                .into_iter()
+                .map(|(range, text)| TextEdit { range, text })
+                .collect(),
+            group: None,
+        })
     }
 
     fn accept_completion(
@@ -604,6 +760,53 @@ impl TextEditorView {
     }
 }
 
+struct HitRow {
+    start: usize,
+    text: String,
+    rect: egui::Rect,
+    origin: egui::Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+}
+fn hit_byte(rows: &[HitRow], pos: egui::Pos2) -> Option<usize> {
+    let row = rows
+        .iter()
+        .find(|row| pos.y < row.rect.bottom())
+        .or_else(|| rows.last())?;
+    let index = row
+        .galley
+        .cursor_from_pos(egui::vec2((pos.x - row.origin.x).max(0.0), 0.0))
+        .index;
+    Some(
+        row.start
+            + row
+                .text
+                .char_indices()
+                .nth(index)
+                .map_or(row.text.len(), |(byte, _)| byte),
+    )
+}
+fn word_range(buffer: &TextBuffer, byte: usize) -> std::ops::Range<usize> {
+    let rope = buffer.rope();
+    let mut start = rope.byte_to_char(byte);
+    let mut end = start;
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    if start == rope.len_chars() || !word(rope.char(start)) {
+        if start > 0 && word(rope.char(start - 1)) {
+            start -= 1;
+            end = start;
+        } else {
+            return byte..rope.char_to_byte((start + 1).min(rope.len_chars()));
+        }
+    }
+    while start > 0 && word(rope.char(start - 1)) {
+        start -= 1;
+    }
+    while end < rope.len_chars() && word(rope.char(end)) {
+        end += 1;
+    }
+    rope.char_to_byte(start)..rope.char_to_byte(end)
+}
+
 // Basic Markdown presentation for documentation, without fetching external assets.
 fn markdown(ui: &mut Ui, source: &str) {
     let mut code = false;
@@ -664,6 +867,394 @@ mod tests {
     use super::*;
     use nozhik_core::BufferId;
     use nozhik_event_bus::{BufferEvent, Event as BusEvent, EventBus};
+
+    fn mouse_frame(
+        editor: &mut TextEditorView,
+        buffer: &mut TextBuffer,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+        modifiers: egui::Modifiers,
+        time: f64,
+    ) -> Result<egui::FullOutput, BufferError> {
+        let mut result = Ok(());
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 180.0),
+                )),
+                events,
+                modifiers,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    result = editor.show(ui, buffer, 14.0, 4, true);
+                });
+            },
+        );
+        result?;
+        Ok(output)
+    }
+    fn pointer(pos: egui::Pos2, pressed: bool, modifiers: egui::Modifiers) -> Vec<Event> {
+        vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            },
+        ]
+    }
+    fn text_position(output: &egui::FullOutput, text: &str, column: usize) -> Option<egui::Pos2> {
+        output.shapes.iter().find_map(|shape| {
+            if let egui::Shape::Text(shape) = &shape.shape
+                && shape.galley.job.text == text
+            {
+                Some(
+                    shape.pos
+                        + shape
+                            .galley
+                            .pos_from_cursor(CCursor::new(column))
+                            .center()
+                            .to_vec2(),
+                )
+            } else {
+                None
+            }
+        })
+    }
+    fn click_with(
+        editor: &mut TextEditorView,
+        buffer: &mut TextBuffer,
+        ctx: &egui::Context,
+        pos: egui::Pos2,
+        modifiers: egui::Modifiers,
+        time: f64,
+    ) -> Result<(), BufferError> {
+        mouse_frame(
+            editor,
+            buffer,
+            ctx,
+            pointer(pos, true, modifiers),
+            modifiers,
+            time,
+        )?;
+        mouse_frame(
+            editor,
+            buffer,
+            ctx,
+            pointer(pos, false, modifiers),
+            modifiers,
+            time + 0.02,
+        )?;
+        Ok(())
+    }
+    fn click_n(
+        editor: &mut TextEditorView,
+        buffer: &mut TextBuffer,
+        ctx: &egui::Context,
+        pos: egui::Pos2,
+        count: u32,
+        time: f64,
+    ) -> Result<(), BufferError> {
+        for click in 0..count {
+            let time = f64::from(click).mul_add(0.1, time);
+            mouse_frame(
+                editor,
+                buffer,
+                ctx,
+                pointer(pos, true, egui::Modifiers::NONE),
+                egui::Modifiers::NONE,
+                time,
+            )?;
+            mouse_frame(
+                editor,
+                buffer,
+                ctx,
+                pointer(pos, false, egui::Modifiers::NONE),
+                egui::Modifiers::NONE,
+                time + 0.02,
+            )?;
+        }
+        Ok(())
+    }
+    #[test]
+    fn keyboard_enter_inside_if_indents_and_undo_is_atomic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let style = styles
+            .selected("php", &std::collections::BTreeMap::new())
+            .ok_or("style")?;
+        let source = "function check($condition, $message) {\n    if (!$condition) {";
+        let mut buffer = TextBuffer::load_from_str(BufferId(23), source);
+        let head = buffer.position_at(source.len())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut editor = TextEditorView {
+            code_style: Some(style.clone()),
+            ..TextEditorView::default()
+        };
+        let ctx = egui::Context::default();
+        let mut result = Ok(());
+        let _frame = ctx.run(
+            egui::RawInput {
+                events: vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.memory_mut(|m| {
+                        m.request_focus(ui.id().with(("editor", buffer.snapshot().buffer_id)));
+                    });
+                    result = editor.show(ui, &mut buffer, 14.0, 4, true);
+                });
+            },
+        );
+        result?;
+        assert_eq!(buffer.rope().to_string(), format!("{source}\n        "));
+        assert_eq!(buffer.cursors().as_slice()[0].head.column, 8);
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        assert_eq!(
+            buffer.cursors().as_slice()[0].head.byte_offset,
+            source.len()
+        );
+        TextEditorView::newline(&mut buffer, None)?;
+        assert_eq!(buffer.rope().to_string(), format!("{source}\n"));
+        assert_eq!(
+            nozhik_language_support::formatting::newline_text(
+                "    echo '{'; // {",
+                "\n",
+                Some(style)
+            ),
+            "\n    "
+        );
+        assert_eq!(
+            nozhik_language_support::formatting::newline_text("    if ($x) {", "\r\n", Some(style)),
+            "\r\n        "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mouse_click_drag_words_lines_shift_and_wheel() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!("alpha βeta\nsecond_line\n{}", "scroll content\n".repeat(80));
+        let mut buffer = TextBuffer::load_from_str(BufferId(18), &source);
+        let mut editor = TextEditorView::default();
+        let ctx = egui::Context::default();
+        let none = egui::Modifiers::NONE;
+        mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.0)?;
+        let frame = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.1)?;
+        let start = text_position(&frame, "alpha βeta", 3).ok_or("first row")?;
+        let end = text_position(&frame, "second_line", 6).ok_or("second row")?;
+        mouse_frame(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            pointer(start, true, none),
+            none,
+            1.0,
+        )?;
+        assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, 3);
+        mouse_frame(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            vec![Event::PointerMoved(end)],
+            none,
+            1.1,
+        )?;
+        let cursor = buffer.cursors().as_slice()[0];
+        assert_eq!(cursor.anchor.byte_offset, 3);
+        assert_eq!(cursor.head.line, 1);
+        assert_eq!(cursor.head.column, 6);
+        let frame = mouse_frame(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            pointer(end, false, none),
+            none,
+            1.2,
+        )?;
+        assert_eq!(
+            text_position(&frame, "alpha βeta", 3),
+            Some(start),
+            "drag must not pan content"
+        );
+        let word = text_position(&frame, "alpha βeta", 8).ok_or("Unicode word")?;
+        click_n(&mut editor, &mut buffer, &ctx, word, 2, 3.0)?;
+        let cursor = buffer.cursors().as_slice()[0];
+        assert_eq!(
+            buffer
+                .rope()
+                .byte_slice(cursor.anchor.byte_offset..cursor.head.byte_offset)
+                .to_string(),
+            "βeta"
+        );
+        click_with(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            end,
+            egui::Modifiers::SHIFT,
+            4.0,
+        )?;
+        assert_eq!(
+            buffer.cursors().as_slice()[0].anchor.byte_offset,
+            cursor.anchor.byte_offset
+        );
+        assert_eq!(buffer.cursors().as_slice()[0].head.column, 6);
+        click_n(&mut editor, &mut buffer, &ctx, end, 3, 6.0)?;
+        let cursor = buffer.cursors().as_slice()[0];
+        assert_eq!(
+            buffer
+                .rope()
+                .byte_slice(cursor.anchor.byte_offset..cursor.head.byte_offset)
+                .to_string(),
+            "second_line\n"
+        );
+        mouse_frame(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            vec![
+                Event::PointerMoved(end),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -140.0),
+                    modifiers: none,
+                },
+            ],
+            none,
+            8.0,
+        )?;
+        assert_eq!(buffer.cursors().as_slice()[0], cursor);
+        let frame = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 8.1)?;
+        assert_ne!(
+            text_position(&frame, "alpha βeta", 3),
+            Some(start),
+            "wheel must scroll viewport"
+        );
+        assert_eq!(buffer.rope().to_string(), source);
+        Ok(())
+    }
+
+    #[test]
+    fn horizontal_wheel_and_clipboard_paste_use_the_focused_editor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut editor = TextEditorView::default();
+        let ctx = egui::Context::default();
+        let source = "long content ".repeat(100);
+        let mut buffer = TextBuffer::load_from_str(BufferId(19), &source);
+        let none = egui::Modifiers::NONE;
+        mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.0)?;
+        let frame = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.1)?;
+        let point = text_position(&frame, &source, 3).ok_or("long row")?;
+        click_with(&mut editor, &mut buffer, &ctx, point, none, 1.0)?;
+        let caret = buffer.cursors().as_slice()[0];
+        mouse_frame(
+            &mut editor,
+            &mut buffer,
+            &ctx,
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(-120.0, 0.0),
+                modifiers: none,
+            }],
+            none,
+            2.0,
+        )?;
+        let frame = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 2.1)?;
+        assert_ne!(text_position(&frame, &source, 3), Some(point));
+        assert_eq!(buffer.cursors().as_slice()[0], caret);
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        editor.code_style = styles
+            .selected("php", &std::collections::BTreeMap::new())
+            .cloned();
+        let source = "<?php\nclass C\n{\n    function f()\n    {\n        \n    }\n}";
+        let mut buffer = TextBuffer::load_from_str(BufferId(20), source);
+        let line = source.find("        \n").ok_or("indentation")?;
+        let head = buffer.position_at(line + 3)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut result = Ok(());
+        let _frame = ctx.run(
+            egui::RawInput {
+                events: vec![Event::Paste("$user->save();".into())],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.memory_mut(|m| {
+                        m.request_focus(ui.id().with(("editor", buffer.snapshot().buffer_id)));
+                    });
+                    result = editor.show(ui, &mut buffer, 14.0, 4, true);
+                });
+            },
+        );
+        result?;
+        assert!(
+            buffer
+                .rope()
+                .to_string()
+                .contains("\n        $user->save();\n")
+        );
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        TextEditorView::paste(
+            &mut buffer,
+            "if ($x) {\nrun();\n        if ($y) {\n x();\n }\n}",
+            editor.code_style.as_ref(),
+        )?;
+        assert!(buffer.rope().to_string().contains("\n        if ($x) {\n            run();\n            if ($y) {\n                x();\n            }\n        }\n"));
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        Ok(())
+    }
+
+    #[test]
+    fn format_and_smart_paste_are_single_undo_transactions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let style = styles
+            .selected("php", &std::collections::BTreeMap::new())
+            .ok_or("profile")?;
+        let original = "<?php class C{public function f(){return 1+2;}}";
+        let mut buffer = TextBuffer::load_from_str(BufferId(2), original);
+        let edits = nozhik_language_support::formatting::php_edits(original, style, None)?;
+        TextEditorView::apply_format(&mut buffer, edits)?;
+        assert!(buffer.rope().to_string().contains("return 1 + 2;"));
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), original);
+        assert!(!buffer.is_dirty());
+        let original = "<?php\nclass C\n{\n    function f()\n    {\n        ";
+        let mut buffer = TextBuffer::load_from_str(BufferId(3), original);
+        let head = buffer.position_at(original.len())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        TextEditorView::paste(
+            &mut buffer,
+            "    if ($x) {\n        run();\n    }",
+            Some(style),
+        )?;
+        assert!(
+            buffer
+                .rope()
+                .to_string()
+                .ends_with("        if ($x) {\n            run();\n        }")
+        );
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), original);
+        TextEditorView::paste(&mut buffer, "  raw\n text", None)?;
+        assert_eq!(buffer.rope().to_string(), format!("{original}  raw\n text"));
+        Ok(())
+    }
 
     #[test]
     fn php_view_completion_keys_replace_prefix_without_newline()

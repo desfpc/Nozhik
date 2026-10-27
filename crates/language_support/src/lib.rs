@@ -1,7 +1,9 @@
 //! Background PHP syntax and LSP services. UI owns authoritative document text.
 pub mod completion;
+pub mod formatting;
 pub mod highlighter;
 pub mod lsp;
+pub mod structural;
 pub use lsp_types;
 use lsp_types::{
     CompletionResponse, GotoDefinitionResponse, Hover, Position, PublishDiagnosticsParams, Url,
@@ -80,6 +82,21 @@ pub enum Command {
         /// Immutable Rope snapshot.
         text: Rope,
     },
+    /// Format an immutable snapshot, preferring the active LSP server.
+    Format {
+        /// File URI.
+        uri: Url,
+        /// Authoritative buffer revision.
+        revision: u64,
+        /// UI correlation token.
+        token: u64,
+        /// Original source snapshot.
+        source: String,
+        /// Selected profile.
+        style: nozhik_config::code_style::CodeStyle,
+        /// Optional original UTF-8 selection.
+        range: Option<Range<usize>>,
+    },
     /// Release document syntax/server state.
     Close(Url),
     /// Completion/hover/definition at a UTF-16 position, with UI request token.
@@ -116,6 +133,8 @@ pub enum Event {
         revision: u64,
         /// Query capture byte ranges.
         spans: Vec<highlighter::HighlightSpan>,
+        /// Local parser errors independent of LSP diagnostics.
+        syntax: Vec<lsp_types::Diagnostic>,
     },
     /// Diagnostics for the server's synchronized snapshot.
     Diagnostics {
@@ -136,6 +155,17 @@ pub enum Event {
         token: u64,
         /// Typed response payload.
         data: Response,
+    },
+    /// Formatting edits for one original snapshot.
+    Formatted {
+        /// File URI.
+        uri: Url,
+        /// Original revision.
+        revision: u64,
+        /// Original UI correlation token.
+        token: u64,
+        /// UTF-8 replacements, or an actionable failure.
+        edits: Result<Vec<(Range<usize>, String)>>,
     },
     /// Actionable server/parser failure, including installation fallback.
     Error(String),
@@ -206,6 +236,7 @@ impl LanguageService {
                                         uri,
                                         revision,
                                         spans,
+                                        syntax: parser.diagnostics(),
                                     }
                                 }),
                                 Err(error) => Err(Error::Protocol(error.to_string())),
@@ -215,7 +246,7 @@ impl LanguageService {
                             parsers.remove(&uri);
                             continue;
                         }
-                        Command::Request { .. } => continue,
+                        Command::Request { .. } | Command::Format { .. } => continue,
                     };
                 if output
                     .send(result.unwrap_or_else(|e| Event::Error(e.to_string())))
@@ -255,7 +286,7 @@ impl LanguageService {
     /// duplicate Sync/Close commands are idempotent.
     #[must_use]
     pub fn send(&self, command: Command) -> bool {
-        if !matches!(command, Command::Request { .. })
+        if !matches!(command, Command::Request { .. } | Command::Format { .. })
             && self.syntax.try_send(command.clone()).is_err()
         {
             return false;
@@ -323,6 +354,10 @@ async fn server_actor(
                         Command::Close(uri) => {
                             documents.remove(&uri); synchronized.remove(&uri);
                             if let Some(manager) = &mut server && let Err(error) = manager.close(&uri).await { let _sent = output.send(Event::Error(error.to_string())); }
+                        }
+                        Command::Format { uri, revision, token, source, style, range } => {
+                            let edits = format_document(server.as_mut(), &uri, &source, &style, range).await;
+                            let _sent = output.send(Event::Formatted { uri, revision, token, edits }); wake();
                         }
                         Command::Request { uri, revision, token, position, kind } => {
                             if documents.get(&uri).is_none_or(|d| d.0 != revision) { return true; }
@@ -392,4 +427,72 @@ async fn sync_one(
             }
         }
     }
+}
+
+async fn format_document(
+    manager: Option<&mut lsp::manager::LspManager>,
+    uri: &Url,
+    source: &str,
+    style: &nozhik_config::code_style::CodeStyle,
+    range: Option<Range<usize>>,
+) -> Result<Vec<(Range<usize>, String)>> {
+    if let Some(manager) = manager
+        && manager.sync(uri, source).await.is_ok()
+    {
+        let capabilities = &manager.initialized.capabilities;
+        let supported = if range.is_some() {
+            capabilities
+                .document_range_formatting_provider
+                .as_ref()
+                .is_some_and(|v| !matches!(v, lsp_types::OneOf::Left(false)))
+        } else {
+            capabilities
+                .document_formatting_provider
+                .as_ref()
+                .is_some_and(|v| !matches!(v, lsp_types::OneOf::Left(false)))
+        };
+        if supported {
+            let mut params = json!({"textDocument":{"uri":uri},"options":{"tabSize":style.indent.size,"insertSpaces":matches!(style.indent.style,nozhik_config::code_style::IndentStyle::Spaces)}});
+            let method = if let Some(r) = &range {
+                params["range"] = serde_json::to_value(lsp_types::Range::new(
+                    position(source, r.start),
+                    position(source, r.end),
+                ))?;
+                "textDocument/rangeFormatting"
+            } else {
+                "textDocument/formatting"
+            };
+            if let Ok(value) = manager.client.request(method, params).await
+                && let Ok(Some(edits)) =
+                    serde_json::from_value::<Option<Vec<lsp_types::TextEdit>>>(value)
+            {
+                let mut replacements = Vec::new();
+                for edit in edits {
+                    let bytes = byte_range(source, edit.range)
+                        .ok_or_else(|| Error::Protocol("Invalid formatter range".into()))?;
+                    if range
+                        .as_ref()
+                        .is_some_and(|r| bytes.start < r.start || bytes.end > r.end)
+                    {
+                        return Err(Error::Protocol(
+                            "Formatter changed text outside selection".into(),
+                        ));
+                    }
+                    replacements.push((bytes, edit.new_text));
+                }
+                if replacements
+                    .iter()
+                    .any(|(r, text)| source.get(r.clone()) != Some(text.as_str()))
+                {
+                    return formatting::normalize_lsp_indentation(
+                        source,
+                        style,
+                        range.as_ref(),
+                        replacements,
+                    );
+                }
+            }
+        }
+    }
+    formatting::php_edits(source, style, range.as_ref())
 }

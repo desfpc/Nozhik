@@ -1,5 +1,7 @@
 //! Validated TOML/JSON settings with explicit persistence and change notifications.
 
+pub mod code_style;
+
 use std::{
     fs,
     io::{self, Write},
@@ -24,6 +26,10 @@ pub struct Config {
     pub font_size: u16,
     /// Nonempty theme identifier; theme resolution belongs to the future UI.
     pub theme: String,
+    /// Editor font family: monospace or proportional.
+    pub editor_font: String,
+    /// Per-extension profile and syntax palette selections.
+    pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
 }
 
 impl Default for Config {
@@ -32,6 +38,8 @@ impl Default for Config {
             tab_width: 4,
             font_size: 14,
             theme: "dark".into(),
+            editor_font: "monospace".into(),
+            file_types: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -47,6 +55,16 @@ impl Config {
         }
         if !(6..=96).contains(&self.font_size) {
             return Err(ConfigError::Invalid("font_size must be between 6 and 96"));
+        }
+        if !matches!(self.editor_font.as_str(), "monospace" | "proportional") {
+            return Err(ConfigError::Invalid("unsupported editor font"));
+        }
+        if self
+            .file_types
+            .values()
+            .any(|s| !matches!(s.syntax_theme.as_str(), "default" | "muted" | "plain"))
+        {
+            return Err(ConfigError::Invalid("unsupported syntax theme"));
         }
         if self.theme.trim().is_empty() {
             return Err(ConfigError::Invalid("theme must not be empty"));

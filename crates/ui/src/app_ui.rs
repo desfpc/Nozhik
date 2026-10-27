@@ -242,6 +242,9 @@ impl NozhikUi {
                     ui.label(format!("Errors: {errors}  Warnings: {warnings}"))
                         .on_hover_text("Diagnostics in open language buffers");
                     ui.weak(&self.status);
+                    if let Some(status) = &self.editor.ai.status {
+                        ui.weak(status);
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label("0.1.0-RC1")
                             .on_hover_text("Release candidate · Help → About Nozhik");
@@ -475,6 +478,7 @@ impl NozhikUi {
                             .clicked()
                         {
                             self.active = Some(index);
+                            self.editor.focus_buffer = Some(document.buffer.snapshot().buffer_id);
                             self.database.active = None;
                         }
                         if ui
@@ -528,6 +532,7 @@ impl NozhikUi {
                         .styles
                         .selected(&extension, &self.config.file_types)
                         .cloned();
+                    self.editor.ai.configure(&self.config);
                     self.editor.proportional_font = self.config.editor_font == "proportional";
                     if let Some(language) = self.language.views.get_mut(&self.documents[index].path)
                     {
@@ -602,6 +607,9 @@ impl NozhikUi {
         self.menu_bar(ctx);
         self.top_bar(ctx);
         self.panels(ctx);
+        if self.active.is_none() || self.database.active.is_some() {
+            self.editor.ai.cancel();
+        }
         self.editor_area(ctx);
         if let Some(manager) = &self.plugins {
             let context = self.action_context();

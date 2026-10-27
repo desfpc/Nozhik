@@ -52,6 +52,8 @@ impl NozhikUi {
         if self.wake_task.is_some() {
             return;
         }
+        self.editor.ai.runtime = Some(runtime.clone());
+        self.settings_dialog.ai.runtime = Some(runtime.clone());
         let mut events = self.bus.subscribe();
         let mut updates = self
             .plugins
@@ -650,6 +652,8 @@ impl NozhikUi {
             return;
         }
         self.integration.stopped = true;
+        self.editor.ai.cancel();
+        self.settings_dialog.ai.stop();
         if let Some(task) = self.wake_task.take() {
             task.abort();
         }

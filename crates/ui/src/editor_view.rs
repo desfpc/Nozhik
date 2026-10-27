@@ -6,6 +6,8 @@ use nozhik_buffer::{BufferError, Cursor, EditTransaction, TextBuffer, TextEdit};
 /// Virtualized view; text, caret, selections and history live in the buffer.
 #[derive(Default)]
 pub struct TextEditorView {
+    pub(crate) ai: crate::ai_inline::Inline,
+    pub(crate) focus_buffer: Option<nozhik_core::BufferId>,
     /// Pending navigation target; scrolled into view on the next frame.
     pub reveal_line: Option<usize>,
     /// Active declarative profile; absent means verbatim paste.
@@ -52,8 +54,17 @@ impl TextEditorView {
     ) -> Result<(), BufferError> {
         let id = ui.id().with(("editor", buffer.snapshot().buffer_id));
         let response = ui.interact(ui.available_rect_before_wrap(), id, Sense::click_and_drag());
+        if enabled && self.focus_buffer == Some(buffer.snapshot().buffer_id) {
+            self.focus_buffer = None;
+            response.request_focus();
+        }
         if response.clicked() && enabled {
             response.request_focus();
+        }
+        self.ai
+            .synchronize(buffer, ui.ctx(), enabled && response.has_focus());
+        if ui.input(|i| i.pointer.any_pressed()) {
+            self.ai.rearm();
         }
         if enabled && response.has_focus() {
             ui.memory_mut(|m| {
@@ -78,6 +89,19 @@ impl TextEditorView {
                 ) {
                     continue;
                 }
+                if matches!(&event, Event::Key { key: Key::Tab, pressed: true, modifiers, .. } if modifiers.is_none())
+                    && let Some(text) = self.ai.pending_ghost_text.take()
+                {
+                    Self::replace(buffer, &text, None)?;
+                    self.ai.synchronize(buffer, ui.ctx(), false);
+                    if let Some(state) = language.as_deref_mut() {
+                        state.completions.clear();
+                        state.request = None;
+                        state.token = 0;
+                    }
+                    continue;
+                }
+                self.ai.cancel();
                 if let Some(state) = language.as_deref_mut()
                     && matches!(&event, Event::Key { key: Key::Space, pressed: true, modifiers, .. } if modifiers.ctrl)
                 {
@@ -181,6 +205,15 @@ impl TextEditorView {
                 }
             }
         }
+        self.ai
+            .synchronize(buffer, ui.ctx(), enabled && response.has_focus());
+        let ghost = self.ai.pending_ghost_text.clone();
+        let ghost_lines: Vec<_> = ghost
+            .as_deref()
+            .map_or_else(Vec::new, |s| s.split('\n').collect());
+        let extra_rows = ghost_lines.len().saturating_sub(1);
+        let ghost_line = buffer.cursors().as_slice()[0].head.line as usize;
+        let ghost_column = buffer.cursors().as_slice()[0].head.column as usize;
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut hit_rows = Vec::new();
         let cursors = buffer.cursors().as_slice().to_vec();
@@ -207,9 +240,18 @@ impl TextEditorView {
         let viewport = scroll.id_salt(id).auto_shrink([false, false]).show_rows(
             ui,
             font_size + 7.0,
-            buffer.rope().len_lines(),
+            buffer.rope().len_lines() + extra_rows,
             |ui, rows| {
-                for line in rows {
+                for virtual_line in rows {
+                    let line = if virtual_line > ghost_line {
+                        virtual_line.saturating_sub(extra_rows).max(ghost_line)
+                    } else {
+                        virtual_line
+                    };
+                    let synthetic =
+                        virtual_line > ghost_line && virtual_line <= ghost_line + extra_rows;
+                    let ghost_row =
+                        (line == ghost_line && ghost.is_some()).then(|| virtual_line - line);
                     let source = buffer.rope().line(line).to_string();
                     let text = source.trim_end_matches('\n').trim_end_matches('\r');
                     let start = buffer.rope().line_to_byte(line);
@@ -256,6 +298,9 @@ impl TextEditorView {
                             },
                         );
                     }
+                    if let Some(part) = ghost_row {
+                        job = ghost_job(&job, ghost_column, &ghost_lines, part, font_size);
+                    }
                     let galley = ui.fonts(|fonts| fonts.layout_job(job));
                     let width = ui.available_width().max(galley.size().x + 90.0);
                     let (rect, row) =
@@ -264,7 +309,9 @@ impl TextEditorView {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
                     let origin = rect.min + egui::vec2(66.0, 3.0);
-                    if row.hovered()
+                    if !synthetic
+                        && ghost_row.is_none()
+                        && row.hovered()
                         && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
                     {
                         let index = galley.cursor_from_pos(pos - origin).index;
@@ -276,7 +323,9 @@ impl TextEditorView {
                                     .map_or(text.len(), |(i, _)| i),
                         );
                     }
-                    if let Some(state) = &language {
+                    if ghost_row.is_none()
+                        && let Some(state) = &language
+                    {
                         for diagnostic in state.diagnostics.iter().chain(&state.syntax) {
                             if line < diagnostic.range.start.line as usize
                                 || line > diagnostic.range.end.line as usize
@@ -360,7 +409,11 @@ impl TextEditorView {
                     ui.painter().text(
                         rect.min + egui::vec2(48.0, 3.0),
                         egui::Align2::RIGHT_TOP,
-                        (line + 1).to_string(),
+                        if synthetic {
+                            String::new()
+                        } else {
+                            (line + 1).to_string()
+                        },
                         FontId::monospace(font_size),
                         theme::MUTED,
                     );
@@ -386,7 +439,7 @@ impl TextEditorView {
                             );
                             ui.painter().rect_filled(selection, 0.0, theme::ACCENT);
                         }
-                        if cursor.head.line as usize == line {
+                        if !synthetic && cursor.head.line as usize == line {
                             let local = cursor
                                 .head
                                 .byte_offset
@@ -394,7 +447,14 @@ impl TextEditorView {
                                 .min(text.len());
                             let caret =
                                 galley.pos_from_cursor(CCursor::new(text[..local].chars().count()));
-                            popup_origin = Some(origin + egui::vec2(caret.min.x, font_size + 6.0));
+                            popup_origin = Some(
+                                origin
+                                    + egui::vec2(
+                                        caret.min.x,
+                                        (extra_rows as f32)
+                                            .mul_add(font_size + 7.0, font_size + 6.0),
+                                    ),
+                            );
                             if enabled && response.has_focus() {
                                 let x = origin.x + caret.min.x;
                                 ui.painter().line_segment(
@@ -414,6 +474,16 @@ impl TextEditorView {
                         origin,
                         galley: galley.clone(),
                     });
+                    if ghost_row == Some(0) {
+                        let hint = origin + egui::vec2(galley.size().x + 14.0, 0.0);
+                        ui.painter().text(
+                            hint,
+                            egui::Align2::LEFT_TOP,
+                            "⇥ to complete",
+                            FontId::monospace(font_size),
+                            theme::MUTED,
+                        );
+                    }
                     ui.painter().galley(origin, galley, theme::TEXT);
                 }
             },
@@ -462,6 +532,8 @@ impl TextEditorView {
             enabled,
         )?;
         if changed {
+            self.ai.cancel();
+            self.ai.synchronize(buffer, ui.ctx(), false);
             if let Some(state) = language {
                 state.completions.clear();
                 state.token = 0;
@@ -502,10 +574,14 @@ impl TextEditorView {
         }
         let pointer = ui.input(|i| i.pointer.clone());
         let mut changed = false;
-        if pointer.button_pressed(egui::PointerButton::Primary)
+        if (pointer.button_pressed(egui::PointerButton::Primary)
             && response.is_pointer_button_down_on()
+            || response.clicked_by(egui::PointerButton::Primary))
             && !ui.input(|i| i.modifiers.command)
-            && let Some(pos) = pointer.press_origin().filter(|p| viewport.contains(*p))
+            && let Some(pos) = pointer
+                .press_origin()
+                .or_else(|| response.interact_pointer_pos())
+                .filter(|p| viewport.contains(*p))
             && let Some(byte) = hit_byte(rows, pos)
         {
             let anchor = if ui.input(|i| i.modifiers.shift) {
@@ -1050,6 +1126,45 @@ fn hit_byte(rows: &[HitRow], pos: egui::Pos2) -> Option<usize> {
                 .map_or(row.text.len(), |(byte, _)| byte),
     )
 }
+// Virtual ghost rows move the real suffix and following lines without modifying the Rope.
+fn ghost_job(
+    original: &egui::text::LayoutJob,
+    column: usize,
+    lines: &[&str],
+    part: usize,
+    font_size: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let column = column.min(original.text.len());
+    let append_source = |job: &mut egui::text::LayoutJob, range: std::ops::Range<usize>| {
+        for section in &original.sections {
+            let start = section.byte_range.start.max(range.start);
+            let end = section.byte_range.end.min(range.end);
+            if start < end {
+                job.append(&original.text[start..end], 0.0, section.format.clone());
+            }
+        }
+    };
+    if part == 0 {
+        append_source(&mut job, 0..column);
+    }
+    if let Some(text) = lines.get(part) {
+        job.append(
+            text.trim_end_matches('\r'),
+            0.0,
+            egui::TextFormat {
+                font_id: FontId::monospace(font_size),
+                color: egui::Color32::from_rgba_unmultiplied(122, 126, 133, 120),
+                ..Default::default()
+            },
+        );
+    }
+    if part + 1 == lines.len() {
+        append_source(&mut job, column..original.text.len());
+    }
+    job
+}
+
 fn word_range(buffer: &TextBuffer, byte: usize) -> std::ops::Range<usize> {
     let rope = buffer.rope();
     let mut start = rope.byte_to_char(byte);
@@ -1310,6 +1425,25 @@ mod tests {
     }
 
     #[test]
+    fn fast_click_in_one_frame_places_caret_in_empty_indented_line()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let mut buffer = TextBuffer::load_from_str(BufferId(31), "first\n    \nlast");
+        let none = egui::Modifiers::NONE;
+        mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.0)?;
+        let frame = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.1)?;
+        let at = text_position(&frame, "    ", 4).ok_or("empty row")?;
+        let mut events = pointer(at, true, none);
+        events.extend(pointer(at, false, none));
+        mouse_frame(&mut editor, &mut buffer, &ctx, events, none, 0.2)?;
+        assert_eq!(buffer.cursors().as_slice()[0].head.line, 1);
+        assert_eq!(buffer.cursors().as_slice()[0].head.column, 4);
+        assert_eq!(buffer.snapshot().revision, 0);
+        Ok(())
+    }
+
+    #[test]
     fn mouse_click_drag_words_lines_shift_and_wheel() -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("alpha βeta\nsecond_line\n{}", "scroll content\n".repeat(80));
         let mut buffer = TextBuffer::load_from_str(BufferId(18), &source);
@@ -1552,6 +1686,201 @@ mod tests {
         result?;
         Ok(output)
     }
+    #[test]
+    fn ghost_tab_is_one_undo_and_navigation_dismisses() -> Result<(), BufferError> {
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let mut buffer = TextBuffer::load_from_str(nozhik_core::BufferId(19), "");
+        let mut language = crate::language::EditorLanguage::default();
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut language, vec![], 0.0)?;
+        editor.ai.pending_ghost_text = Some("print('я');\n    next();".into());
+        // The asynchronous reply gets its own paint frame before the user presses Tab.
+        let painted =
+            completion_frame(&ctx, &mut editor, &mut buffer, &mut language, vec![], 0.05)?;
+        assert!(text_position(&painted, "print('я');", 0).is_some());
+        assert!(text_position(&painted, "    next();", 0).is_some());
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut language,
+            vec![completion_key(Key::Tab, false)],
+            0.1,
+        )?;
+        assert_eq!(buffer.rope().to_string(), "print('я');\n    next();");
+        assert_eq!(
+            buffer.cursors().as_slice()[0].head.byte_offset,
+            buffer.rope().len_bytes()
+        );
+        assert!(editor.ai.pending_ghost_text.is_none());
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), "");
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut language, vec![], 0.2)?;
+        for event in [
+            completion_key(Key::Escape, false),
+            completion_key(Key::ArrowRight, false),
+            Event::Text("x".into()),
+        ] {
+            editor.ai.pending_ghost_text = Some("obsolete".into());
+            completion_frame(
+                &ctx,
+                &mut editor,
+                &mut buffer,
+                &mut language,
+                vec![event],
+                0.3,
+            )?;
+            assert!(editor.ai.pending_ghost_text.is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ghost_layout_preserves_suffix_and_indent() {
+        let original = egui::text::LayoutJob::simple_singleline(
+            "    beforeAfter".into(),
+            FontId::monospace(14.0),
+            theme::TEXT,
+        );
+        let lines = ["One", "    Two"];
+        let first = ghost_job(&original, 10, &lines, 0, 14.0);
+        let second = ghost_job(&original, 10, &lines, 1, 14.0);
+        assert_eq!(first.text, "    beforeOne");
+        assert_eq!(second.text, "    TwoAfter");
+        assert_eq!(original.text, "    beforeAfter");
+    }
+
+    async fn wait_for_ghost(
+        ctx: &egui::Context,
+        editor: &mut TextEditorView,
+        buffer: &mut TextBuffer,
+        language: &mut crate::language::EditorLanguage,
+    ) -> Result<egui::FullOutput, Box<dyn std::error::Error>> {
+        let mut frame = 0.0;
+        Ok(
+            tokio::time::timeout(std::time::Duration::from_secs(65), async {
+                loop {
+                    frame += 0.02;
+                    let output = completion_frame(ctx, editor, buffer, language, vec![], frame)?;
+                    if editor.ai.pending_ghost_text.is_some() {
+                        return Ok::<_, BufferError>(output);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await??,
+        )
+    }
+
+    #[tokio::test]
+    async fn idle_completion_on_open_and_caret_move_survives_slow_backend()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await?;
+                let mut data = [0; 8192];
+                assert!(socket.read(&mut data).await? > 0);
+                tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+                let body = r#"{"response":"return $a + $b;"}"#;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await?;
+            }
+            Ok::<_, std::io::Error>(())
+        });
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView {
+            ai: crate::ai_inline::Inline::at_endpoint(&endpoint)?,
+            ..Default::default()
+        };
+        editor.ai.runtime = Some(tokio::runtime::Handle::current());
+        editor.ai.configure(&nozhik_config::Config {
+            ai_debounce_ms: 50,
+            ..Default::default()
+        });
+        let mut buffer = TextBuffer::load_from_str(BufferId(29), "<?php\n    ");
+        let head = buffer.position_at(buffer.rope().len_bytes())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let revision = buffer.snapshot().revision;
+        let mut language = crate::language::EditorLanguage::default();
+        wait_for_ghost(&ctx, &mut editor, &mut buffer, &mut language).await?;
+        assert_eq!(
+            editor.ai.pending_ghost_text.as_deref(),
+            Some("return $a + $b;")
+        );
+        assert_eq!(buffer.snapshot().revision, revision);
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut language,
+            vec![completion_key(Key::ArrowLeft, false)],
+            3.0,
+        )?;
+        assert!(editor.ai.pending_ghost_text.is_none());
+        wait_for_ghost(&ctx, &mut editor, &mut buffer, &mut language).await?;
+        assert_eq!(buffer.snapshot().revision, revision);
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut language,
+            vec![completion_key(Key::Escape, false)],
+            6.0,
+        )?;
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut language, vec![], 6.1)?;
+        assert!(editor.ai.pending_ghost_text.is_none());
+        assert!(
+            editor.ai.status.is_none(),
+            "Esc must suppress idle regeneration at the same caret"
+        );
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires a local installed Ollama with qwen2.5-coder:1.5b-base"]
+    async fn live_ollama_idle_ghost_renders_and_tab_inserts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        editor.ai.runtime = Some(tokio::runtime::Handle::current());
+        editor.ai.configure(&nozhik_config::Config::default());
+        let source = "<?php\nfunction add(int $a, int $b): int\n{\n    \n}\n";
+        let mut buffer = TextBuffer::load_from_str(BufferId(30), source);
+        let at = source.find("    ").ok_or("missing indentation")? + 4;
+        let head = buffer.position_at(at)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut language = crate::language::EditorLanguage::default();
+        let output = wait_for_ghost(&ctx, &mut editor, &mut buffer, &mut language).await?;
+        let text = editor
+            .ai
+            .pending_ghost_text
+            .clone()
+            .ok_or("no live ghost")?;
+        assert_ne!(text.trim(), "");
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(s) if s.galley.job.text.contains(text.lines().next().unwrap_or("")))));
+        assert_eq!(buffer.rope().to_string(), source);
+        eprintln!("LIVE OLLAMA IDLE GHOST: {text:?}");
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut language,
+            vec![completion_key(Key::Tab, false)],
+            64.0,
+        )?;
+        assert_eq!(
+            buffer.rope().to_string(),
+            format!("{}{}{}", &source[..at], text, &source[at..])
+        );
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        editor.ai.cancel();
+        Ok(())
+    }
+
     fn completion_key(key: Key, ctrl: bool) -> Event {
         Event::Key {
             key,

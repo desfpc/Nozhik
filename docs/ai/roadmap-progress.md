@@ -1294,3 +1294,115 @@ update-binaries.py command and --check verified their source/payload hashes.
 No Windows build or Windows cache was created. GUI was not rerun for this data/
 loading iteration; completion input, version selection and idle behavior are
 covered by headless egui regressions. runtime_tested=false is retained.
+
+### Local AI Inline Completion / Ollama (2026-10-27)
+
+Added nozhik-ai-completion and UI integration for raw Qwen FIM. Context is
+Unicode-bounded (2000 prefix / 1000 suffix), generation has a 1500 ms deadline,
+required stop tokens and a 128-token output budget. The app-owned Tokio runtime
+runs debounce (default 350 ms), HTTP and model downloads. Owned task cancellation
+covers new input, navigation, clicks, focus loss, document/settings changes and
+shutdown. Revision/caret/BufferId gates reject stale results; offline generation
+errors remain silent. There is no periodic AI repaint or automatic download.
+
+Ghost text uses muted translucent #7A7E85 and a Tab hint. Virtual rows move the
+real suffix/following lines without editing the Rope. Tab inserts once with one
+Undo; Esc/input/navigation dismiss. Existing PHP/LSP popup remains available,
+with ghost acceptance taking precedence on Tab. Multiple cursors/selections and
+SQL tool consoles do not request AI in this iteration.
+
+Settings → AI Assistant (Ollama) persists enable/model/debounce, inspects tags,
+shows Offline/Connected/Installed, links to Ollama, and explicitly downloads the
+selected model with current-layer byte/percentage progress. NDJSON is decoded
+across arbitrary HTTP chunks; errors/incomplete EOF cannot mark a model ready.
+The model field is locked during pull, completion refreshes installed tags, and
+Refresh service status allows retry after starting Ollama. No model was downloaded
+and no existing Ollama installation/settings were changed during development.
+
+Verification: native workspace/all-features tests passed (141 passed, 0 failed,
+4 existing system tests ignored). New tests cover Unicode FIM boundaries/tokens,
+raw HTTP payload/stop tokens, debounce replacement, abort closing the old HTTP
+connection, fragmented pull records, server errors/incomplete streams, real egui
+Tab acceptance/caret/one Undo/Esc/arrows/typing, and multiline/suffix/indent layout.
+Existing idle repaint and PHP keyboard/pointer completion regressions also pass.
+Ollama protocol tests use local mock HTTP servers; live model quality/download
+and native GUI appearance were not manually tested. Windows/Linux were not run.
+
+Final native checks: fmt, workspace/all-targets/all-features Clippy with
+-D warnings, workspace release build and git diff --check passed. The final HTTP
+fixtures were rerun successfully (5 tests). scripts/update-binaries.py rebuilt
+macOS ARM64 and its app archive; default --check verified source and payload
+hashes. No Windows build or Windows cache was created.
+
+### Ollama lifecycle follows Nozhik (2026-10-27)
+
+Enabled AI now starts the local Ollama service when absent and preloads the
+already-installed selected model during application startup. The application
+owns the lifecycle task, coalesces persisted enable/model updates, and awaits
+cleanup before stopping Tokio. Turning AI off unloads the model and stops an
+owned service; switching models unloads the previous selection. Normal close
+cancels editor/download tasks, sends keep_alive=0 to release the selected model,
+and terminates/reaps the owned service process tree. A pre-existing external
+service is preserved. No model files are deleted or downloaded implicitly.
+
+Ollama CLI discovery supports PATH and standard macOS/Windows installation paths;
+owned service host is pinned to loopback. Startup/preload are cancellable, unload
+is bounded to five seconds. Unix uses a private process group, Windows a bounded
+PID-scoped taskkill /T plus child reaping. Selected-model intent is recorded even
+when initially offline, so later manual service startup/download/generation still
+receives cleanup on exit. Standard five-minute idle residency remains as a
+fallback for external services after abnormal application termination.
+
+Verification: full native workspace/all-features tests — 144 passed, 0 failed,
+4 existing ignored; fmt, workspace Clippy all-targets/all-features with -D warnings,
+workspace release build and git diff --check passed. Final AI tests rerun: 8 passed.
+New tests use local mock HTTP and real isolated Unix child processes to verify
+preload/unload request ordering, previous-model release, preservation of an
+external service, disabled startup, child termination/reaping and cancellation
+of startup during close. Real Ollama/model residency and native GUI were not
+manually exercised; Windows process-tree termination was not run on this Mac.
+
+macOS ARM64 binaries/app archive were rebuilt with update-binaries.py; default
+--check verified source fingerprints and payload hashes. No Windows build/cache
+was created.
+
+
+### Real Ollama verification and idle-caret completion (2026-10-27)
+
+The installed Ollama service returned an empty model inventory; the selected
+qwen2.5-coder:1.5b-base had never been downloaded. Downloaded the official model
+(986,060,385 bytes on disk, digest 02e0f2817a89…) and verified actual raw FIM:
+PHP add($a,$b) returned `return $a + $b;`. Measured cold request about 1.02 s
+(including 0.78 s model load), warm request about 0.05 s on this Mac.
+
+Fixed the edited-revision-only gate: an opened/refocused document and a stopped
+caret now schedule completion without typing. File opening/tab activation request
+editor focus. One request is issued for each settled position; Esc suppresses
+that position and successful/empty results do not create an idle request loop.
+Transient errors get two bounded retries. GenerationError preserves meaningful
+missing-model/offline/timeout feedback in the editor status bar instead of
+silently dropping it. Generation allows 60 s for cold loading and 64 predicted
+tokens at temperature 0.2; the one-second connect deadline and cancellation remain.
+
+Fixed native mouse hit testing for click/release events: a completed click is
+handled even if the press event was in an earlier frame, and fast same-frame
+press+release uses interact_pointer_pos after press_origin has been cleared.
+Existing drag/word/line/Shift-selection behavior is retained.
+
+Verification: native full workspace/all-features — 146 passed, 0 failed,
+5 ignored (four existing system tests plus the new explicit live-Ollama test).
+The live-Ollama test was run explicitly and passed: no text events, real model
+result, ghost painting, Tab insertion and one-step Undo. New regression covers
+initial idle generation, caret-only changes, a 1600 ms mock response and Esc;
+a separate fast-click regression verifies an empty indented line. Existing mouse
+and popup regressions passed. fmt, Clippy workspace/all-targets/all-features with
+-D warnings, release build and git diff --check passed.
+
+Native macOS smoke used isolated temporary settings/project and actual Ollama:
+opened sample.php, placed/moved the caret inside a blank function body without
+printing characters, observed ghost text, accepted/saved real generated code.
+After closing the test app, /api/ps returned an empty list and the pre-existing
+external Ollama service remained alive. The temporary debug-only input trace was
+removed. Model files remain installed for the user's IDE. macOS binaries were
+rebuilt by update-binaries.py and source/payload checks passed. No Windows build
+or Windows cache was created; Windows/Linux GUI were not exercised.

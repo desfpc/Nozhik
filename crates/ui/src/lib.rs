@@ -2,6 +2,7 @@
 mod app_ui;
 mod data_grid;
 pub use data_grid::DataGrid;
+mod ai_inline;
 mod database_panel;
 mod diff_view;
 pub mod editor_view;
@@ -231,6 +232,7 @@ impl NozhikUi {
             document.open = true;
             self.search.note_file(document.path.clone());
             self.active = Some(index);
+            self.editor.focus_buffer = Some(document.buffer.snapshot().buffer_id);
             self.bus.publish(Event::FileOpened(document.path.clone()));
         }
     }

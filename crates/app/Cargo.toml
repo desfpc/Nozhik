@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-ai-completion.workspace = true
 nozhik-event-bus.workspace = true
 nozhik-config.workspace = true
 anyhow.workspace = true

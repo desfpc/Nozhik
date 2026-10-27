@@ -30,6 +30,12 @@ pub struct Config {
     pub editor_font: String,
     /// Global PHP major.minor language level for offline completion.
     pub php_language_level: String,
+    /// Enable local Ollama ghost completions.
+    pub ai_enabled: bool,
+    /// Ollama model name; downloads are always explicit.
+    pub ai_model: String,
+    /// Input quiet period in milliseconds (50–5000).
+    pub ai_debounce_ms: u16,
     /// Per-extension profile and syntax palette selections.
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
 }
@@ -42,6 +48,9 @@ impl Default for Config {
             theme: "dark".into(),
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
+            ai_enabled: true,
+            ai_model: "qwen2.5-coder:1.5b-base".into(),
+            ai_debounce_ms: 350,
             file_types: std::collections::BTreeMap::new(),
         }
     }
@@ -74,6 +83,11 @@ impl Config {
             "7.0" | "7.1" | "7.2" | "7.3" | "7.4" | "8.0" | "8.1" | "8.2" | "8.3" | "8.4" | "8.5"
         ) {
             return Err(ConfigError::Invalid("unsupported PHP language level"));
+        }
+        if self.ai_model.trim().is_empty() || !(50..=5000).contains(&self.ai_debounce_ms) {
+            return Err(ConfigError::Invalid(
+                "AI model must be nonempty and debounce must be 50–5000 ms",
+            ));
         }
         if self.theme.trim().is_empty() {
             return Err(ConfigError::Invalid("theme must not be empty"));
@@ -272,6 +286,9 @@ mod tests {
             let changed = Config {
                 tab_width: 2,
                 php_language_level: "8.2".into(),
+                ai_enabled: false,
+                ai_model: "custom:7b".into(),
+                ai_debounce_ms: 700,
                 ..Config::default()
             };
             manager.replace(changed.clone())?;
@@ -312,6 +329,9 @@ mod tests {
             "[broken",
             "tab_width = 0",
             "typo = true",
+            "ai_model = ' '",
+            "ai_debounce_ms = 0",
+            "ai_debounce_ms = 5001",
             "php_language_level = '9.0'",
             "php_language_level = '../../bad'",
         ] {

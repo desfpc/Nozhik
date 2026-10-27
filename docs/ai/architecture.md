@@ -15,8 +15,9 @@
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
+| nozhik-ai-completion | Local Ollama FIM, cancellable generation, model inspection/download | reqwest, tokio, serde/serde_json, thiserror |
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
-| app | Инициализация, жизненный цикл, eframe | ui, config, event_bus |
+| app | Инициализация, жизненный цикл, eframe | ui, config, event_bus, ai_completion |
 
 `app/assets` хранит исходную WebP-иконку и готовые PNG/ICO/ICNS. Composition root
 декодирует встроенный PNG через eframe и задаёт viewport icon. Windows build.rs
@@ -643,3 +644,75 @@ Offline completion ranks case-matching names before other case-insensitive
 matches, so lowercase `str` includes strlen/str_contains before the many STREAM_*
 constants exhaust the 100-item limit. Uppercase constant queries retain priority
 for uppercase names. LSP sortText semantics are unchanged.
+
+## AI Inline Completion / Ollama (2026-10-27)
+
+`nozhik-ai-completion` owns bounded Unicode FIM prompts, a reusable reqwest
+HTTP transport (Rustls, JSON, streaming), tags/pull APIs and an owned cancellable
+Generation. Dependencies are tokio, reqwest, serde/serde_json, thiserror and Unix-only nix;
+no UI/config/filesystem dependencies. Typed errors follow repository standards.
+`ui` depends on ai_completion; config owns persisted ai_enabled/ai_model/
+ai_debounce_ms fields. app attaches its existing runtime to the UI adapters.
+
+The editor gates replies by BufferId, revision, caret and focus, cancels the
+owned debounce/HTTP task on input/navigation/pointer/focus/settings changes,
+and schedules once after opening/refocusing a document or a changed caret/revision, including idle stops. Rope extraction is bounded to 3000
+scalars. A dropped Generation aborts both sleep and in-flight HTTP; results use
+oneshot + event-loop wake, without continuous polling or error logging. GenerationError categories are shown
+in the status bar; transient failures get two delayed retries and then settle. No automatic download. Enabled AI starts an application-scoped service lifecycle (see below).
+
+Ghost text lives outside TextBuffer. Virtual rows and LayoutJob sections insert
+muted translucent text at the caret and move the existing suffix/following rows;
+syntax colors are retained on real text. Tab commits one ordinary transaction
+and clears the PHP/LSP popup; other input dismisses. Multiple cursors/selection
+suppress AI. The main editor supports all text file types; SQL tool consoles do
+not enable AI in this iteration.
+
+Settings model management uses runtime tasks and a watch channel that coalesces
+NDJSON progress instead of accumulating an unbounded queue. Model changes abort
+old inspections. Pull locks the model name, reports current-layer byte counts,
+requires terminal success and then refreshes tags. Service refresh is explicit;
+no idle polling. Generation uses raw Qwen FIM with the required stop tokens,
+stream=false, a 60 s cold-load deadline, temperature=0.2 and num_predict=64. Pull has a separate long
+deadline; chunk boundaries need not coincide with JSON/newline boundaries.
+
+
+### Ollama application lifecycle (2026-10-27)
+
+app owns ai_completion::lifecycle::Lifecycle, starts it from persisted AI settings
+before the native window opens, and awaits shutdown after eframe returns, before
+stopping Tokio. ConfigChanged (including Lagged resync) coalesces model/enable
+updates via watch. Startup, model loading and shutdown use background async I/O;
+normal editor frames do not poll lifecycle state. UI shutdown first cancels AI
+generation/download tasks.
+
+Enabled startup inspects tags, launches `ollama serve` only if unavailable,
+searches PATH and standard macOS/Windows installation paths, and preloads only an
+installed selected model using an empty-prompt generate request. No Ollama install
+or model download is performed automatically. Switching models/disabling AI and
+normal application close unload the selected model with keep_alive=0. Preload
+and generation retain the standard five-minute idle expiry as a crash fallback.
+An external Ollama server is never killed; the selected model is still unloaded.
+Owned Unix server/runners share a fresh process group and are killed/reaped as a
+group; Windows uses taskkill /PID /T /F only for the owned live child, then reaps
+its process handle. No process-name kill or global Ollama shutdown is used.
+Startup/preload are cancellable, model unload has a five-second deadline, and
+owned server termination follows even if HTTP cleanup fails. User-installed
+models stay on disk. Abrupt OS kill/power loss cannot guarantee graceful unload;
+external service residency remains bounded by the normal five-minute idle timeout.
+
+
+### Idle-caret AI and native pointer input (2026-10-27)
+
+Inline state tracks focus/identity, an attempted flag and bounded retries. New
+files/tabs request editor focus, so initial idle scheduling does not require a
+keystroke. An unchanged completed request does not run again; Esc suppresses the
+current position. A later caret/focus/revision/settings change rearms generation.
+Generation returns typed errors instead of silently discarding failures; a missing
+model directs the user to Settings/Download Model. No automatic download was added.
+
+The native smoke exposed press+release delivered inside one egui frame. In that
+case pointer.press_origin is already cleared and is_pointer_button_down_on is
+false. Editor hit-testing now also accepts Response::clicked_by and falls back
+to interact_pointer_pos, preserving drag/selection handling and allowing a fast
+click to place the caret (and trigger idle AI) in an empty indented line.

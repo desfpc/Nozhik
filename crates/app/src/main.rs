@@ -30,14 +30,32 @@ fn main() -> Result<()> {
     eprintln!("Settings: {}", settings.path().display());
     let mut events = bus.subscribe();
     let runtime = Runtime::new().context("Cannot start Tokio runtime")?;
+    let lifecycle = nozhik_ai_completion::lifecycle::Lifecycle::start(
+        runtime.handle(),
+        config.ai_enabled.then(|| config.ai_model.clone()),
+    );
+    let ai_settings = lifecycle.controller();
+    let shared_settings = settings.shared();
     let consumer = runtime.spawn(async move {
         loop {
-            match events.recv().await {
-                Ok(_) => {}
+            let refresh = match events.recv().await {
+                Ok(event) => matches!(*event, Event::ConfigChanged(_)),
                 Err(RecvError::Lagged(count)) => {
                     eprintln!("Event logger missed {count} notifications");
+                    true
                 }
                 Err(RecvError::Closed) => break,
+            };
+            if refresh && let Ok(config) = shared_settings.read() {
+                let desired = config.ai_enabled.then(|| config.ai_model.clone());
+                ai_settings.send_if_modified(|old| {
+                    if *old == desired {
+                        false
+                    } else {
+                        *old = desired;
+                        true
+                    }
+                });
             }
         }
     });
@@ -63,6 +81,7 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("Cannot run native UI: {error}"));
+    runtime.block_on(lifecycle.shutdown());
     let shutdown =
         runtime.block_on(async { tokio::time::timeout(Duration::from_secs(2), consumer).await });
     runtime.shutdown_timeout(Duration::from_secs(1));

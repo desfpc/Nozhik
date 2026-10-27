@@ -112,3 +112,12 @@ cargo build --workspace --release
 проверяет AST после whitespace edits и не пытается исправлять malformed source.
 Ответы форматтера применяются только к исходным BufferId/revision и профилю,
 одной транзакцией; range formatting не меняет текст за пределами selection.
+
+### AI completion
+
+- ai_completion: reqwest (JSON/stream/Rustls), tokio, serde/serde_json, thiserror, Unix-only nix for owned process groups;
+  no UI, buffer, config or filesystem dependency. ui composes it with persisted
+  config fields and the runtime supplied by app.
+- Generation/debounce and model downloads must remain cancellable and off the
+  UI thread. No implicit model download or polling repaint. Service launch is authorized
+  when AI is enabled; only owned child processes may be terminated.

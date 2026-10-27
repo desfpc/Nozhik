@@ -195,6 +195,10 @@ impl NozhikUi {
             binary,
         });
         self.active = self.documents.len().checked_sub(1);
+        self.editor.focus_buffer = self
+            .documents
+            .last()
+            .map(|doc| doc.buffer.snapshot().buffer_id);
         self.database.active = None;
         self.search.note_file(path.clone());
         self.bus.publish(Event::FileOpened(path));

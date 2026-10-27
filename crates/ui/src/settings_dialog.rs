@@ -19,6 +19,7 @@ enum Reply {
     ),
 }
 pub struct SettingsDialog {
+    pub(crate) ai: crate::ai_inline::Models,
     pub styles: CodeStyles,
     pub php_stubs: Option<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>,
     php_requested: String,
@@ -73,6 +74,7 @@ impl SettingsDialog {
             }
         });
         let mut dialog = Self {
+            ai: crate::ai_inline::Models::default(),
             styles: CodeStyles::builtin().unwrap_or_default(),
             // Large version catalogs are parsed only by the worker on demand.
             php_stubs: None,
@@ -90,6 +92,7 @@ impl SettingsDialog {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         ui.selectable_value(&mut self.category, 0, "General");
         ui.selectable_value(&mut self.category, 1, "File Types & Code Styles");
+        ui.selectable_value(&mut self.category, 2, "AI Assistant (Ollama)");
         ui.button("Plugins…").clicked()
     }
 
@@ -105,8 +108,10 @@ impl SettingsDialog {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     if self.category == 0 {
                         Self::general(ui, config);
-                    } else {
+                    } else if self.category == 1 {
                         self.file_types(ui, config);
+                    } else {
+                        self.ai.show(ui, config);
                     }
                 });
             });

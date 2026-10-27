@@ -8,13 +8,20 @@ use std::{path::PathBuf, sync::mpsc};
 enum Request {
     Scan,
     Save(Config),
+    Php(String),
 }
 enum Reply {
     Catalog(Result<CodeStyles, String>),
     Saved(Result<(), String>),
+    Php(
+        String,
+        Result<nozhik_language_support::php_stubs::PhpVersionStubs, String>,
+    ),
 }
 pub struct SettingsDialog {
     pub styles: CodeStyles,
+    pub php_stubs: Option<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>,
+    php_requested: String,
     category: usize,
     extension: String,
     requests: mpsc::Sender<Request>,
@@ -37,6 +44,20 @@ impl SettingsDialog {
                         }
                         Ok(styles)
                     })()),
+                    Request::Php(version) => {
+                        let result = std::env::var_os("HOME")
+                            .or_else(|| std::env::var_os("USERPROFILE"))
+                            .map(PathBuf::from)
+                            .ok_or_else(|| "PHP catalog: user home unavailable".to_owned())
+                            .and_then(|home| {
+                                nozhik_language_support::php_stubs::PhpVersionStubs::load(
+                                    &home.join(".nozhik/languages/php/versions"),
+                                    &version,
+                                )
+                                .map_err(|e| e.to_string())
+                            });
+                        Reply::Php(version, result)
+                    }
                     Request::Save(config) => Reply::Saved(
                         (|| {
                             let manager = ConfigManager::from_path(path.clone(), bus.clone())?;
@@ -53,6 +74,9 @@ impl SettingsDialog {
         });
         let mut dialog = Self {
             styles: CodeStyles::builtin().unwrap_or_default(),
+            // Large version catalogs are parsed only by the worker on demand.
+            php_stubs: None,
+            php_requested: String::new(),
             category: 0,
             extension: "php".into(),
             requests,
@@ -216,6 +240,24 @@ impl SettingsDialog {
                     }
                 }
             });
+        if matches!(self.extension.as_str(), "php" | "phtml") {
+            egui::ComboBox::from_label("PHP Language Level")
+                .selected_text(&config.php_language_level)
+                .show_ui(ui, |ui| {
+                    for version in nozhik_language_support::php_stubs::VERSIONS {
+                        ui.selectable_value(
+                            &mut config.php_language_level,
+                            (*version).into(),
+                            *version,
+                        );
+                    }
+                });
+            let actual = self
+                .php_stubs
+                .as_ref()
+                .map_or("loading…", |s| s.version.as_str());
+            ui.weak(format!("Offline catalog: PHP {actual}"));
+        }
         egui::ComboBox::from_label("Syntax Highlighting Theme")
             .selected_text(&selection.syntax_theme)
             .show_ui(ui, |ui| {
@@ -261,10 +303,44 @@ impl SettingsDialog {
 }
 impl crate::NozhikUi {
     pub(crate) fn settings_tick(&mut self, ctx: &egui::Context) {
+        let needs_php = self.settings_open
+            || self.documents.iter().any(|document| {
+                document.open
+                    && !document.binary
+                    && nozhik_language_support::lsp::manager::is_php(&document.path)
+            });
+        if needs_php
+            && self.settings_dialog.php_requested != self.config.php_language_level
+            && self
+                .settings_dialog
+                .requests
+                .send(Request::Php(self.config.php_language_level.clone()))
+                .is_ok()
+        {
+            self.settings_dialog
+                .php_requested
+                .clone_from(&self.config.php_language_level);
+            self.settings_dialog.pending += 1;
+        }
         for reply in self.settings_dialog.replies.try_iter() {
             self.settings_dialog.pending = self.settings_dialog.pending.saturating_sub(1);
             match reply {
                 Reply::Catalog(Ok(styles)) => self.settings_dialog.styles = styles,
+                Reply::Php(version, result) => {
+                    if version == self.config.php_language_level {
+                        match result {
+                            Ok(stubs) => {
+                                self.settings_dialog.php_stubs = Some(std::sync::Arc::new(stubs));
+                                for view in self.language.views.values_mut() {
+                                    view.completions.clear();
+                                    view.token = 0;
+                                    view.request = None;
+                                }
+                            }
+                            Err(e) => self.status = e,
+                        }
+                    }
+                }
                 Reply::Saved(Ok(())) => self.status = "Settings saved".into(),
                 Reply::Catalog(Err(e)) | Reply::Saved(Err(e)) => self.status = e,
             }
@@ -332,6 +408,72 @@ impl crate::NozhikUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php_level_combo_changes_global_setting() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut dialog = SettingsDialog::start(
+            dir.path().join("settings.toml"),
+            nozhik_event_bus::EventBus::new(8)?,
+        );
+        let ctx = egui::Context::default();
+        let mut config = Config::default();
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| dialog.file_types(ui, &mut config));
+                },
+            )
+        };
+        let output = frame(vec![]);
+        let text_pos = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.pos + t.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+        };
+        assert!(text_pos(&output, "PHP Language Level").is_some());
+        let pos = text_pos(&output, "8.5").ok_or("version selector")?;
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        let output = frame(vec![]);
+        let pos = text_pos(&output, "7.4").ok_or("version option")?;
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        assert_eq!(config.php_language_level, "7.4");
+        config.validate()?;
+        dialog.finish();
+        Ok(())
+    }
 
     #[test]
     fn settings_fit_viewport_and_close_is_accessible() -> Result<(), Box<dyn std::error::Error>> {

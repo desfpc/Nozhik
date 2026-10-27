@@ -1161,3 +1161,136 @@ passed. macOS ARM64 and Windows x64 binaries were rebuilt with update-binaries.p
 --check verified common source fingerprint and payload checksums. The supplied
 file is unchanged and matches the regression fixture byte-for-byte. Native GUI
 was not rerun for this parser/formatting change; no PHP test script was executed.
+
+### Offline PHP standard library and Darcula completion (2026-10-27)
+
+- Added schema v1 in language_support::php_stubs: functions/methods, typed
+  parameters (optional/variadic/reference/default), classes/interfaces with public
+  members, constants, keywords, docs and insertion snippets with `${0}`.
+  Embedded PHP 8.5 starter preset contains 70 top-level entities, including every
+  entity requested for this iteration; class members are additional.
+- Global persisted PHP Language Level in Settings → File Types & Code Styles →
+  PHP/PHTML, 7.0–7.4 / 8.0–8.5. Serial worker loads the requested version from
+  ~/.nozhik/languages/php/versions; NotFound alone uses builtin 8.5. Invalid files
+  retain the old catalog and report an error. UI displays the actual loaded level.
+- Completion works immediately without PHP/LSP, from one identifier character or
+  Ctrl+Space. The bounded 500 px / 9-row scrollable popup has rounded Darcula
+  surfaces, colored round fx/C/I/c/k icons, accented matching prefixes, elided
+  signatures and right-aligned return types. Up/Down scroll the selected row;
+  hover/LMB select, double click/Enter/Tab apply, Esc/outside clicks dismiss.
+  Functions insert parentheses and put the caret inside; constants/types/keywords
+  remain plain text. Leading namespace separators and Class::member prefixes
+  are preserved. LSP completions merge with offline results without equal labels.
+- Reflection CLI supports PHP 7.0+ and Docker image workflows, all internal
+  functions/classes/interfaces and loaded extension constants, tentative return
+  types, public members and sibling-temp-file output. Added a Rust example to
+  validate generated catalogs before installation. No mass-generated catalogs or
+  Docker startup logic are bundled into the IDE.
+
+Verification: full workspace/all-features tests outside sandbox: 133 passed,
+0 failed, 4 existing system tests ignored. The sandbox repeat hit the pre-existing
+FSEvents timeout; the unrestricted full run passed. Native and Windows GNU Clippy
+workspace/all-targets/all-features with -D warnings passed. Headless regressions
+cover schema roundtrip, version fallback/error/mismatch, required prefix matches,
+real key/text input, Up/Down wrap, insertion/caret/Undo, Ctrl+Space/Esc, real pointer
+selection/double click/dismissal, constants/FQNs/members, version ComboBox clicks,
+settings persistence/default/validation and small-screen Settings bounds.
+
+Actual Docker runs generated 3070 entities for PHP 7.4, 3148 for PHP 8.1 and 3201
+for PHP 8.2; all three full files passed the Rust parser. Pulling php:8.5-cli-alpine
+failed with Docker `no space left on device`; PHP 8.5 generator runtime and PHP
+7.0–7.3 runtime were not tested. Existing images/data were not pruned.
+
+Both macOS ARM64 and Windows x64 GNU release binaries were rebuilt with
+update-binaries.py; --check verified the common source fingerprint and both
+payload checksums. Native macOS release smoke used a temporary project/settings:
+opened sample.php, showed Ctrl+Space completion with no LSP, checked popup styling,
+accepted print_r with Enter, inserted a character inside parentheses and saved;
+opened PHP settings, selected 7.4, verified persisted settings and actual fallback
+8.5 label. Test app exited through Cmd+Q. Windows/Linux GUI were not run;
+runtime_tested=false remains for the full platform matrix.
+
+Final verification also passed `cargo build --workspace --release`, fmt and
+`git diff --check` after the implementation and documentation updates.
+
+### Native-only local builds and Windows cache cleanup (2026-10-27)
+
+At the user's request, routine local builds now refresh only the host platform.
+AGENTS.md supersedes the former requirement to rebuild both platforms after every
+change. Windows cross-build/Clippy on this Mac requires an explicit user request.
+`update-binaries.py` keeps native build defaults and now defaults `--check` to the
+host platform too. Explicit `--target`, `--check --platform windows-x64` and
+`--check --all-platforms` retain on-demand Windows/all-platform support.
+GitHub Actions still checks/builds Windows on remote runners.
+
+Removed only target/x86_64-pc-windows-gnu (about 3.4 GiB allocated); native debug/
+release caches, installed cross-toolchain and packaged Windows executable remain.
+A dry run showed `cargo clean --target` would remove native artifacts as well,
+so cleanup directly removed the named Windows directory. README documents that
+scoped cleanup. target is now approximately 25 GiB, chiefly 22 GiB native debug.
+
+Six mocked CLI routing checks passed for native build/check, explicit Windows
+build/check, all-platform checks and native Windows checks. Native release was
+rebuilt with the default script invocation; only macOS metadata was refreshed.
+The Windows package retains its previous build metadata and may be stale until
+an explicit Windows rebuild. Native fmt/Clippy passed.
+
+Final native verification: workspace/all-features tests — 133 passed, 0 failed,
+4 existing ignored; workspace release build, fmt, Clippy and git diff --check
+passed. Default --check verifies macOS successfully. No Windows target directory
+was recreated by these native commands.
+
+### Full generated catalogs for every PHP level (2026-10-27)
+
+Replaced the 70-entity starter preset with generated JSON for all 11 supported
+levels: PHP 7.0–7.4 and 8.0–8.5. Each inventory was generated by the PHP Reflection
+script inside the corresponding official php:<level>-cli-alpine image, Linux/amd64.
+Exact patch versions and counts are listed in crates/language_support/data/README.md;
+catalog-manifest.json stores image digests, loaded extensions and SHA-256 hashes
+for each JSON and the PHP generator. All 11 generator hashes agree. Total JSON
+size: 30.66 MiB; summed across versions: 34174 global entities, 29313 methods,
+4532 class/interface constants (not counts of distinct cross-version symbols).
+
+Generation was strictly sequential. Each container used --rm, and each newly
+pulled image/tag and its unused layers was removed before the next version.
+Final Docker checks found no nozhik-php-catalog containers or php:*-cli-alpine
+images; original counts remained 31 images / 30 containers / 32 volumes / 624
+build cache entries. No global prune or cleanup of unrelated data was used.
+The reproducible scripts/generate-php-catalogs.py utility preserves pre-existing
+images, validates output before replacement, records provenance per version and
+supports --version/--docker/--keep-images. The PHP generator additionally emits
+missing language constructs and context-dependent magic constants.
+
+All version files are embedded in the application. Missing per-user files now
+select the bundled catalog of the requested level instead of PHP 8.5. Existing
+user catalogs retain priority; parse/version errors retain the previous catalog.
+All 11 files were also installed without overwriting differing existing files in
+~/.nozhik/languages/php/versions/ and validated with the Rust example. Catalogs
+cover all internal symbols of the images' loaded extensions (32–36 extensions),
+not arbitrary optional extensions such as intl/gd/mysqli. Legacy Reflection may
+lack types/docs; such fields remain mixed/empty rather than invented metadata.
+Platform-dependent constant values describe the Linux/amd64 generating runtime.
+
+Full inventories exposed prefix ranking and initial-loading issues: lowercase
+str now prioritizes case-matching names before STREAM_* constants exhaust the
+100-result limit, preserving strlen and str_contains. Keyboard/mouse completion
+regressions use actual larger result sets. Full JSON parsing is worker-only,
+lazily triggered by an open PHP document or Settings; empty workspaces do not
+load PHP catalogs. This preserves the idle repaint regression, which initially
+failed when a full catalog was eagerly loaded in an empty workspace.
+
+Verification covers every bundled level, required functions/classes/constants,
+version boundaries for str_contains (8.0), array_is_list (8.1), json_validate (8.3),
+array_find (8.4), array_first (8.5), fn/match/readonly and UnitEnum; user-file
+priority, missing files, invalid JSON/mismatched versions, insertion/caret/Undo,
+keyboard and pointer behavior. Native fmt/Clippy and full test results are below.
+
+Final verification: 134 passed, 0 failed, 4 existing ignored in the full native
+workspace/all-features run outside sandbox. fmt, native Clippy all-targets/
+all-features with -D warnings, workspace release build and git diff --check
+passed. All 11 installed files passed the Rust parser and match their project
+files and manifest checksums. Native macOS binaries were rebuilt via the default
+update-binaries.py command and --check verified their source/payload hashes.
+No Windows build or Windows cache was created. GUI was not rerun for this data/
+loading iteration; completion input, version selection and idle behavior are
+covered by headless egui regressions. runtime_tested=false is retained.

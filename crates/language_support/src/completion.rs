@@ -14,6 +14,18 @@ pub fn prefix(source: &str, caret: usize) -> Range<usize> {
     }
     start..caret
 }
+/// Query before a caret, also retaining explicit PHP static-member scope.
+#[must_use]
+pub fn query(source: &str, caret: usize) -> &str {
+    let mut start = caret;
+    for (i, c) in source[..caret].char_indices().rev() {
+        if !(c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | ':')) {
+            break;
+        }
+        start = i;
+    }
+    &source[start..caret]
+}
 /// Filters and orders suggestions; snippet-only items are excluded because the
 /// editor advertises no snippet support.
 #[must_use]
@@ -47,7 +59,7 @@ pub fn edits(
     source: &str,
     caret: usize,
 ) -> Option<Vec<(Range<usize>, String)>> {
-    let (range, text) = match &item.text_edit {
+    let (range, mut text) = match &item.text_edit {
         Some(CompletionTextEdit::Edit(edit)) => (
             crate::byte_range(source, edit.range)?,
             edit.new_text.clone(),
@@ -63,6 +75,14 @@ pub fn edits(
                 .unwrap_or_else(|| item.label.clone()),
         ),
     };
+    if item
+        .data
+        .as_ref()
+        .is_some_and(|data| data["nozhik_php"] == true)
+        && source[range.clone()].starts_with('\\')
+    {
+        text.insert(0, '\\');
+    }
     let mut edits = vec![(range, text)];
     for edit in item.additional_text_edits.iter().flatten() {
         edits.push((

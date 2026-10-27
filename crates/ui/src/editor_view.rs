@@ -68,6 +68,22 @@ impl TextEditorView {
                 );
             });
             for event in ui.input(|input| input.events.clone()) {
+                if !matches!(
+                    &event,
+                    Event::Text(_)
+                        | Event::Paste(_)
+                        | Event::Copy
+                        | Event::Cut
+                        | Event::Key { pressed: true, .. }
+                ) {
+                    continue;
+                }
+                if let Some(state) = language.as_deref_mut()
+                    && matches!(&event, Event::Key { key: Key::Space, pressed: true, modifiers, .. } if modifiers.ctrl)
+                {
+                    Self::refresh_completion(buffer, state, true);
+                    continue;
+                }
                 if let Some(state) = language.as_deref_mut()
                     && let Event::Key {
                         key, pressed: true, ..
@@ -85,6 +101,7 @@ impl TextEditorView {
                         match key {
                             Key::ArrowDown => {
                                 state.selected = (state.selected + 1) % state.completions.len();
+                                state.completion_scroll = true;
                                 continue;
                             }
                             Key::ArrowUp => {
@@ -92,11 +109,13 @@ impl TextEditorView {
                                     .selected
                                     .checked_sub(1)
                                     .unwrap_or(state.completions.len() - 1);
+                                state.completion_scroll = true;
                                 continue;
                             }
                             Key::Escape => {
                                 state.completions.clear();
                                 state.token = 0;
+                                state.request = None;
                                 continue;
                             }
                             Key::Enter | Key::Tab => {
@@ -129,7 +148,15 @@ impl TextEditorView {
                     }
                     continue;
                 }
-                let trigger = matches!(&event, Event::Text(s) if s.chars().last().is_some_and(|c| c.is_alphanumeric() || matches!(c,'_'|'$'|'>'|':'|'\\')));
+                let trigger = matches!(&event, Event::Text(s) if s.chars().last().is_some_and(|c| c.is_alphanumeric() || matches!(c,'_'|'$'|'>'|':'|'\\')))
+                    || matches!(
+                        &event,
+                        Event::Key {
+                            key: Key::Backspace,
+                            pressed: true,
+                            ..
+                        }
+                    );
                 if let Event::Paste(text) = event {
                     Self::paste(buffer, &text, self.code_style.as_ref())?;
                 } else if matches!(
@@ -149,10 +176,7 @@ impl TextEditorView {
                     state.request = None;
                     state.request_at = Some(std::time::Instant::now());
                     if trigger {
-                        state.request = Some((
-                            nozhik_language_support::RequestKind::Completion,
-                            buffer.cursors().as_slice()[0].head.byte_offset,
-                        ));
+                        Self::refresh_completion(buffer, state, false);
                     }
                 }
             }
@@ -420,24 +444,11 @@ impl TextEditorView {
                 && !state.completions.is_empty()
                 && let Some(origin) = popup_origin
             {
-                let mut accept = None;
-                egui::Area::new(id.with("completion")).order(egui::Order::Foreground).fixed_pos(origin).show(ui.ctx(),|ui| {
-                    egui::Frame::popup(ui.style()).show(ui,|ui| {
-                        ui.set_max_width(650.0);
-                        egui::ScrollArea::vertical().max_height(230.0).show(ui,|ui| {
-                            for (i,item) in state.completions.iter().enumerate() {
-                                let icon = match item.kind { Some(nozhik_language_support::lsp_types::CompletionItemKind::METHOD | nozhik_language_support::lsp_types::CompletionItemKind::FUNCTION) => "ƒ", Some(nozhik_language_support::lsp_types::CompletionItemKind::CLASS) => "C", Some(nozhik_language_support::lsp_types::CompletionItemKind::PROPERTY) => "P", _ => "K" };
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(i==state.selected,format!("{icon}  {}",item.label)).clicked() { accept = Some(i); }
-                                    ui.weak(item.detail.as_deref().unwrap_or(""));
-                                });
-                            }
-                        });
-                    });
-                });
-                if let Some(i) = accept {
-                    state.selected = i;
+                if Self::completion_popup(ui, id, origin, state) {
                     Self::accept_completion(buffer, state)?;
+                    response.request_focus();
+                } else if ui.input(|i| i.pointer.any_pressed()) && !state.completions.is_empty() {
+                    // A popup click selects without applying and keeps keyboard input in the editor.
                     response.request_focus();
                 }
             }
@@ -594,6 +605,244 @@ impl TextEditorView {
         })
     }
 
+    fn refresh_completion(
+        buffer: &TextBuffer,
+        state: &mut crate::language::EditorLanguage,
+        explicit: bool,
+    ) {
+        let head = buffer.cursors().as_slice()[0].head;
+        let line = buffer.rope().line(head.line as usize).to_string();
+        let local = head.byte_offset - buffer.rope().line_to_byte(head.line as usize);
+        let query = nozhik_language_support::completion::query(&line, local);
+        state.token = 0;
+        state.selected = 0;
+        state.completion_scroll = true;
+        state.completion_caret = head.byte_offset;
+        state.completion_prefix = query.into();
+        state.completions = if explicit || !query.is_empty() {
+            state
+                .stubs
+                .as_ref()
+                .map_or_else(Vec::new, |stubs| stubs.search(query))
+        } else {
+            Vec::new()
+        };
+        if explicit || !query.is_empty() {
+            state.request_at = if explicit {
+                None
+            } else {
+                Some(std::time::Instant::now())
+            };
+            state.request = Some((
+                nozhik_language_support::RequestKind::Completion,
+                head.byte_offset,
+            ));
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One bounded popup pass owns row geometry, painting and interaction"
+    )]
+    fn completion_popup(
+        ui: &Ui,
+        id: egui::Id,
+        origin: egui::Pos2,
+        state: &mut crate::language::EditorLanguage,
+    ) -> bool {
+        use nozhik_language_support::lsp_types::CompletionItemKind as Kind;
+        let screen = ui.ctx().screen_rect();
+        let width = 500.0_f32.min((screen.width() - 16.0).max(0.0));
+        let height = state
+            .completions
+            .iter()
+            .take(9)
+            .fold(12.0, |height, _| height + 28.0);
+        let origin = egui::pos2(
+            origin
+                .x
+                .min(screen.right() - width - 8.0)
+                .max(screen.left() + 8.0),
+            if origin.y + height > screen.bottom() {
+                (origin.y - height - 24.0).max(screen.top() + 8.0)
+            } else {
+                origin.y
+            },
+        );
+        let mut accept = false;
+        let area = egui::Area::new(id.with("completion"))
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .fixed_pos(origin)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(43, 45, 48))
+                    .stroke(Stroke::new(1.0_f32, egui::Color32::from_rgb(57, 59, 64)))
+                    .corner_radius(7)
+                    .inner_margin(5)
+                    .show(ui, |ui| {
+                        ui.set_width((width - 10.0).max(0.0));
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        egui::ScrollArea::vertical()
+                            .id_salt("completion_rows")
+                            .max_height((screen.height() - 36.0).clamp(28.0, 252.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (i, item) in state.completions.iter().enumerate() {
+                                    let (rect, row) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 28.0),
+                                        Sense::click(),
+                                    );
+                                    if row.hovered()
+                                        && ui.input(|input| {
+                                            input.pointer.delta() != egui::Vec2::ZERO
+                                        })
+                                    {
+                                        state.selected = i;
+                                    }
+                                    if row.clicked() {
+                                        state.selected = i;
+                                    }
+                                    if row.double_clicked() {
+                                        accept = true;
+                                    }
+                                    if i == state.selected {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            4,
+                                            egui::Color32::from_rgb(46, 67, 110),
+                                        );
+                                        if state.completion_scroll {
+                                            row.scroll_to_me(Some(egui::Align::Center));
+                                        }
+                                    }
+                                    let (icon, color) = match item.kind {
+                                        Some(Kind::FUNCTION | Kind::METHOD) => {
+                                            ("fx", egui::Color32::from_rgb(194, 116, 139))
+                                        }
+                                        Some(Kind::CLASS) => {
+                                            ("C", egui::Color32::from_rgb(87, 147, 255))
+                                        }
+                                        Some(Kind::INTERFACE) => {
+                                            ("I", egui::Color32::from_rgb(71, 186, 190))
+                                        }
+                                        Some(Kind::CONSTANT) => {
+                                            ("c", egui::Color32::from_rgb(220, 171, 89))
+                                        }
+                                        _ => ("k", egui::Color32::from_rgb(220, 171, 89)),
+                                    };
+                                    let center = egui::pos2(rect.left() + 14.0, rect.center().y);
+                                    ui.painter().circle_filled(center, 9.0, color);
+                                    ui.painter().text(
+                                        center,
+                                        egui::Align2::CENTER_CENTER,
+                                        icon,
+                                        FontId::proportional(11.0),
+                                        egui::Color32::from_rgb(43, 45, 48),
+                                    );
+                                    let details = item.label_details.as_ref();
+                                    let result_type = details
+                                        .and_then(|d| d.description.as_deref())
+                                        .unwrap_or("");
+                                    let font = FontId::monospace(13.0);
+                                    let muted = egui::Color32::from_rgb(130, 133, 139);
+                                    let right = ui.painter().layout_no_wrap(
+                                        result_type.into(),
+                                        font.clone(),
+                                        muted,
+                                    );
+                                    let right_width = right.size().x.min(rect.width() * 0.35);
+                                    let right_x = rect.right() - right_width - 8.0;
+                                    let right_clip = egui::Rect::from_min_max(
+                                        egui::pos2(right_x, rect.top()),
+                                        rect.right_bottom(),
+                                    );
+                                    ui.painter()
+                                        .with_clip_rect(ui.clip_rect().intersect(right_clip))
+                                        .galley(
+                                            egui::pos2(
+                                                right_x,
+                                                rect.center().y - right.size().y / 2.0,
+                                            ),
+                                            right,
+                                            muted,
+                                        );
+                                    let mut job = egui::text::LayoutJob::default();
+                                    // The active query is stored independently of LSP filterText and display metadata.
+                                    let prefix = state
+                                        .completion_prefix
+                                        .trim_start_matches('\\')
+                                        .rsplit("::")
+                                        .next()
+                                        .unwrap_or("");
+                                    let split = prefix.len().min(item.label.len());
+                                    let split = if item.label.is_char_boundary(split)
+                                        && item.label[..split].eq_ignore_ascii_case(prefix)
+                                    {
+                                        split
+                                    } else {
+                                        0
+                                    };
+                                    job.append(
+                                        &item.label[..split],
+                                        0.0,
+                                        egui::TextFormat::simple(
+                                            font.clone(),
+                                            egui::Color32::from_rgb(88, 157, 246),
+                                        ),
+                                    );
+                                    job.append(
+                                        &item.label[split..],
+                                        0.0,
+                                        egui::TextFormat::simple(font.clone(), theme::TEXT),
+                                    );
+                                    job.append(
+                                        details
+                                            .and_then(|d| d.detail.as_deref())
+                                            .or(item.detail.as_deref())
+                                            .unwrap_or(""),
+                                        0.0,
+                                        egui::TextFormat::simple(font, muted),
+                                    );
+                                    job.wrap.max_width = (right_x - rect.left() - 38.0).max(0.0);
+                                    job.wrap.max_rows = 1;
+                                    job.wrap.break_anywhere = true;
+                                    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                    ui.painter().galley(
+                                        egui::pos2(
+                                            rect.left() + 29.0,
+                                            rect.center().y - galley.size().y / 2.0,
+                                        ),
+                                        galley,
+                                        theme::TEXT,
+                                    );
+                                    if let Some(
+                                        nozhik_language_support::lsp_types::Documentation::String(
+                                            doc,
+                                        ),
+                                    ) = &item.documentation
+                                        && !doc.is_empty()
+                                    {
+                                        row.on_hover_text(doc);
+                                    }
+                                }
+                            });
+                    });
+            });
+        state.completion_scroll = false;
+        if ui.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !area.response.rect.contains(p))
+        }) {
+            state.completions.clear();
+            state.token = 0;
+            state.request = None;
+        }
+        accept
+    }
+
     fn accept_completion(
         buffer: &mut TextBuffer,
         state: &mut crate::language::EditorLanguage,
@@ -607,6 +856,17 @@ impl TextEditorView {
                 && let Some(edits) =
                     nozhik_language_support::completion::edits(item, &source, caret)
             {
+                let local_caret = item
+                    .data
+                    .as_ref()
+                    .filter(|data| data["nozhik_php"] == true)
+                    .and_then(|data| data["caret"].as_u64())
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .and_then(|offset| {
+                        edits.first().map(|(range, text)| {
+                            range.start + offset + usize::from(text.starts_with('\\'))
+                        })
+                    });
                 buffer.apply_transaction(EditTransaction {
                     edits: edits
                         .into_iter()
@@ -614,8 +874,13 @@ impl TextEditorView {
                         .collect(),
                     group: None,
                 })?;
+                if let Some(byte) = local_caret {
+                    let head = buffer.position_at(byte)?;
+                    buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+                }
             }
         }
+        state.request = None;
         state.completions.clear();
         state.token = 0;
         Ok(())
@@ -1253,6 +1518,243 @@ mod tests {
         assert_eq!(buffer.rope().to_string(), original);
         TextEditorView::paste(&mut buffer, "  raw\n text", None)?;
         assert_eq!(buffer.rope().to_string(), format!("{original}  raw\n text"));
+        Ok(())
+    }
+
+    fn completion_frame(
+        ctx: &egui::Context,
+        editor: &mut TextEditorView,
+        buffer: &mut TextBuffer,
+        language: &mut crate::language::EditorLanguage,
+        events: Vec<Event>,
+        time: f64,
+    ) -> Result<egui::FullOutput, BufferError> {
+        let mut result = Ok(());
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.memory_mut(|m| {
+                        m.request_focus(ui.id().with(("editor", buffer.snapshot().buffer_id)));
+                    });
+                    result = editor.show_language(ui, buffer, 14.0, 4, true, Some(language));
+                });
+            },
+        );
+        result?;
+        Ok(output)
+    }
+    fn completion_key(key: Key, ctrl: bool) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl,
+                ..Default::default()
+            },
+        }
+    }
+    #[test]
+    fn offline_typing_navigation_accept_and_escape() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let mut buffer = TextBuffer::load_from_str(BufferId(92), "");
+        let mut state = crate::language::EditorLanguage {
+            stubs: Some(std::sync::Arc::new(
+                nozhik_language_support::php_stubs::PhpVersionStubs::builtin()?,
+            )),
+            ..Default::default()
+        };
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text("p".into())],
+            0.0,
+        )?;
+        assert_ne!(state.completions, []);
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text("r".into())],
+            0.1,
+        )?;
+        assert_eq!(buffer.rope().to_string(), "pr");
+        assert!(state.completions.iter().any(|s| s.label == "print_r"));
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::ArrowUp, false)],
+            0.2,
+        )?;
+        assert_eq!(state.selected, state.completions.len() - 1);
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::ArrowDown, false)],
+            0.3,
+        )?;
+        assert_eq!(state.selected, 0);
+        let index = state
+            .completions
+            .iter()
+            .position(|s| s.label == "print_r")
+            .ok_or("print_r")?;
+        let mut events: Vec<_> = (0..index)
+            .map(|_| completion_key(Key::ArrowDown, false))
+            .collect();
+        events.push(completion_key(Key::Tab, false));
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, events, 0.4)?;
+        assert_eq!(buffer.rope().to_string(), "print_r()");
+        assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, 8);
+        assert_eq!(state.completions, []);
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), "pr");
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::Space, true)],
+            0.5,
+        )?;
+        assert_ne!(state.completions, []);
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::Escape, false)],
+            0.6,
+        )?;
+        assert_eq!(state.completions, []);
+        assert!(state.request.is_none());
+        assert_eq!(state.token, 0);
+        assert_eq!(buffer.rope().to_string(), "pr");
+        Ok(())
+    }
+    #[test]
+    fn offline_constants_namespaces_and_members_insert_correctly()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let stubs =
+            std::sync::Arc::new(nozhik_language_support::php_stubs::PhpVersionStubs::builtin()?);
+        for (source, name, expected, caret) in [
+            ("PHP_V", "PHP_VERSION", "PHP_VERSION", 11),
+            ("\\strl", "strlen", "\\strlen()", 8),
+            ("DateTime::fo", "format", "DateTime::format()", 17),
+        ] {
+            let mut buffer = TextBuffer::load_from_str(BufferId(94), source);
+            let head = buffer.position_at(source.len())?;
+            buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+            let mut state = crate::language::EditorLanguage {
+                stubs: Some(stubs.clone()),
+                ..Default::default()
+            };
+            TextEditorView::refresh_completion(&buffer, &mut state, true);
+            state.selected = state
+                .completions
+                .iter()
+                .position(|s| s.label == name)
+                .ok_or("missing symbol")?;
+            TextEditorView::accept_completion(&mut buffer, &mut state)?;
+            assert_eq!(buffer.rope().to_string(), expected);
+            assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, caret);
+            buffer.undo()?;
+            assert_eq!(buffer.rope().to_string(), source);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn offline_popup_pointer_select_accept_and_dismiss() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let mut buffer = TextBuffer::load_from_str(BufferId(93), "");
+        let mut state = crate::language::EditorLanguage {
+            stubs: Some(std::sync::Arc::new(
+                nozhik_language_support::php_stubs::PhpVersionStubs::builtin()?,
+            )),
+            ..Default::default()
+        };
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text("pri".into())],
+            0.0,
+        )?;
+        let output = completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.1)?;
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text.starts_with("printf(") => {
+                    Some(text.pos + egui::vec2(10.0, 7.0))
+                }
+                _ => None,
+            })
+            .ok_or("printf row was painted")?;
+        for (time, down) in [(1.0, true), (1.1, false)] {
+            completion_frame(
+                &ctx,
+                &mut editor,
+                &mut buffer,
+                &mut state,
+                pointer(pos, down, egui::Modifiers::NONE),
+                time,
+            )?;
+        }
+        assert_eq!(buffer.rope().to_string(), "pri", "one click only selects");
+        assert_eq!(state.completions[state.selected].label, "printf");
+        for (time, down) in [(1.2, true), (1.3, false)] {
+            completion_frame(
+                &ctx,
+                &mut editor,
+                &mut buffer,
+                &mut state,
+                pointer(pos, down, egui::Modifiers::NONE),
+                time,
+            )?;
+        }
+        assert_eq!(buffer.rope().to_string(), "printf()");
+        assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, 7);
+        buffer.undo()?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::Space, true)],
+            2.0,
+        )?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            pointer(egui::pos2(700.0, 400.0), true, egui::Modifiers::NONE),
+            3.0,
+        )?;
+        assert_eq!(state.completions, []);
+        assert!(state.request.is_none());
         Ok(())
     }
 

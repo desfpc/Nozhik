@@ -14,6 +14,7 @@ pub struct EditorLanguage {
     pub syntax_theme: String,
     pub completions: Vec<CompletionItem>,
     pub selected: usize,
+    pub completion_scroll: bool,
     pub hover: Option<String>,
     pub request: Option<(RequestKind, usize)>,
     pub request_at: Option<std::time::Instant>,
@@ -22,6 +23,8 @@ pub struct EditorLanguage {
     pub definition_token: u64,
     pub hover_byte: Option<usize>,
     pub completion_caret: usize,
+    pub completion_prefix: String,
+    pub stubs: Option<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>,
 }
 #[derive(Default)]
 pub struct LanguageUi {
@@ -147,6 +150,7 @@ impl crate::NozhikUi {
                 .views
                 .entry(document.path.clone())
                 .or_default();
+            view.stubs.clone_from(&self.settings_dialog.php_stubs);
             if view.revision != snapshot.revision {
                 view.revision = snapshot.revision;
                 view.spans.clear();
@@ -313,10 +317,22 @@ impl crate::NozhikUi {
                             if caret != view.completion_caret {
                                 continue;
                             }
-                            view.completions = nozhik_language_support::completion::filter(
-                                items,
-                                &text[nozhik_language_support::completion::prefix(&text, caret)],
-                            );
+                            let query = nozhik_language_support::completion::query(&text, caret);
+                            let prefix =
+                                &text[nozhik_language_support::completion::prefix(&text, caret)];
+                            let mut items =
+                                nozhik_language_support::completion::filter(items, prefix);
+                            if let Some(stubs) = &view.stubs {
+                                for item in stubs.search(query) {
+                                    if !items
+                                        .iter()
+                                        .any(|other| other.label.eq_ignore_ascii_case(&item.label))
+                                    {
+                                        items.push(item);
+                                    }
+                                }
+                            }
+                            view.completions = items;
                             view.selected = 0;
                         }
                         Response::Hover(hover) if token == view.hover_token => {

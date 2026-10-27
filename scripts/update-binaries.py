@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build local binaries, or verify their source and payload SHA-256 hashes."""
+"""Build/check the host platform by default; cross-builds require --target."""
 
 import argparse
 import hashlib
@@ -208,22 +208,38 @@ def check(platform):
     print(f"Current: binaries/{platform} (sources and binary checksums verified)")
 
 
+def host_target():
+    """Read the native Rust target without building any platform."""
+    rustc = run("rustc", "-vV", stdout=subprocess.PIPE, text=True).stdout
+    return next(line.removeprefix("host: ") for line in rustc.splitlines() if line.startswith("host: "))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=sorted(TARGETS), help="Rust target to build")
     parser.add_argument("--check", action="store_true", help="Verify freshness without compiling")
-    parser.add_argument("--platform", choices=sorted(PLATFORMS), help="Check just one platform")
+    platforms = parser.add_mutually_exclusive_group()
+    platforms.add_argument("--platform", choices=sorted(PLATFORMS), help="Check an explicit platform")
+    platforms.add_argument("--all-platforms", action="store_true", help="Check all platforms (requires --check)")
     args = parser.parse_args()
     if args.check:
-        for platform in sorted([args.platform] if args.platform else PLATFORMS):
+        if args.target:
+            parser.error("--target cannot be combined with --check; use --platform")
+        if args.all_platforms:
+            selected = PLATFORMS
+        elif args.platform:
+            selected = [args.platform]
+        else:
+            target = host_target()
+            if target not in TARGETS:
+                parser.error("This host needs --check --platform or --check --all-platforms")
+            selected = [TARGETS[target][0]]
+        for platform in sorted(selected):
             check(platform)
     else:
-        if args.platform:
-            parser.error("--platform requires --check")
-        target = args.target
-        if not target:
-            rustc = run("rustc", "-vV", stdout=subprocess.PIPE, text=True).stdout
-            target = next(line.removeprefix("host: ") for line in rustc.splitlines() if line.startswith("host: "))
+        if args.platform or args.all_platforms:
+            parser.error("--platform and --all-platforms require --check")
+        target = args.target or host_target()
         if target not in TARGETS:
             parser.error("This host needs an explicit supported --target")
         build(target)

@@ -3,6 +3,7 @@ pub mod completion;
 pub mod formatting;
 pub mod highlighter;
 pub mod lsp;
+pub mod php_stubs;
 pub mod structural;
 pub use lsp_types;
 use lsp_types::{

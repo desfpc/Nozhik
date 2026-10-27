@@ -3033,6 +3033,7 @@ dependencies = [
  "lsp-types",
  "nozhik-config",
  "ropey",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

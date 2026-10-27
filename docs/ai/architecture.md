@@ -484,8 +484,12 @@ egui Painter, без Unicode-глифов, внешних шрифтов или 
 Палитра различает тёмные tool windows, редактор и внешнюю оболочку.
 
 `binaries/` целиком исключён из Git. `scripts/update-binaries.py` сохраняет
-локальные release builds, bundle и metadata прежним способом; после доработок
-обновляются macOS ARM64 и Windows x64, затем выполняется `--check`.
+локальные release builds, bundle и metadata. После доработок по умолчанию
+обновляется только текущая платформа; `--check` также проверяет только её.
+Windows cross-build на Mac выполняется лишь по явному запросу пользователя через
+`--target x86_64-pc-windows-gnu`; `--check --platform windows-x64` проверяет этот
+комплект, `--check --all-platforms` — оба. Windows-кэш можно удалить через
+`rm -rf target/x86_64-pc-windows-gnu`, сохранив binaries/windows-x64.
 CI binaries.yml публикует только artifacts с ограниченным сроком хранения,
 без записи в репозиторий. Новых функций интерфейса не добавлено.
 
@@ -582,3 +586,60 @@ and markup bytes are unchanged. A server result that rewrites a payload falls ba
 to local formatting of the original snapshot. The caller still applies one revision-
 guarded transaction. The supplied php82-smoke.php is a data-only regression fixture;
 its PHP code is parsed/formatted, never executed by the Rust test suite.
+
+## Offline PHP catalog and completion (2026-10-27)
+
+`language_support::php_stubs` owns schema v1: `PhpVersionStubs` contains typed
+`PhpSymbolKind` entities and `PhpParameter` declarations. Classes/interfaces own
+public methods and constants; function/method snippets support one `${0}` caret
+marker. serde is now an explicit language_support dependency. The embedded
+`data/php_<version>.json` contains the generated runtime inventory for each of
+11 supported levels, 7.0–7.4 / 8.0–8.5. All are embedded with include_str; 8.5
+remains the default. catalog-manifest.json records exact patch versions, image
+IDs/digests, extensions, entity/member counts and source/output SHA-256 hashes.
+Coverage is the official CLI Alpine image's loaded extensions, not every optional
+PHP extension. Values of platform-specific constants describe Linux/amd64.
+
+Config.php_language_level defaults to 8.5 and accepts 7.0–7.4 / 8.0–8.5. The
+Settings worker loads `~/.nozhik/languages/php/versions/php_<level>.json` when PHP
+is first needed (an open PHP document or Settings), and on level changes. Full
+catalog parsing runs only on the worker, including the initial bundled inventory;
+an empty workspace does not load PHP catalogs or schedule polling for them. Only NotFound uses the bundled catalog of the same requested
+level; malformed/mismatched user catalogs report an error and retain the previous
+catalog. Replies carry the requested
+level so stale loads cannot replace the latest selection. No filesystem I/O runs
+in the popup render pass. The UI shares immutable catalogs via Arc.
+
+Identifier input searches the current line prefix immediately; Ctrl+Space also
+allows an empty prefix. Global functions/types/constants/keywords and explicit
+`Class::member` names are supported. Instance type inference and user-code symbol
+indexing remain LSP responsibilities. LSP responses add project suggestions and
+are merged with offline matches by label; revision/caret/token gates still apply.
+Esc, outside clicks and completion acceptance cancel pending requests. Offline
+insertion replaces the UTF-8 prefix in one buffer transaction, preserves a leading
+namespace separator and positions the caret at `${0}`. LSP snippets remain disabled.
+
+The Foreground egui Area uses a 500 px surface (clamped to narrow viewports),
+9 visible 28 px rows, vertical scrolling, colored round icons, accented prefixes,
+clipped signatures and right-aligned types. Hover and single click select; double
+click/Enter/Tab apply. Keyboard selection scrolls the active row into view.
+
+`scripts/generate_php_stubs.php` supports PHP 7.0+ Reflection, including parameter
+flags/defaults, tentative return types when available, public class/interface
+members and all loaded extension constants. The generating runtime/image and its
+extensions determine coverage. It never invokes discovered functions/methods.
+Output uses a temporary sibling file and rename; the Rust `validate_php_stubs`
+example validates a generated catalog before installation. Docker is only a
+manual generation path; the IDE neither installs nor launches containers.
+
+`scripts/generate-php-catalogs.py` regenerates all levels sequentially, using one
+Docker container at a time. Successful containers use --rm; failure cleanup is
+limited to the uniquely named container created by that invocation. Newly pulled
+image tags/unused layers are removed after each version by default; pre-existing
+images and unrelated containers/volumes/caches are preserved. No global prune is
+used. Per-version provenance is saved only after schema/coverage/version checks.
+
+Offline completion ranks case-matching names before other case-insensitive
+matches, so lowercase `str` includes strlen/str_contains before the many STREAM_*
+constants exhaust the 100-item limit. Uppercase constant queries retain priority
+for uppercase names. LSP sortText semantics are unchanged.

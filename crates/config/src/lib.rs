@@ -28,6 +28,8 @@ pub struct Config {
     pub theme: String,
     /// Editor font family: monospace or proportional.
     pub editor_font: String,
+    /// Global PHP major.minor language level for offline completion.
+    pub php_language_level: String,
     /// Per-extension profile and syntax palette selections.
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
 }
@@ -39,6 +41,7 @@ impl Default for Config {
             font_size: 14,
             theme: "dark".into(),
             editor_font: "monospace".into(),
+            php_language_level: "8.5".into(),
             file_types: std::collections::BTreeMap::new(),
         }
     }
@@ -65,6 +68,12 @@ impl Config {
             .any(|s| !matches!(s.syntax_theme.as_str(), "default" | "muted" | "plain"))
         {
             return Err(ConfigError::Invalid("unsupported syntax theme"));
+        }
+        if !matches!(
+            self.php_language_level.as_str(),
+            "7.0" | "7.1" | "7.2" | "7.3" | "7.4" | "8.0" | "8.1" | "8.2" | "8.3" | "8.4" | "8.5"
+        ) {
+            return Err(ConfigError::Invalid("unsupported PHP language level"));
         }
         if self.theme.trim().is_empty() {
             return Err(ConfigError::Invalid("theme must not be empty"));
@@ -262,6 +271,7 @@ mod tests {
             manager.save()?;
             let changed = Config {
                 tab_width: 2,
+                php_language_level: "8.2".into(),
                 ..Config::default()
             };
             manager.replace(changed.clone())?;
@@ -271,6 +281,7 @@ mod tests {
         }
         let partial: Config = toml::from_str("tab_width = 2")?;
         assert_eq!(partial.font_size, Config::default().font_size);
+        assert_eq!(partial.php_language_level, "8.5");
         let partial_json: Config = serde_json::from_str(r#"{"tab_width":2}"#)?;
         assert_eq!(partial_json, partial);
         Ok(())
@@ -297,7 +308,13 @@ mod tests {
             ..changed.clone()
         };
         assert!(manager.replace(invalid).is_err());
-        for source in ["[broken", "tab_width = 0", "typo = true"] {
+        for source in [
+            "[broken",
+            "tab_width = 0",
+            "typo = true",
+            "php_language_level = '9.0'",
+            "php_language_level = '../../bad'",
+        ] {
             fs::write(&path, source)?;
             assert!(manager.reload().is_err());
             assert_eq!(manager.snapshot()?, changed);

@@ -18,19 +18,33 @@ task runner ещё не реализованы.
 
 ## Локальные бинарники
 
-`binaries/` исключён из Git. После каждой доработки обновляйте локальные
-сборки и проверяйте их соответствие исходникам:
+`binaries/` исключён из Git. По умолчанию обновляются и проверяются только
+бинарники текущей платформы (на этом Mac — macOS ARM64):
 
 ```sh
-python3 scripts/update-binaries.py --target aarch64-apple-darwin
-python3 scripts/update-binaries.py --target x86_64-pc-windows-gnu
+python3 scripts/update-binaries.py
 python3 scripts/update-binaries.py --check
 ```
 
+Windows x64 собирается локально только по необходимости:
+
+```sh
+python3 scripts/update-binaries.py --target x86_64-pc-windows-gnu
+python3 scripts/update-binaries.py --check --platform windows-x64
+# Освободить Windows-кэш после сборки:
+rm -rf target/x86_64-pc-windows-gnu
+```
+
+Для cross-build нужны MinGW-w64 и Rust target `x86_64-pc-windows-gnu`.
+На Windows доступен `--target x86_64-pc-windows-msvc`.
+`--check --all-platforms` явно проверяет оба комплекта; Windows-бинарник
+между сборками по запросу может отставать от исходников.
+
 macOS: `binaries/macos-arm64/nozhik` и `Nozhik.app.zip` для Finder/Dock.
-Windows: `binaries/windows-x64/nozhik.exe`. CI сохраняет сборки как временные
-artifacts и не коммитит их в репозиторий. Скрипт проверяет SHA-256 исходников
-и готовых файлов; успешная сборка не заменяет тесты и линтинг.
+Windows: `binaries/windows-x64/nozhik.exe`. Очистка target сохраняет эти файлы.
+CI по-прежнему собирает обе платформы на GitHub и сохраняет временные artifacts.
+Скрипт проверяет SHA-256 исходников и готовых файлов; успешная сборка не заменяет
+тесты и линтинг.
 
 ## Сборка и запуск
 
@@ -399,7 +413,7 @@ didOpen/didChange/didClose и shutdown/exit. didChange объединяется 
 рендеринг и Tree-sitter. При выходе cleanup ограничен по времени, затем процесс
 принудительно завершается. LSP-сервер работает с правами пользователя.
 
-Текущий объём — LSP client core: snippets/resolve, code actions, rename/refactoring,
+Текущий объём LSP — client core: серверные snippets/resolve, code actions, rename/refactoring,
 semantic tokens, диагностика закрытых файлов, пользовательские LSP settings и
 автоматический restart после падения пока отсутствуют. PHP contribution встроен
 и не управляется переключателем executable-плагинов в Settings. Локальная библиотека
@@ -703,3 +717,60 @@ PHP-фрагменты без открывающего тега; выбранн�
 одним Undo; без профиля Enter вставляет только окончание строки. Reformat Code
 дополнительно проверяет структурные отступы после непустого ответа PHP LSP:
 частичные правки сервера не оставляют `print('test');` на нулевой колонке внутри if.
+
+## Офлайн-справочник PHP
+
+Подсказки стандартной библиотеки работают без PHP и LSP. Встроены 11 каталогов
+PHP 7.0–7.4 и 8.0–8.5, сформированных Reflection из официальных CLI-образов PHP.
+Каждый содержит примерно 2 700–3 400 функций, классов, интерфейсов, глобальных
+констант и ключевых слов плюс методы и константы классов. Файлы находятся в
+`crates/language_support/data/php_<version>.json`; `catalog-manifest.json`
+фиксирует patch-версию PHP, digest образа, расширения, счётчики и SHA-256.
+Объём всех JSON — около 31 МиБ.
+Глобальный **PHP Language Level**: Settings → File Types & Code Styles → PHP
+(также PHTML), версии 7.0–7.4 и 8.0–8.5, по умолчанию 8.5. Выбор сохраняется.
+Каталог версий: `~/.nozhik/languages/php/versions/php_<version>.json`.
+Пользовательский JSON имеет приоритет; при его отсутствии IDE использует
+встроенный каталог того же уровня. Поле Offline catalog показывает фактически
+загруженную версию. Повреждённый пользовательский файл сообщает ошибку и сохраняет
+предыдущую базу. Устанавливать Docker или PHP для подсказок не нужно.
+
+Попап открывается с первого символа или по **Ctrl+Space**. Up/Down перемещают
+выбор, наведение и одиночный клик выбирают строку, Enter/Tab или двойной клик
+вставляют вариант. Функции получают `()` с кареткой внутри; Esc/клик снаружи
+закрывают список. Поиск поддерживает глобальные имена и явный `Class::member`.
+LSP добавляет проектные символы; определение типа экземпляра остаётся за LSP.
+
+Повторная генерация всех встроенных версий (последовательно, один контейнер за раз):
+
+```sh
+python3 scripts/generate-php-catalogs.py
+# Можно обновить только одну версию:
+python3 scripts/generate-php-catalogs.py --version 8.5
+```
+
+Скрипт использует `php:<version>-cli-alpine` для Linux/amd64, удаляет каждый
+контейнер перед следующей версией и по умолчанию удаляет скачанные им образы.
+Предсуществовавшие образы сохраняются. Общая очистка Docker не выполняется.
+Точный Docker executable можно передать через `--docker`; `--keep-images`
+сохраняет скачанные образы. Каталоги содержат сущности всех расширений, включённых
+в эти образы. Опциональные расширения, например intl/gd/mysqli, требуют генерации
+из своего PHP-окружения с установленными расширениями:
+
+```sh
+php scripts/generate_php_stubs.php --output=php_8.5.json
+# Или из выбранного Docker-образа; для полного набора расширений используйте свой образ:
+docker run --rm -v "$PWD:/work" -w /work php:8.5-cli \
+  php scripts/generate_php_stubs.php --output=php_8.5.json
+cargo run -p nozhik-language-support --example validate_php_stubs -- php_8.5.json
+mkdir -p ~/.nozhik/languages/php/versions
+cp php_8.5.json ~/.nozhik/languages/php/versions/
+```
+
+После установки базы перезапустите IDE либо переключите уровень на другой и
+обратно. Скрипт совместим с PHP 7.0+ и не запускает найденные функции/методы.
+Reflection обычно не предоставляет краткую документацию встроенных сущностей;
+такие поля остаются пустыми. Типы, отсутствующие в старом runtime, записываются
+как mixed. Для PHP 8.1+ учитываются также
+[tentative return types](https://www.php.net/manual/en/reflectionfunctionabstract.gettentativereturntype.php).
+Значения платформенных констант полной базы соответствуют ОС контейнера.

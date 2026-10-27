@@ -78,7 +78,9 @@ impl NozhikUi {
         }
     }
     pub(crate) const fn global_modal(&self) -> bool {
-        self.integration.close.is_some()
+        self.language.usages.is_some()
+            || self.language.invalidate_dialog
+            || self.integration.close.is_some()
             || self.integration.path_action.is_some()
             || self.search.open
             || self.settings_open
@@ -244,6 +246,14 @@ impl NozhikUi {
                 action if action.starts_with("ui.open_project:") => {
                     if let Some(path) = action.strip_prefix("ui.open_project:") {
                         self.open_project(PathBuf::from(path));
+                    }
+                }
+                "file.invalidate_caches" => self.language.invalidate_dialog = true,
+                "code.find_usages" => {
+                    if let Some(d) = self.active.and_then(|i| self.documents.get(i))
+                        && let Some(v) = self.language.views.get_mut(&d.path)
+                    {
+                        v.usages_byte = Some(d.buffer.cursors().as_slice()[0].head.byte_offset);
                     }
                 }
                 "ui.save_all" => self.save_all(),

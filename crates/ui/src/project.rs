@@ -122,6 +122,7 @@ impl NozhikUi {
                     {
                         document.buffer.mark_saved();
                     }
+                    self.index_changed(path.clone());
                     self.status = format!("Saved {}", path.display());
                     self.vcs.invalidate();
                 }

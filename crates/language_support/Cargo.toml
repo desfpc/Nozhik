@@ -14,9 +14,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ropey.workspace = true
+ignore.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

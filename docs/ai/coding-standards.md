@@ -121,3 +121,12 @@ cargo build --workspace --release
 - Generation/debounce and model downloads must remain cancellable and off the
   UI thread. No implicit model download or polling repaint. Service launch is authorized
   when AI is enabled; only owned child processes may be terminated.
+
+### Project symbols
+
+language_support may use ignore for worker-only project traversal and tempfile
+for atomic cache replacement. A file edit/save must never reparse other project
+files. Retain parsed reference candidates for relinking; update usage counters
+only for affected identities. Keep unsaved overlay facts out of persistent caches.
+UI receives immutable index snapshots with source revision gates; symbol/cache I/O
+and Tree-sitter extraction belong exclusively to the index worker.

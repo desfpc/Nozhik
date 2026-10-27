@@ -1478,3 +1478,103 @@ Windows/Linux were not run.
 Workspace release build passed. The default update-binaries.py rebuilt macOS
 ARM64 executable/app archive and --check verified source/payload hashes.
 No Windows build or Windows target cache was created.
+
+### Differential project symbol index and PHP semantic UI (2026-10-27)
+
+Added language_support triggers.rs, symbol_index.rs, project_indexer.rs,
+type_inference.rs and internal Tree-sitter php_symbols extractor. The index owns
+per-file declarations and reverse symbol references, plus candidate dependencies
+for relinking when declarations appear/disappear without reparsing callers.
+File replacement/deletion removes old edges and recomputes touched usage counts.
+Disk JSON cache contains only disk facts; revision-bound buffer overlays stay in
+memory. Startup reconciles mtime/size; watcher/save updates paths, watcher lag
+reconciles metadata. Worker I/O/parsing/cache operations never run in editor frames.
+
+File menu and ActionRegistry expose file.invalidate_caches, with an actual
+confirmation modal, physical directory deletion and background rebuild/progress.
+PHP completion uses declarative triggers, lexical variables/parameters, direct
+new assignments and namespace/simple aliases; filters instance/static members and
+visibility, ranks project results ahead of the bundled catalog. Ctrl/Cmd hover and
+click/F12 navigate to local source; usages have code lenses, Alt+F7/menu, dark
+four-column rows, filter/grouping, keyboard and mouse navigation and a separate
+viewport button. Method/property/private-constant names with zero static references
+are gray with a tooltip. Dynamic calls/Reflection/framework entry points are not
+modelled. Inheritance/traits, chained return types, grouped imports and full PHP
+flow typing remain outside this bounded resolver; Go/JS/TS partitions have no
+extractor yet. Existing LSP remains available for unresolved definitions/hover.
+
+Behavioral tests cover exactly one parse after changing one of 50 files; zero
+parses on unchanged cache restart; cache invalidation/rebuild/deletion; unsaved
+cache exclusion; references arriving before declarations, repeated calls, reference
+removal/counts; local scopes, direct new, static/instance filtering and visibility.
+Headless egui covers actual -> text activation, dot exclusion, unused color, Alt+F7,
+usages keyboard navigation and actual confirmation-button clicks deleting a cache
+sentinel and rebuilding. The previous DateTime::format completion regression now
+uses the truly static createFromFormat, matching the new static-context contract.
+Final verification results follow below.
+
+Final native verification: workspace/all-features tests passed outside sandbox —
+157 passed, 0 failed, 5 existing system/live tests ignored. Native workspace
+all-targets/all-features Clippy with -D warnings, fmt, workspace release build and
+git diff --check passed. The sandbox-only UI repeat hit existing mock TCP/SSH
+PermissionDenied errors; the full unrestricted run passed. New editor completion
+queries read one Rope line and retain absolute scope coordinates. LSP member
+fallback remains available with member-kind filtering for unsupported local types.
+Projects with no PHP files receive an explicit Finished event to stop progress.
+No native GUI smoke or Windows/Linux GUI was run; separate viewport appearance
+is covered only by API/headless behavior, not manual platform verification.
+
+Default update-binaries.py rebuilt the macOS ARM64 executable and Nozhik.app.zip;
+--check verified source fingerprints and payload checksums. The repository ignores
+/.nozhik/cache/. No Windows build/Clippy or Windows target cache was created.
+
+### PHP class usages, hierarchy and declaration-hover navigation correction
+
+Fixed missing class-reference extraction for use/as/grouped imports, extends,
+implements, type hints, new/instanceof, attributes/catch and static class scopes.
+Class counts represent actual type references; member calls are not summed into
+class counts. Parent/interface metadata resolves inherited methods/properties to
+the declaring class, respects overrides and handles parent::. The PHP-specific
+extractor also resolves $this->typedProperty receivers. No language settings or
+universal grammar configuration was added.
+
+Reverse edges retain actual resolved targets per file and hierarchy dependencies,
+including missing ancestors. Changing a parent or removing/restoring an override
+relinks existing caller facts; only edited files are parsed. Cache schema 2 causes
+schema-1 indexes to rebuild automatically once, instead of preserving stale links
+under unchanged mtimes. Valid schema-2 restarts still parse zero unchanged files.
+
+Cmd/Ctrl-hover on a declaration opens its persistent, clickable usages window.
+Releasing the modifier and moving to a row keeps it open; row selection wakes file
+navigation and reveals the exact source name. A hover latch prevents immediate
+reopening after dismissal and rearms on tab activation. Calls still navigate to
+the actual declaration. Tests cycle declaration→usage→declaration for inherited
+methods, aliases/classes and properties through real egui pointer press/release,
+asynchronous file loading, exact caret bytes and visible target lines.
+
+Added examples/php-symbol-navigation: interface, abstract base, Car/Truck,
+ElectricCar (second inheritance level), Fleet and main.php. Fixture tests assert
+exact counts: interface 4, base class 9, Car 6, Truck/ElectricCar 2 each, Fleet 1;
+Vehicle.run 5, Truck.run 1, Vehicle.name 5, Vehicle.instances 2. Tests verify reverse
+parse order, override removal/restoration, changing Car's parent and relinking
+ElectricCar calls without parsing callers, cache restart/schema upgrade, comments/
+strings exclusion, other type positions and cycle-safe malformed inheritance.
+The binary script fingerprints examples too because tests embed these sources.
+
+Final native verification: full workspace/all-features tests outside sandbox —
+160 passed, 0 failed, 5 existing system/live tests ignored. fmt, native Clippy
+workspace/all-targets/all-features with -D warnings, workspace release build and
+git diff --check passed. Native macOS smoke used an isolated app bundle/settings
+(AI off) and temporary copy of the fixture: checked base class=9, method=5, actual
+five usage rows and row-click navigation to Fleet.php:23 with caret/reveal. Native
+menu definition navigation also resolved the inherited call. Automated native
+modifier-click synthesis did not reproduce a physical Cmd-hover; modifier behavior
+is verified by the headless input regression. The test app exited via Cmd+Q.
+User settings/project files and existing app instances were not changed.
+Windows/Linux GUI and Windows builds were not run.
+
+Default update-binaries.py rebuilt the macOS ARM64 executable/app archive;
+--check verified the new source fingerprint and both payload checksums. Nested
+.nozhik/cache directories are ignored too, so opening the example as a project
+does not add cache data to Git or binary source hashes. No Windows target cache
+was created.

@@ -131,6 +131,7 @@ impl NozhikUi {
                         _ => self.integration.actions.push(action.clone()),
                     },
                     Event::File(FileEvent::Changed(path)) => {
+                        self.index_changed(path.clone());
                         if self
                             .project
                             .as_ref()
@@ -153,6 +154,11 @@ impl NozhikUi {
                     _ => {}
                 },
                 Err(TryRecvError::Lagged(count)) => {
+                    if let Some(indexer) = &self.language.indexer {
+                        let _sent = indexer.send(
+                            nozhik_language_support::project_indexer::IndexCommand::Reconcile,
+                        );
+                    }
                     self.status = format!("Missed {count} notifications; current buffers retained");
                     self.refresh_project();
                     self.vcs.invalidate();
@@ -246,6 +252,11 @@ impl NozhikUi {
                         ui.weak(status);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some((done, total)) = self.language.indexing {
+                            ui.spinner();
+                            let percent = (done * 100).checked_div(total).unwrap_or(0);
+                            ui.weak(format!("Indexing project ({percent}%)..."));
+                        }
                         ui.label("0.1.0-RC1")
                             .on_hover_text("Release candidate · Help → About Nozhik");
                         ui.label(self.vcs.branch())
@@ -299,7 +310,9 @@ impl NozhikUi {
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
                         let root = self.project.as_ref().map(|p| p.root_path.as_path());
-                        let enabled = !self.search.open
+                        let enabled = !self.language.invalidate_dialog
+                            && self.language.usages.is_none()
+                            && !self.search.open
                             && !self.settings_open
                             && !self.plugins_open
                             && !self.remote.modal_open()
@@ -496,7 +509,9 @@ impl NozhikUi {
                 ui.separator();
                 self.find_bar(ui);
                 if self.database.active.is_some() {
-                    let enabled = !self.search.open
+                    let enabled = !self.language.invalidate_dialog
+                        && self.language.usages.is_none()
+                        && !self.search.open
                         && !self.settings_open
                         && !self.plugins_open
                         && !self.remote.modal_open()
@@ -506,7 +521,9 @@ impl NozhikUi {
                     return;
                 }
                 if let Some(index) = self.active {
-                    let enabled = !self.search.open
+                    let enabled = !self.language.invalidate_dialog
+                        && self.language.usages.is_none()
+                        && !self.search.open
                         && !self.settings_open
                         && !self.plugins_open
                         && !self.remote.modal_open()
@@ -553,11 +570,17 @@ impl NozhikUi {
                     ) {
                         self.status = error.to_string();
                     }
-                    if let Some(
-                        nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(url),
-                    ) = self.editor.documentation_target.take()
-                    {
-                        crate::editor_view::open_documentation(url);
+                    if let Some(target) = self.editor.documentation_target.take() {
+                        use nozhik_language_support::doc_provider::DefinitionTarget;
+                        match target {
+                            DefinitionTarget::ExternalUrl(url) => {
+                                crate::editor_view::open_documentation(url);
+                            }
+                            DefinitionTarget::LocalFile { path, line, column } => {
+                                // Convert UTF-8 source columns to UTF-16 after asynchronous open.
+                                self.language.local_navigation = Some((path, line, column));
+                            }
+                        }
                     }
                 } else {
                     ui.add_space((ui.available_height() * 0.35).max(0.0));
@@ -639,6 +662,7 @@ impl NozhikUi {
         self.settings_window(ctx);
         self.plugins_window(ctx);
         self.integration_dialogs(ctx);
+        self.index_dialogs(ctx);
         if !self.integration.actions.is_empty() {
             ctx.request_repaint();
         }

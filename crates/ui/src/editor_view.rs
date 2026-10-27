@@ -99,6 +99,7 @@ impl TextEditorView {
                     if let Some(state) = language.as_deref_mut() {
                         state.completions.clear();
                         state.request = None;
+                        state.local_completion_pending = None;
                         state.token = 0;
                     }
                     continue;
@@ -115,6 +116,10 @@ impl TextEditorView {
                         key, pressed: true, ..
                     } = &event
                 {
+                    if *key == Key::F7 && ui.input(|i| i.modifiers.alt) {
+                        state.usages_byte = Some(buffer.cursors().as_slice()[0].head.byte_offset);
+                        continue;
+                    }
                     if *key == Key::F12 {
                         state.request_at = None;
                         state.request = Some((
@@ -142,6 +147,7 @@ impl TextEditorView {
                                 state.completions.clear();
                                 state.token = 0;
                                 state.request = None;
+                                state.local_completion_pending = None;
                                 continue;
                             }
                             Key::Enter | Key::Tab => {
@@ -174,7 +180,7 @@ impl TextEditorView {
                     }
                     continue;
                 }
-                let trigger = matches!(&event, Event::Text(s) if s.chars().last().is_some_and(|c| c.is_alphanumeric() || matches!(c,'_'|'$'|'>'|':'|'\\')))
+                let trigger = matches!(&event, Event::Text(_))
                     || matches!(
                         &event,
                         Event::Key {
@@ -213,6 +219,7 @@ impl TextEditorView {
                 if let Some(state) = language.as_deref_mut() {
                     state.completions.clear();
                     state.request = None;
+                    state.local_completion_pending = None;
                     state.request_at = Some(std::time::Instant::now());
                     if trigger {
                         Self::refresh_completion(buffer, state, false);
@@ -241,25 +248,94 @@ impl TextEditorView {
             state.diagnostics.clear();
             state.syntax.clear();
             state.hover = None;
+            state.project_index = None;
         }
         let reveal = self.reveal_line.take();
         let mut popup_origin = None;
         let mut hovered_byte = None;
         let mut inspected_doc = None;
+        let mut hovered_declaration = None;
         let inspect = enabled && ui.input(|i| primary_modifier(i.modifiers));
+        let mut lenses: Vec<_> = language
+            .as_ref()
+            .and_then(|s| s.project_index.as_ref().zip(s.project_path.as_ref()))
+            .and_then(|(index, path)| index.declarations_by_file.get(path))
+            .into_iter()
+            .flatten()
+            .filter(|d| {
+                matches!(
+                    d.kind,
+                    nozhik_language_support::symbol_index::SymbolKind::Class
+                        | nozhik_language_support::symbol_index::SymbolKind::Method
+                )
+            })
+            .map(|d| (d.line as usize, d.range.start, d.usages_count))
+            .collect();
+        lenses.sort_unstable();
+        lenses.dedup_by_key(|d| d.0);
+        let lenses: Vec<_> = lenses
+            .into_iter()
+            .enumerate()
+            .map(|(i, (line, byte, count))| {
+                (
+                    line + i + if line > ghost_line { extra_rows } else { 0 },
+                    line,
+                    byte,
+                    count,
+                )
+            })
+            .collect();
+        let mut lens_interaction = false;
         let mut scroll = egui::ScrollArea::both().scroll_source(egui::scroll_area::ScrollSource {
             drag: false,
             ..egui::scroll_area::ScrollSource::default()
         });
         if let Some(line) = reveal {
-            scroll = scroll.vertical_scroll_offset(line as f32 * (font_size + 7.0));
+            scroll = scroll.vertical_scroll_offset(
+                (line + lenses.iter().filter(|lens| lens.1 <= line).count()) as f32
+                    * (font_size + 7.0),
+            );
         }
         let viewport = scroll.id_salt(id).auto_shrink([false, false]).show_rows(
             ui,
             font_size + 7.0,
-            buffer.rope().len_lines() + extra_rows,
+            buffer.rope().len_lines() + extra_rows + lenses.len(),
             |ui, rows| {
                 for virtual_line in rows {
+                    if let Some((_, _, byte, count)) =
+                        lenses.iter().find(|lens| lens.0 == virtual_line)
+                    {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), font_size + 7.0),
+                            Sense::hover(),
+                        );
+                        let galley = ui.painter().layout_no_wrap(
+                            format!("{count} usages"),
+                            FontId::monospace(11.0),
+                            theme::MUTED,
+                        );
+                        let origin = rect.min + egui::vec2(66.0, 5.0);
+                        let hit = ui.interact(
+                            egui::Rect::from_min_size(origin, galley.size()),
+                            id.with(("usage_lens", byte)),
+                            Sense::click(),
+                        );
+                        ui.painter().galley(origin, galley, theme::MUTED);
+                        if enabled && hit.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            lens_interaction = true;
+                        }
+                        if enabled
+                            && hit.clicked()
+                            && let Some(state) = language.as_deref_mut()
+                        {
+                            state.usages_byte = Some(*byte);
+                            lens_interaction = true;
+                        }
+                        continue;
+                    }
+                    let virtual_line =
+                        virtual_line - lenses.partition_point(|lens| lens.0 < virtual_line);
                     let line = if virtual_line > ghost_line {
                         virtual_line.saturating_sub(extra_rows).max(ghost_line)
                     } else {
@@ -283,14 +359,31 @@ impl TextEditorView {
                         boundaries.push(span.range.start.saturating_sub(start).min(text.len()));
                         boundaries.push(span.range.end.saturating_sub(start).min(text.len()));
                     }
+                    let unused: Vec<_> = language
+                        .as_ref()
+                        .and_then(|s| s.project_index.as_ref().zip(s.project_path.as_ref()))
+                        .and_then(|(index, path)| index.declarations_by_file.get(path))
+                        .into_iter()
+                        .flatten()
+                        .filter(|d| {
+                            d.is_unused()
+                                && d.range.start >= start
+                                && d.range.end <= start + text.len()
+                        })
+                        .collect();
+                    for symbol in &unused {
+                        boundaries.extend([symbol.range.start - start, symbol.range.end - start]);
+                    }
                     boundaries.sort_unstable();
                     boundaries.dedup();
                     for range in boundaries.windows(2) {
                         let span = visible_spans
                             .iter()
                             .find(|s| s.range.contains(&(start + range[0])));
-                        let color = if language.as_ref().is_some_and(|s| s.syntax_theme == "plain")
+                        let color = if unused.iter().any(|d| d.range.contains(&(start + range[0])))
                         {
+                            egui::Color32::from_rgb(122, 126, 133)
+                        } else if language.as_ref().is_some_and(|s| s.syntax_theme == "plain") {
                             theme::TEXT
                         } else {
                             let color = span.map_or(theme::TEXT, |s| theme::syntax_color(&s.token));
@@ -340,7 +433,59 @@ impl TextEditorView {
                                     .map_or(text.len(), |(i, _)| i),
                         );
                     }
+                    if !synthetic
+                        && ghost_row.is_none()
+                        && row.contains_pointer()
+                        && let Some(byte) = hovered_byte
+                        && let Some(state) = language.as_ref()
+                        && let Some((index, path)) = state
+                            .project_index
+                            .as_ref()
+                            .zip(state.project_path.as_ref())
+                        && let Some(symbol) = index.at(path, byte)
+                    {
+                        if symbol.is_unused() {
+                            row.clone().on_hover_text(format!(
+                                "{:?} '{}' is never used",
+                                symbol.kind, symbol.name
+                            ));
+                        }
+                        if inspect {
+                            let start_column = byte.saturating_sub(start).min(text.len());
+                            let token = word_range(buffer, byte);
+                            let first = token.start.saturating_sub(start).min(text.len());
+                            let last = token.end.saturating_sub(start).min(text.len());
+                            if text.is_char_boundary(first)
+                                && text.is_char_boundary(last)
+                                && first <= start_column
+                            {
+                                let x = |b| {
+                                    origin.x
+                                        + galley
+                                            .pos_from_cursor(CCursor::new(
+                                                text[..b].chars().count(),
+                                            ))
+                                            .min
+                                            .x
+                                };
+                                let y = origin.y + galley.size().y;
+                                ui.painter().line_segment(
+                                    [egui::pos2(x(first), y), egui::pos2(x(last), y)],
+                                    Stroke::new(1.0_f32, theme::INFO),
+                                );
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                if symbol.path == *path && symbol.range.contains(&byte)
+                                    && symbol.kind != nozhik_language_support::symbol_index::SymbolKind::Variable {
+                                    hovered_declaration = Some(symbol.range.start);
+                                } else {
+                                    inspected_doc = Some((project_doc(symbol), "source".into(), ui.input(|i| i.pointer.hover_pos()).unwrap_or(origin)));
+                                }
+                            }
+                        }
+                    }
                     if inspect
+                        && inspected_doc.is_none()
+                        && hovered_declaration.is_none()
                         && !synthetic
                         && ghost_row.is_none()
                         && row.contains_pointer()
@@ -540,11 +685,22 @@ impl TextEditorView {
             },
         );
         if let Some(state) = language.as_deref_mut() {
+            if enabled && state.usages_hover_byte != hovered_declaration {
+                state.usages_hover_byte = hovered_declaration;
+                if let Some(byte) = hovered_declaration {
+                    state.usages_byte = Some(byte);
+                    state.completions.clear();
+                    state.request = None;
+                    state.hover = None;
+                    ui.ctx().request_repaint();
+                }
+            }
             if state.hover_byte != hovered_byte {
                 state.hover_byte = hovered_byte;
                 state.hover = None;
                 state.hover_token = 0;
                 if let Some(byte) = hovered_byte
+                    && hovered_declaration.is_none()
                     && state.request.is_none()
                 {
                     state.request_at = Some(std::time::Instant::now());
@@ -575,21 +731,21 @@ impl TextEditorView {
                 }
             }
         }
+        if hovered_declaration.is_some() {
+            self.mouse_anchor = None;
+            return Ok(());
+        }
         if let Some((info, label, pos)) = &inspected_doc {
             doc_popup(ui, id, info, label, *pos, font_size);
             // Suppress both press-time selection and release-time caret movement.
             self.mouse_anchor = None;
-            if response.clicked_by(egui::PointerButton::Primary)
-                && let Some(nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(
-                    url,
-                )) = &info.target
-            {
-                self.documentation_target = Some(
-                    nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(
-                        url.clone(),
-                    ),
-                );
+            if response.clicked_by(egui::PointerButton::Primary) {
+                self.documentation_target.clone_from(&info.target);
             }
+            return Ok(());
+        }
+        if lens_interaction {
+            self.mouse_anchor = None;
             return Ok(());
         }
         let changed = self.pointer_input(
@@ -607,6 +763,7 @@ impl TextEditorView {
                 state.completions.clear();
                 state.token = 0;
                 state.request = None;
+                state.local_completion_pending = None;
             }
         } else if enabled
             && response.clicked_by(egui::PointerButton::Primary)
@@ -758,21 +915,26 @@ impl TextEditorView {
         let head = buffer.cursors().as_slice()[0].head;
         let line = buffer.rope().line(head.line as usize).to_string();
         let local = head.byte_offset - buffer.rope().line_to_byte(head.line as usize);
+        let before = &line[..local];
+        let config = &state.triggers;
+        if !explicit && !config.activates(before) {
+            state.completions.clear();
+            return;
+        }
         let query = nozhik_language_support::completion::query(&line, local);
+        let access = config.access(before).is_some();
         state.token = 0;
         state.selected = 0;
         state.completion_scroll = true;
         state.completion_caret = head.byte_offset;
         state.completion_prefix = query.into();
-        state.completions = if explicit || !query.is_empty() {
-            state
-                .stubs
-                .as_ref()
-                .map_or_else(Vec::new, |stubs| stubs.search(query))
+        state.local_completion_pending = Some(head.byte_offset);
+        state.completions = if explicit || !query.is_empty() || access {
+            state.local_fragment_completions(&line, local, head.byte_offset)
         } else {
             Vec::new()
         };
-        if explicit || !query.is_empty() {
+        if explicit || !query.is_empty() || access {
             state.request_at = if explicit {
                 None
             } else {
@@ -862,8 +1024,14 @@ impl TextEditorView {
                                         }
                                     }
                                     let (icon, color) = match item.kind {
-                                        Some(Kind::FUNCTION | Kind::METHOD) => {
+                                        Some(Kind::FUNCTION) => {
                                             ("fx", egui::Color32::from_rgb(194, 116, 139))
+                                        }
+                                        Some(Kind::METHOD) => {
+                                            ("m", egui::Color32::from_rgb(194, 116, 139))
+                                        }
+                                        Some(Kind::PROPERTY) => {
+                                            ("p", egui::Color32::from_rgb(152, 118, 170))
                                         }
                                         Some(Kind::CLASS) => {
                                             ("C", egui::Color32::from_rgb(87, 147, 255))
@@ -984,6 +1152,7 @@ impl TextEditorView {
             state.completions.clear();
             state.token = 0;
             state.request = None;
+            state.local_completion_pending = None;
         }
         accept
     }
@@ -1026,6 +1195,7 @@ impl TextEditorView {
             }
         }
         state.request = None;
+        state.local_completion_pending = None;
         state.completions.clear();
         state.token = 0;
         Ok(())
@@ -1553,7 +1723,7 @@ fn doc_popup(
                     };
                     ui.label(
                         egui::RichText::new(format!(
-                            "{modifier}+Click to open {label} documentation"
+                            "{modifier}+Click to open {label} · Alt+F7 Find Usages"
                         ))
                         .small()
                         .color(theme::MUTED),
@@ -1571,6 +1741,32 @@ pub(crate) fn open_documentation(url: String) {
         })
     {
         eprintln!("Start documentation browser worker: {error}");
+    }
+}
+
+fn project_doc(
+    symbol: &nozhik_language_support::symbol_index::SymbolDeclaration,
+) -> nozhik_language_support::doc_provider::SymbolDocInfo {
+    use nozhik_language_support::{
+        doc_provider::{DefinitionTarget, EntityKind, SymbolDocInfo},
+        symbol_index::SymbolKind,
+    };
+    SymbolDocInfo {
+        name: symbol.fqn.clone(),
+        kind: match symbol.kind {
+            SymbolKind::Class => EntityKind::Class,
+            SymbolKind::Function => EntityKind::Function,
+            SymbolKind::Method => EntityKind::Method,
+            SymbolKind::Constant => EntityKind::Constant,
+            SymbolKind::Property | SymbolKind::Variable => EntityKind::Keyword,
+        },
+        signature: symbol.signature.clone(),
+        description: format!("{} usages\n{}", symbol.usages_count, symbol.documentation),
+        target: Some(DefinitionTarget::LocalFile {
+            path: symbol.path.clone(),
+            line: symbol.line,
+            column: symbol.column,
+        }),
     }
 }
 
@@ -2319,7 +2515,12 @@ mod tests {
         for (source, name, expected, caret) in [
             ("PHP_V", "PHP_VERSION", "PHP_VERSION", 11),
             ("\\strl", "strlen", "\\strlen()", 8),
-            ("DateTime::fo", "format", "DateTime::format()", 17),
+            (
+                "DateTime::cre",
+                "createFromFormat",
+                "DateTime::createFromFormat()",
+                27,
+            ),
         ] {
             let mut buffer = TextBuffer::load_from_str(BufferId(94), source);
             let head = buffer.position_at(source.len())?;
@@ -2340,6 +2541,105 @@ mod tests {
             buffer.undo()?;
             assert_eq!(buffer.rope().to_string(), source);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_php_trigger_completion_unused_and_usages_keys()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nozhik_language_support::project_indexer::{IndexEvent, ProjectIndexer};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("car.php");
+        let source = "<?php class MyCar { public function run() {} public static function build() {} private function hidden() {} public $color; }\n$car = new MyCar(); $car/*caret*/;";
+        std::fs::write(&path, source)?;
+        let indexer = ProjectIndexer::start(dir.path().into(), || {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let index = loop {
+            let ready = indexer.drain().find_map(|e| match e {
+                IndexEvent::Snapshot(index, _) if index.declaration("\\mycar").is_some() => {
+                    Some(index)
+                }
+                _ => None,
+            });
+            if let Some(index) = ready {
+                break index;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut buffer = TextBuffer::load_from_str(BufferId(930), source);
+        let byte = source.find("/*caret*/").ok_or("caret marker")?;
+        let head = buffer.position_at(byte)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut state = crate::language::EditorLanguage {
+            project_index: Some(index),
+            project_path: Some(path),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let painted = completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
+        assert!(painted.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.sections.iter().any(|section| section.format.color == egui::Color32::from_rgb(122,126,133)))));
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text("->".into())],
+            1.0,
+        )?;
+        assert!(state.completions.iter().any(|i| i.label == "run"));
+        assert!(state.completions.iter().any(|i| i.label == "color"));
+        assert!(
+            !state
+                .completions
+                .iter()
+                .any(|i| i.label == "build" || i.label == "hidden")
+        );
+        assert!(matches!(
+            state.request,
+            Some((nozhik_language_support::RequestKind::Completion, _))
+        ));
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::Escape, false)],
+            2.0,
+        )?;
+        assert!(state.local_completion_pending.is_none());
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text(".".into())],
+            3.0,
+        )?;
+        assert_eq!(state.completions, []);
+        let _frame = ctx.run(
+            egui::RawInput {
+                modifiers: egui::Modifiers::ALT,
+                events: vec![Event::Key {
+                    key: Key::F7,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _result =
+                        editor.show_language(ui, &mut buffer, 14.0, 4, true, Some(&mut state));
+                });
+            },
+        );
+        assert!(state.usages_byte.is_some());
         Ok(())
     }
 

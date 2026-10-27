@@ -3162,6 +3162,7 @@ dependencies = [
 name = "nozhik-language-support"
 version = "0.1.0"
 dependencies = [
+ "ignore",
  "lsp-types",
  "nozhik-config",
  "ropey",

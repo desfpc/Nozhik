@@ -14,6 +14,11 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
             ("ui.save_file", "Save", "editorOpen"),
             ("ui.save_all", "Save All", ""),
             ("ui.close_tab", "Close Tab", "editorOpen"),
+            (
+                "file.invalidate_caches",
+                "Invalidate Caches / Delete Caches…",
+                "projectOpen",
+            ),
             ("ui.settings", "Settings…", ""),
             ("ui.exit", "Exit", ""),
         ],
@@ -52,6 +57,7 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
     (
         "Code",
         &[
+            ("code.find_usages", "Find Usages", "editorOpen"),
             ("ui.definition", "Go to Definition", "editorOpen"),
             ("code.reformat", "Reformat Code", "editorOpen"),
         ],

@@ -26,6 +26,12 @@ impl From<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>
 #[derive(Default)]
 pub struct EditorLanguage {
     pub documentation: Option<DocumentationSource>,
+    pub triggers: nozhik_language_support::triggers::LanguageTriggerConfig,
+    pub project_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
+    pub project_path: Option<PathBuf>,
+    pub usages_byte: Option<usize>,
+    pub usages_hover_byte: Option<usize>,
+    pub local_completion_pending: Option<usize>,
     pub revision: u64,
     pub spans: Vec<nozhik_language_support::highlighter::HighlightSpan>,
     pub diagnostics: Vec<Diagnostic>,
@@ -47,12 +53,20 @@ pub struct EditorLanguage {
 }
 #[derive(Default)]
 pub struct LanguageUi {
+    pub(crate) indexer: Option<nozhik_language_support::project_indexer::ProjectIndexer>,
+    index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
+    indexed_revisions: HashMap<PathBuf, u64>,
+    overlay_sent: HashMap<PathBuf, u64>,
+    pub(crate) invalidate_dialog: bool,
+    pub(crate) indexing: Option<(usize, usize)>,
+    pub(crate) usages: Option<crate::usages_popup::UsagesPopup>,
     root: Option<PathBuf>,
     service: Option<LanguageService>,
     sent: HashMap<Url, u64>,
     pub views: HashMap<PathBuf, EditorLanguage>,
     token: u64,
     formats: HashMap<u64, (nozhik_core::BufferId, nozhik_config::code_style::CodeStyle)>,
+    pub(crate) local_navigation: Option<(PathBuf, u32, u32)>,
     pub navigation: Option<(PathBuf, lsp_types::Position)>,
 }
 impl crate::NozhikUi {
@@ -144,10 +158,18 @@ impl crate::NozhikUi {
             };
             if let Some(root) = root {
                 let ctx = ctx.clone();
+                let index_ctx = ctx.clone();
+                self.language.indexer = Some(
+                    nozhik_language_support::project_indexer::ProjectIndexer::start(
+                        root.clone(),
+                        move || index_ctx.request_repaint(),
+                    ),
+                );
                 self.language.service =
                     Some(LanguageService::start(root, move || ctx.request_repaint()));
             }
         }
+        self.project_index_tick();
         let Some(service) = &self.language.service else {
             return;
         };
@@ -169,7 +191,45 @@ impl crate::NozhikUi {
                 .views
                 .entry(document.path.clone())
                 .or_default();
+            view.project_path = Some(document.path.clone());
+            view.project_index = self.language.index.clone().filter(|_| {
+                self.language.indexed_revisions.get(&document.path) == Some(&snapshot.revision)
+            });
+            if self
+                .language
+                .root
+                .as_ref()
+                .is_some_and(|root| document.path.starts_with(root))
+                && self.language.overlay_sent.get(&document.path) != Some(&snapshot.revision)
+                && self.language.indexer.as_ref().is_some_and(|indexer| {
+                    indexer.send(
+                        nozhik_language_support::project_indexer::IndexCommand::Overlay {
+                            path: document.path.clone(),
+                            revision: snapshot.revision,
+                            text: snapshot.text.clone(),
+                        },
+                    )
+                })
+            {
+                self.language
+                    .overlay_sent
+                    .insert(document.path.clone(), snapshot.revision);
+            }
+            if let Some(byte) = view.usages_byte.take()
+                && let Some(index) = &view.project_index
+                && let Some(symbol) = index.at(&document.path, byte)
+            {
+                self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
+            }
             view.stubs.clone_from(&self.settings_dialog.php_stubs);
+            if let Some(byte) = view.local_completion_pending
+                && view.project_index.is_some()
+                && byte == document.buffer.cursors().as_slice()[0].head.byte_offset
+            {
+                view.completions =
+                    view.local_completions(&document.buffer.rope().to_string(), byte);
+                view.local_completion_pending = None;
+            }
             view.documentation = view.stubs.clone().map(DocumentationSource::from);
             if view.revision != snapshot.revision {
                 view.revision = snapshot.revision;
@@ -200,6 +260,23 @@ impl crate::NozhikUi {
                 let source = document.buffer.rope().to_string();
                 if byte > source.len() || !source.is_char_boundary(byte) {
                     continue;
+                }
+                if let Some(index) = &view.project_index {
+                    if kind == RequestKind::Completion {
+                        view.completions = nozhik_language_support::type_inference::complete(
+                            index,
+                            &document.path,
+                            &source,
+                            byte,
+                        );
+                        append_stubs(view, &source, byte);
+                    } else if kind == RequestKind::Definition
+                        && let Some(symbol) = index.at(&document.path, byte)
+                    {
+                        self.language.local_navigation =
+                            Some((symbol.path.clone(), symbol.line, symbol.column));
+                        continue;
+                    }
                 }
                 self.language.token += 1;
                 let token = self.language.token;
@@ -238,6 +315,12 @@ impl crate::NozhikUi {
                 self.language.sent.remove(&uri);
                 if let Ok(path) = uri.to_file_path() {
                     self.language.views.remove(&path);
+                    self.language.overlay_sent.remove(&path);
+                    if let Some(indexer) = &self.language.indexer {
+                        let _sent = indexer.send(
+                            nozhik_language_support::project_indexer::IndexCommand::Close(path),
+                        );
+                    }
                 }
             }
         }
@@ -337,19 +420,26 @@ impl crate::NozhikUi {
                             if caret != view.completion_caret {
                                 continue;
                             }
-                            let query = nozhik_language_support::completion::query(&text, caret);
                             let prefix =
                                 &text[nozhik_language_support::completion::prefix(&text, caret)];
-                            let mut items =
-                                nozhik_language_support::completion::filter(items, prefix);
-                            if let Some(stubs) = &view.stubs {
-                                for item in stubs.search(query) {
-                                    if !items
+                            let remote = nozhik_language_support::completion::filter(items, prefix);
+                            let mut items = view.local_completions(&text, caret);
+                            let access = view.triggers.access(&text[..caret]);
+                            for item in remote {
+                                use lsp_types::CompletionItemKind as K;
+                                let allowed = access.is_none()
+                                    || matches!(
+                                        item.kind,
+                                        Some(K::METHOD | K::PROPERTY | K::FIELD)
+                                    )
+                                    || (access.is_some_and(|(_, _, static_access)| static_access)
+                                        && item.kind == Some(K::CONSTANT));
+                                if allowed
+                                    && !items
                                         .iter()
                                         .any(|other| other.label.eq_ignore_ascii_case(&item.label))
-                                    {
-                                        items.push(item);
-                                    }
+                                {
+                                    items.push(item);
                                 }
                             }
                             view.completions = items;
@@ -389,6 +479,25 @@ impl crate::NozhikUi {
                 }
             }
         }
+        if let Some((path, line, column)) = self.language.local_navigation.clone() {
+            self.open_file(path.clone());
+            if let Some(d) = self.documents.iter().find(|d| d.path == path) {
+                let rope = d.buffer.rope();
+                if (line as usize) < rope.len_lines() {
+                    let byte = rope.line_to_byte(line as usize) + column as usize;
+                    let source = rope.to_string();
+                    if (column as usize) <= rope.line(line as usize).len_bytes()
+                        && source.is_char_boundary(byte)
+                    {
+                        self.language.navigation =
+                            Some((path, nozhik_language_support::position(&source, byte)));
+                    } else {
+                        self.status = "Symbol location changed; wait for indexing and retry".into();
+                    }
+                }
+                self.language.local_navigation = None;
+            }
+        }
         if let Some((path, pos)) = self.language.navigation.clone() {
             self.open_file(path.clone());
             if let Some(document) = self.documents.iter_mut().find(|d| d.path == path) {
@@ -418,8 +527,524 @@ fn marked(value: lsp_types::MarkedString) -> String {
     }
 }
 
+impl EditorLanguage {
+    pub(crate) fn local_completions(&self, source: &str, byte: usize) -> Vec<CompletionItem> {
+        self.local_fragment_completions(source, byte, byte)
+    }
+    pub(crate) fn local_fragment_completions(
+        &self,
+        source: &str,
+        byte: usize,
+        absolute_byte: usize,
+    ) -> Vec<CompletionItem> {
+        let mut items = self
+            .project_index
+            .as_ref()
+            .zip(self.project_path.as_ref())
+            .map_or_else(Vec::new, |(index, path)| {
+                nozhik_language_support::type_inference::complete_fragment(
+                    index,
+                    path,
+                    source,
+                    byte,
+                    absolute_byte,
+                )
+            });
+        let access = self.triggers.access(&source[..byte]);
+        let project_receiver = access
+            .and_then(|(left, _, _)| {
+                self.project_index
+                    .as_ref()
+                    .zip(self.project_path.as_ref())
+                    .and_then(|(index, path)| {
+                        nozhik_language_support::type_inference::receiver_type(
+                            index,
+                            path,
+                            absolute_byte,
+                            left,
+                        )
+                    })
+            })
+            .filter(|name| {
+                self.project_index
+                    .as_ref()
+                    .is_some_and(|i| i.declaration(name).is_some())
+            });
+        if project_receiver.is_none()
+            && let Some(stubs) = &self.stubs
+        {
+            let query = nozhik_language_support::completion::query(source, byte);
+            let mut catalog_items = stubs.search(query);
+            if let Some((_, _, static_access)) = access {
+                if !static_access {
+                    catalog_items.clear();
+                } else if let Some((class, _)) = query.rsplit_once("::")
+                    && let Some(entity) = stubs
+                        .entities
+                        .iter()
+                        .find(|s| s.name.eq_ignore_ascii_case(class.trim_start_matches('\\')))
+                {
+                    catalog_items.retain(|item| {
+                        entity.constants.iter().any(|c| c.name == item.label)
+                            || entity
+                                .methods
+                                .iter()
+                                .any(|m| m.name == item.label && m.is_static)
+                    });
+                }
+            }
+            for item in catalog_items {
+                if !items
+                    .iter()
+                    .any(|other| other.label.eq_ignore_ascii_case(&item.label))
+                {
+                    items.push(item);
+                }
+            }
+        }
+        items
+    }
+}
+fn append_stubs(view: &mut EditorLanguage, source: &str, byte: usize) {
+    view.completions = view.local_completions(source, byte);
+}
+impl crate::NozhikUi {
+    fn project_index_tick(&mut self) {
+        use nozhik_language_support::project_indexer::IndexEvent;
+        if let Some(indexer) = &self.language.indexer {
+            for event in indexer.drain() {
+                match event {
+                    IndexEvent::Snapshot(index, revisions) => {
+                        self.language.index = Some(index);
+                        self.language.indexed_revisions = revisions;
+                    }
+                    IndexEvent::Progress(done, total) => {
+                        self.language.indexing =
+                            (done != total || total == 0).then_some((done, total));
+                    }
+                    IndexEvent::Finished => self.language.indexing = None,
+                    IndexEvent::Error(error) => {
+                        self.language.indexing = None;
+                        self.status = format!("Project index: {error}");
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn index_changed(&self, path: PathBuf) {
+        if let Some(indexer) = &self.language.indexer {
+            let _sent =
+                indexer.send(nozhik_language_support::project_indexer::IndexCommand::Changed(path));
+        }
+    }
+    pub(crate) fn index_dialogs(&mut self, ctx: &egui::Context) {
+        if self.language.invalidate_dialog {
+            egui::Modal::new(egui::Id::new("invalidate_caches")).show(ctx, |ui| {
+                ui.heading("Invalidate Caches / Delete Caches…");
+                ui.label(
+                    "Delete this project's .nozhik/cache directory and rebuild its symbol index?",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Invalidate and Restart Indexing").clicked() {
+                        if self.language.indexer.as_ref().is_some_and(|i| {
+                            i.send(
+                                nozhik_language_support::project_indexer::IndexCommand::Invalidate,
+                            )
+                        }) {
+                            self.language.index = None;
+                            self.language.indexing = Some((0, 0));
+                            for view in self.language.views.values_mut() {
+                                view.project_index = None;
+                            }
+                        }
+                        self.language.invalidate_dialog = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.language.invalidate_dialog = false;
+                    }
+                });
+            });
+        }
+        if let Some(popup) = &mut self.language.usages {
+            if let Some(location) = popup.show(ctx) {
+                // Reference columns are UTF-8; convert only after the target file has opened.
+                self.language.local_navigation =
+                    Some((location.path, location.line, location.column));
+                ctx.request_repaint();
+            }
+            if !popup.open {
+                self.language.usages = None;
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
+    fn navigation_frame(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1050.0),
+                )),
+                events,
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| shell.update_frame(ctx),
+        )
+    }
+    fn navigation_text(output: &egui::FullOutput, text: &str, column: usize) -> Option<egui::Pos2> {
+        output.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == text => Some(
+                t.pos
+                    + t.galley
+                        .pos_from_cursor(egui::text::CCursor::new(column))
+                        .min
+                        .to_vec2()
+                    + egui::vec2(2.0, 7.0),
+            ),
+            _ => None,
+        })
+    }
+    fn navigation_click(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        pos: egui::Pos2,
+        modifiers: egui::Modifiers,
+    ) {
+        for pressed in [true, false] {
+            navigation_frame(
+                shell,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    },
+                ],
+                modifiers,
+            );
+        }
+    }
+    fn navigation_wait(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        path: &std::path::Path,
+        byte: usize,
+    ) -> Result<egui::FullOutput, Box<dyn std::error::Error>> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            let output = navigation_frame(
+                shell,
+                ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(1180.0, 1010.0))],
+                egui::Modifiers::NONE,
+            );
+            if shell
+                .active
+                .and_then(|i| shell.documents.get(i))
+                .is_some_and(|d| {
+                    d.path == path && d.buffer.cursors().as_slice()[0].head.byte_offset == byte
+                })
+                && shell
+                    .language
+                    .views
+                    .get(path)
+                    .is_some_and(|v| v.project_index.is_some())
+            {
+                return Ok(output);
+            }
+            if std::time::Instant::now() > deadline {
+                return Err(format!(
+                    "navigation/index timeout for {}:{byte}; status={}",
+                    path.display(),
+                    shell.status
+                )
+                .into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Runs real input through declaration/call navigation and asynchronous file opening for three symbol kinds"
+    )]
+    fn modifier_hover_and_row_click_cycle_between_declarations_and_usages()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/php-symbol-navigation");
+        for name in [
+            "Contracts/Vehicle.php",
+            "Model/Vehicle.php",
+            "Model/Car.php",
+            "Model/Truck.php",
+            "Model/ElectricCar.php",
+            "Fleet.php",
+            "main.php",
+        ] {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().ok_or("fixture parent")?)?;
+            std::fs::copy(fixture.join(name), path)?;
+        }
+        let bus = nozhik_event_bus::EventBus::new(128)?;
+        let settings =
+            nozhik_config::ConfigManager::from_path(root.join("settings.toml"), bus.clone())?;
+        let mut shell = crate::NozhikUi::new(
+            bus,
+            settings,
+            nozhik_config::Config {
+                ai_enabled: false,
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        shell.project = Some(nozhik_fs_model::tree::ProjectTree::new(&root)?);
+        shell.language.root = Some(root.clone());
+        shell.language.service = Some(nozhik_language_support::LanguageService::with_server(
+            root.clone(),
+            Some(nozhik_language_support::ServerCommand {
+                program: root.join("no-lsp-for-test"),
+                args: vec![],
+            }),
+            || {},
+        ));
+        shell.language.indexer = Some(
+            nozhik_language_support::project_indexer::ProjectIndexer::start(root.clone(), || {}),
+        );
+        let fleet = root.join("Fleet.php");
+        let source = std::fs::read_to_string(&fleet)?;
+        shell.open_file(fleet.clone());
+        navigation_wait(&mut shell, &ctx, &fleet, 0)?;
+        let primary = egui::Modifiers {
+            mac_cmd: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            command: true,
+            ..Default::default()
+        };
+        for (call_line, call_name, declaration_file, declaration_line, declaration_name) in [
+            (
+                "        $car->run();",
+                "run",
+                "Model/Vehicle.php",
+                "    public function run(): string",
+                "run",
+            ),
+            (
+                "        $car = new CityCar();",
+                "CityCar",
+                "Model/Car.php",
+                "class Car extends Vehicle",
+                "Car",
+            ),
+            (
+                "        $name = $car->name;",
+                "name",
+                "Model/Vehicle.php",
+                "    public string $name = 'vehicle';",
+                "name",
+            ),
+        ] {
+            let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+            let position = navigation_text(
+                &output,
+                call_line,
+                call_line.rfind(call_name).ok_or("call name")? + 1,
+            )
+            .ok_or_else(|| format!("call not visible: {call_line}"))?;
+            navigation_click(&mut shell, &ctx, position, primary);
+            let declaration = root.join(declaration_file);
+            let declaration_source = std::fs::read_to_string(&declaration)?;
+            let definition_byte = declaration_source
+                .find(declaration_line)
+                .ok_or("definition line")?
+                + declaration_line
+                    .find(declaration_name)
+                    .ok_or("definition name")?;
+            let definition_byte = definition_byte - usize::from(declaration_name == "name");
+            navigation_wait(&mut shell, &ctx, &declaration, definition_byte)?;
+            navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+            let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+            let position = navigation_text(
+                &output,
+                declaration_line,
+                declaration_line
+                    .find(declaration_name)
+                    .ok_or("definition glyph")?
+                    + 1,
+            )
+            .ok_or("declaration not scrolled into view")?;
+            let before = shell
+                .documents
+                .iter()
+                .find(|d| d.path == declaration)
+                .ok_or("opened declaration")?
+                .buffer
+                .cursors()
+                .clone();
+            navigation_frame(
+                &mut shell,
+                &ctx,
+                vec![egui::Event::PointerMoved(position)],
+                primary,
+            );
+            let mut output = navigation_frame(&mut shell, &ctx, vec![], primary);
+            assert!(
+                shell.language.usages.is_some(),
+                "modifier hover must open the list for {declaration_name}"
+            );
+            // Release the modifier and move into the popup: it must remain clickable.
+            for _ in 0..2 {
+                output = navigation_frame(
+                    &mut shell,
+                    &ctx,
+                    vec![egui::Event::PointerMoved(egui::pos2(1100.0, 990.0))],
+                    egui::Modifiers::NONE,
+                );
+            }
+            assert_eq!(
+                shell
+                    .documents
+                    .iter()
+                    .find(|d| d.path == declaration)
+                    .ok_or("declaration")?
+                    .buffer
+                    .cursors(),
+                &before
+            );
+            let row = navigation_text(
+                &output,
+                call_line,
+                call_line.rfind(call_name).ok_or("preview name")? + 1,
+            )
+            .ok_or_else(|| format!("usage row not painted: {call_line}"))?;
+            navigation_click(&mut shell, &ctx, row, egui::Modifiers::NONE);
+            assert!(
+                shell.language.usages.is_none(),
+                "clicking a row must close the list"
+            );
+            let reference_byte = source.find(call_line).ok_or("reference line")?
+                + call_line.rfind(call_name).ok_or("reference name")?;
+            navigation_wait(&mut shell, &ctx, &fleet, reference_byte)?;
+            assert_eq!(
+                shell
+                    .documents
+                    .iter()
+                    .find(|d| d.path == fleet)
+                    .ok_or("fleet")?
+                    .buffer
+                    .rope()
+                    .to_string(),
+                source
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalidate_action_confirmation_deletes_cache_and_reindexes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("sample.php");
+        std::fs::write(&path, "<?php class Sample {}")?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings =
+            nozhik_config::ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = crate::NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        shell.documents.push(crate::Document {
+            path,
+            binary: false,
+            name: "sample.php".into(),
+            open: true,
+            buffer: nozhik_buffer::TextBuffer::load_from_str(
+                nozhik_core::BufferId(988),
+                "<?php class Sample {}",
+            ),
+        });
+        let ctx = egui::Context::default();
+        let wait = |shell: &mut crate::NozhikUi| -> Result<(), Box<dyn std::error::Error>> {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                shell.language_tick(&ctx);
+                if shell
+                    .language
+                    .index
+                    .as_ref()
+                    .is_some_and(|i| i.declaration("\\sample").is_some())
+                    && shell.language.indexing.is_none()
+                {
+                    return Ok(());
+                }
+                if std::time::Instant::now() > until {
+                    return Err("indexing timeout".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        wait(&mut shell)?;
+        let sentinel = dir.path().join(".nozhik/cache/obsolete.bin");
+        std::fs::write(&sentinel, "old cache")?;
+        shell
+            .integration
+            .actions
+            .push("file.invalidate_caches".into());
+        shell.integration_tick(&ctx);
+        assert!(shell.language.invalidate_dialog);
+        assert!(sentinel.exists(), "confirmation must precede deletion");
+        let mut button = None;
+        for _ in 0..2 {
+            let frame = ctx.run(egui::RawInput::default(), |ctx| shell.index_dialogs(ctx));
+            button = frame
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t)
+                        if t.galley.job.text == "Invalidate and Restart Indexing" =>
+                    {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .or(button);
+        }
+        let pos = button.ok_or("confirmation button missing")?;
+        for pressed in [true, false] {
+            let _frame = ctx.run(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| shell.index_dialogs(ctx),
+            );
+        }
+        assert!(!shell.language.invalidate_dialog);
+        wait(&mut shell)?;
+        assert!(!sentinel.exists());
+        assert!(dir.path().join(".nozhik/cache/index_php.json").is_file());
+        Ok(())
+    }
+
     #[test]
     fn typed_dirty_buffer_reformats_nested_print_in_one_undo()
     -> Result<(), Box<dyn std::error::Error>> {

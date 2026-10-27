@@ -768,3 +768,74 @@ newline instead. An empty final buffer is a no-op. Selections/nonblank lines and
 modified keys retain ordinary deletion. All cursor edits use original-byte
 coordinates, overlapping blank-line deletions are merged and one transaction
 preserves the normal Undo/Redo and revision contracts.
+
+## Differential project symbols (2026-10-27)
+
+language_support::{symbol_index, project_indexer, triggers, type_inference} adds
+language-isolated SymbolIndex instances (PHP/Go/JavaScript identity; PHP extraction
+only). php_symbols owns Tree-sitter AST extraction off the UI thread. Per-file
+facts retain declarations, lexical scopes, namespace/import contexts and reference
+candidates with UTF-8 coordinates and line previews. ASTs are not shared with UI.
+DeclarationsByFile and ReferencesBySymbol are authoritative linked tables.
+Candidate→source-file dependencies let declaration additions/removals relink
+already-parsed dependent facts. Replacing/removing a file removes its old outgoing
+edges and updates counts only for touched identities; no dependent file is parsed.
+
+ProjectIndexer is a single-owner dedicated thread with commands Changed(path),
+Overlay(path,revision,Rope), Close, Reconcile and Invalidate. Wake callbacks and
+bounded event drains deliver Arc snapshots/progress/errors; no UI filesystem I/O.
+Disk facts/stamps and unsaved overlay facts are separate: cache writes never include
+unsaved text. Startup loads versioned, root-bound index_php.json, then reconciles
+nanosecond mtime + length. An atomic same-directory tempfile replaces the cache.
+ignore and tempfile are now explicit language_support dependencies. Traversal
+respects ignore files and excludes .git/.nozhik/target/vendor/node_modules.
+Watcher paths and successful save replies enqueue Changed; Lagged reconciles
+metadata without reparsing unchanged files. Index lifetime follows project root;
+buffer overlays outside that root are rejected. Drop cancels traversal/work.
+
+LanguageUi gates editor snapshots by overlay revision. Local completions precede
+catalog results; member contexts suppress unrelated global/LSP items. Editor input
+reads LanguageTriggerConfig rather than embedding operators. LocalFile navigation
+preserves UTF-8 columns and converts to UTF-16 only against the opened source.
+Virtual code-lens rows above class/method declarations share viewport mapping with
+AI ghost rows. Alt+F7 and code lenses open usages_popup with keyboard/mouse routing,
+file/code filtering, file grouping, accented match ranges and an immediate egui
+viewport for the separate window. Modal state blocks underlying editor mutations.
+Unused name ranges split syntax jobs and use #7A7E85; tooltip states the inspection.
+
+Current PHP resolver covers direct new assignments, typed parameters, $this, namespaces,
+class aliases/grouped imports, exact globals/static/instance calls, properties and
+class constants, parent classes/interfaces and parent:: dispatch. It does not resolve
+trait adaptations, arbitrary chained return objects, union/intersection flow types
+or dynamic calls. Unused inspection is
+based on indexed references, including public members; it is not proof that a
+framework will never call a symbol. Go/JS/TS parsers and caches await their workers.
+
+### PHP class references, hierarchy and reverse navigation correction
+
+PHP extraction explicitly records class-name locations for imports, extends/
+implements, type hints, new/instanceof, attributes/catch and static scopes. Counts
+represent source type references, not the sum of a class's member calls. A class
+reference and a method reference in Foo::run() have distinct source ranges.
+Grouped use aliases resolve against the group prefix; comments/literals are excluded.
+Class declarations retain direct base_types. SymbolIndex::resolve walks a cycle-safe
+class/interface lineage and returns the actual member declaration; private inherited
+members are excluded. Completion filters overridden/inaccessible inherited members.
+Simple $this->typedProperty receivers are resolved by the PHP extractor too.
+
+resolved_by_file retains actual outgoing targets (which may be in a parent), and
+dependencies_by_file retains raw member/class/ancestor dependencies, including
+missing parents. Replacement removes actual old targets, then relinks only dependent
+saved facts. Removing an override, changing a parent or declaring a missing class
+never reparses callers. Counts and popup rows use the same reverse buckets.
+Cache schema 2 discards schema-1 extraction/stamps and rebuilds once on startup;
+subsequent edits/restarts retain differential behavior. Build-input hashing includes
+the example PHP fixture consumed by Rust tests.
+
+Cmd/Ctrl hover on a declaration queues usages, not a self-definition/documentation
+popup. The persistent window remains clickable after modifier release and wakes
+navigation on selection. A per-view hover latch prevents reopening immediately after
+Esc/close; tab activation rearms it. Reference clicks still emit LocalFile targets.
+The end-to-end egui regression uses actual pointer press/release, background file
+opening, caret bytes and painted/visible target rows to cycle through inherited
+methods, classes/aliases and properties in both directions, without editing buffers.

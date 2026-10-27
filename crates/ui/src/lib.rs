@@ -25,6 +25,7 @@ mod terminal_panel;
 mod terminal_view;
 pub mod theme;
 mod tool_icons;
+mod usages_popup;
 mod vcs_panel;
 
 use nozhik_buffer::TextBuffer;
@@ -232,6 +233,9 @@ impl NozhikUi {
             document.open = true;
             self.search.note_file(document.path.clone());
             self.active = Some(index);
+            if let Some(view) = self.language.views.get_mut(&document.path) {
+                view.usages_hover_byte = None;
+            }
             self.editor.focus_buffer = Some(document.buffer.snapshot().buffer_id);
             self.bus.publish(Event::FileOpened(document.path.clone()));
         }

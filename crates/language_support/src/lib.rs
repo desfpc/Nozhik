@@ -5,7 +5,12 @@ pub mod formatting;
 pub mod highlighter;
 pub mod lsp;
 pub mod php_stubs;
+mod php_symbols;
+pub mod project_indexer;
 pub mod structural;
+pub mod symbol_index;
+pub mod triggers;
+pub mod type_inference;
 pub use lsp_types;
 use lsp_types::{
     CompletionResponse, GotoDefinitionResponse, Hover, Position, PublishDiagnosticsParams, Url,

@@ -33,7 +33,7 @@ def source_hash():
     tracked = run(
         "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
         ".gitattributes", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
-        "crates", ".cargo", "scripts/update-binaries.py", stdout=subprocess.PIPE,
+        "crates", "examples", ".cargo", "scripts/update-binaries.py", stdout=subprocess.PIPE,
     ).stdout
     digest = hashlib.sha256()
     for raw in sorted(set(tracked.split(b"\0")) - {b""}):

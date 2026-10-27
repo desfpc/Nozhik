@@ -1449,3 +1449,32 @@ navigation target without launching a browser. Windows/Linux were not run.
 macOS ARM64 executable and Nozhik.app.zip were rebuilt by the default
 scripts/update-binaries.py command; default --check verified source fingerprints
 and payload hashes. No Windows build or Windows target cache was created.
+
+### Whitespace-only line deletion (2026-10-27)
+
+Unmodified Backspace and Delete now share smart blank-line behavior: excess
+indentation before the caret is removed to the expected visual column; at or
+before that column, the whole line is removed. Expected indentation uses the
+preceding nonblank line and the existing Enter CodeStyle rule; without a profile,
+it uses that line's leading whitespace. Tab stops use profile size/fallback tab
+width, and a partial tab becomes spaces when needed to reach the exact column.
+Line removal consumes the preceding LF/CRLF and lands at the previous line end;
+first-line deletion consumes its following newline. Selections, nonblank text
+and modified keys retain ordinary deletion. Overlapping multi-caret deletions
+are coalesced into one transaction and one Undo step per key.
+
+Headless egui key events verify both keys with 12→8-column snapping, subsequent
+line removal, exact caret positions and two-step Undo restoring the original
+clean buffer. Additional cases cover tabs/mixed whitespace, off-grid targets,
+CRLF, below-target carets, first/last/empty lines, selection preservation, Unicode
+context and overlapping/adjacent multi-caret line deletions. No document parser,
+full-buffer String or filesystem I/O was added to this input path.
+
+Native full workspace/all-features tests outside sandbox: 152 passed, 0 failed,
+5 existing ignored. fmt, native workspace Clippy all-targets/all-features with
+-D warnings and git diff --check passed. Native GUI was not manually exercised;
+Windows/Linux were not run.
+
+Workspace release build passed. The default update-binaries.py rebuilt macOS
+ARM64 executable/app archive and --check verified source/payload hashes.
+No Windows build or Windows target cache was created.

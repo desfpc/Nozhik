@@ -750,3 +750,21 @@ JetBrains Mono. При переходе press/release не меняют CursorSe
 именованное семейство используется только для документации, шрифт редактора
 не меняется. Разрешение project shadows/import aliases и типов экземпляров
 остаётся задачей LSP/будущего индекса, lookup имени этого не заменяет.
+
+### Smart deletion of whitespace-only editor lines (2026-10-27)
+
+TextEditorView routes unmodified Backspace/Delete through replace_inner with the
+active CodeStyle and fallback tab width. blank_line_deletion reads the target
+Rope line and walks back to the preceding nonblank line; it uses the same
+newline_text indentation rule as Enter, or previous indentation without a profile.
+No full-buffer materialization, parser or I/O is added to the input path.
+
+If the caret's logical column exceeds the expected indentation, the edit deletes
+only excess whitespace before it. A tab crossing the target column is replaced
+by the necessary spaces; the suffix remains untouched. At/before the expected
+column, the complete blank line and its preceding LF/CRLF are removed, putting
+the caret at the preceding line end. The first line consumes its following
+newline instead. An empty final buffer is a no-op. Selections/nonblank lines and
+modified keys retain ordinary deletion. All cursor edits use original-byte
+coordinates, overlapping blank-line deletions are merged and one transaction
+preserves the normal Undo/Redo and revision contracts.

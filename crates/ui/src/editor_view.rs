@@ -183,7 +183,20 @@ impl TextEditorView {
                             ..
                         }
                     );
-                if let Event::Paste(text) = event {
+                if let Event::Key {
+                    key: key @ (Key::Backspace | Key::Delete),
+                    modifiers,
+                    ..
+                } = &event
+                    && modifiers.is_none()
+                {
+                    Self::replace_inner(
+                        buffer,
+                        "",
+                        Some(*key),
+                        Some((self.code_style.as_ref(), tab_width)),
+                    )?;
+                } else if let Event::Paste(text) = event {
                     Self::paste(buffer, &text, self.code_style.as_ref())?;
                 } else if matches!(
                     event,
@@ -1111,7 +1124,16 @@ impl TextEditorView {
         text: &str,
         deletion: Option<Key>,
     ) -> Result<(), BufferError> {
-        let edits = buffer
+        Self::replace_inner(buffer, text, deletion, None)
+    }
+
+    fn replace_inner(
+        buffer: &mut TextBuffer,
+        text: &str,
+        deletion: Option<Key>,
+        indentation: Option<(Option<&nozhik_config::code_style::CodeStyle>, u8)>,
+    ) -> Result<(), BufferError> {
+        let mut edits: Vec<TextEdit> = buffer
             .cursors()
             .as_slice()
             .iter()
@@ -1119,6 +1141,11 @@ impl TextEditorView {
                 let mut start = cursor.anchor.byte_offset.min(cursor.head.byte_offset);
                 let mut end = cursor.anchor.byte_offset.max(cursor.head.byte_offset);
                 if start == end {
+                    if let Some((style, tab_width)) = indentation
+                        && let Some(edit) = blank_line_deletion(buffer, start, style, tab_width)
+                    {
+                        return edit;
+                    }
                     let index = buffer.rope().byte_to_char(start);
                     match deletion {
                         Some(Key::Backspace) => {
@@ -1153,8 +1180,117 @@ impl TextEditorView {
                 }
             })
             .collect();
+        if indentation.is_some() {
+            // Several carets may delete the same blank line or adjacent line endings.
+            edits.sort_by_key(|edit| edit.range.start);
+            let mut merged: Vec<TextEdit> = Vec::with_capacity(edits.len());
+            for edit in edits {
+                if let Some(previous) = merged.last_mut()
+                    && edit.range.start <= previous.range.end
+                {
+                    previous.range.end = previous.range.end.max(edit.range.end);
+                } else {
+                    merged.push(edit);
+                }
+            }
+            edits = merged;
+        }
         buffer.apply_transaction(EditTransaction { edits, group: None })
     }
+}
+
+// Only whitespace-only lines use smart deletion. Byte ranges stay in the original
+// Rope, so all carets commit in one transaction and Undo restores their positions.
+fn blank_line_deletion(
+    buffer: &TextBuffer,
+    caret: usize,
+    style: Option<&nozhik_config::code_style::CodeStyle>,
+    tab_width: u8,
+) -> Option<TextEdit> {
+    let rope = buffer.rope();
+    let line = rope.byte_to_line(caret);
+    let start = rope.line_to_byte(line);
+    let source = rope.line(line).to_string();
+    let content = source
+        .strip_suffix("\r\n")
+        .or_else(|| source.strip_suffix('\n'))
+        .unwrap_or(&source);
+    if !content.chars().all(|c| matches!(c, ' ' | '\t')) || caret > start + content.len() {
+        return None;
+    }
+    let size = usize::from(style.map_or_else(|| tab_width.max(1), |s| s.indent.size.max(1)));
+    let width = |text: &str| {
+        text.chars()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .fold(0, |col, c| {
+                if c == '\t' {
+                    col + size - col % size
+                } else {
+                    col + 1
+                }
+            })
+    };
+    let expected = (0..line)
+        .rev()
+        .find_map(|previous| {
+            let previous = rope.line(previous).to_string();
+            let previous = previous.trim_end_matches(['\r', '\n']);
+            if previous.chars().all(|c| matches!(c, ' ' | '\t')) {
+                return None;
+            }
+            Some(style.map_or_else(
+                || width(previous),
+                |profile| {
+                    width(
+                        nozhik_language_support::formatting::newline_text(
+                            previous,
+                            "\n",
+                            Some(profile),
+                        )
+                        .trim_start_matches('\n'),
+                    )
+                },
+            ))
+        })
+        .unwrap_or(0);
+    if width(&content[..caret - start]) > expected {
+        let mut column = 0;
+        let mut keep = 0;
+        for (byte, c) in content[..caret - start].char_indices() {
+            let next = if c == '\t' {
+                column + size - column % size
+            } else {
+                column + 1
+            };
+            if next > expected {
+                break;
+            }
+            column = next;
+            keep = byte + c.len_utf8();
+        }
+        return Some(TextEdit {
+            range: start + keep..caret,
+            text: " ".repeat(expected - column),
+        });
+    }
+    // Remove the preceding line ending, placing the caret at the previous line's
+    // end. The first line instead consumes its following line ending.
+    let range = if line > 0 {
+        let previous = rope.line(line - 1);
+        let ending =
+            if previous.len_bytes() >= 2 && previous.byte(previous.len_bytes() - 2) == b'\r' {
+                2
+            } else {
+                1
+            };
+        start - ending..start + content.len()
+    } else {
+        start..start + source.len()
+    };
+    Some(TextEdit {
+        range,
+        text: String::new(),
+    })
 }
 
 struct HitRow {
@@ -2560,6 +2696,139 @@ mod tests {
         );
         assert!(doc_token(source, &galley, egui::Pos2::ZERO, point(19)).is_none());
         assert!(doc_token(source, &galley, egui::Pos2::ZERO, point(25)).is_none());
+        Ok(())
+    }
+    #[test]
+    fn blank_line_delete_keys_snap_then_remove_with_undo() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let style = styles
+            .selected("php", &std::collections::BTreeMap::new())
+            .ok_or("style")?;
+        for key in [Key::Backspace, Key::Delete] {
+            let ctx = egui::Context::default();
+            let mut editor = TextEditorView {
+                code_style: Some(style.clone()),
+                ..Default::default()
+            };
+            let original = "<?php\nfunction f() {\n    if ($x) {\n            \n    }\n}\n";
+            let start = original.find("            \n").ok_or("blank line")?;
+            let mut buffer = TextBuffer::load_from_str(BufferId(201), original);
+            let head = buffer.position_at(start + 12)?;
+            buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+            let mut language = crate::language::EditorLanguage::default();
+            completion_frame(
+                &ctx,
+                &mut editor,
+                &mut buffer,
+                &mut language,
+                vec![completion_key(key, false)],
+                0.0,
+            )?;
+            assert_eq!(
+                buffer.rope().to_string(),
+                original.replacen("            \n", "        \n", 1)
+            );
+            assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, start + 8);
+            completion_frame(
+                &ctx,
+                &mut editor,
+                &mut buffer,
+                &mut language,
+                vec![completion_key(key, false)],
+                0.1,
+            )?;
+            assert_eq!(
+                buffer.rope().to_string(),
+                original.replacen("            \n", "", 1)
+            );
+            assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, start - 1);
+            buffer.undo()?;
+            assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, start + 8);
+            buffer.undo()?;
+            assert_eq!(buffer.rope().to_string(), original);
+            assert_eq!(buffer.cursors().as_slice()[0].head, head);
+            assert!(!buffer.is_dirty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn blank_line_deletion_edges_tabs_crlf_and_selections() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let mut style = styles
+            .selected("php", &std::collections::BTreeMap::new())
+            .ok_or("style")?
+            .clone();
+        style.indent.style = nozhik_config::code_style::IndentStyle::Tabs;
+        let cases = [
+            ("    if ($x) {\n\t\t\t", 3, "    if ($x) {\n\t\t", 2),
+            ("    if ($x) {\n\t \t\t", 4, "    if ($x) {\n\t \t", 3),
+            (
+                "    if ($x) {\r\n   \r\nnext",
+                2,
+                "    if ($x) {\r\nnext",
+                0,
+            ),
+            ("    if ($x) {\n        \nnext", 4, "    if ($x) {\nnext", 0),
+            ("first\n    ", 4, "first\n", 0),
+            ("first\n    ", 0, "first", 0),
+            ("   \r\nnext", 0, "next", 0),
+            ("", 0, "", 0),
+        ];
+        for (original, column, expected, retained) in cases {
+            let mut buffer = TextBuffer::load_from_str(BufferId(202), original);
+            let line = usize::from(original.contains("if ($x)") || original.starts_with("first"));
+            let start = buffer.rope().line_to_byte(line);
+            let head = buffer.position_at(start + column)?;
+            buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+            TextEditorView::replace_inner(
+                &mut buffer,
+                "",
+                Some(Key::Backspace),
+                Some((Some(&style), 4)),
+            )?;
+            assert_eq!(buffer.rope().to_string(), expected, "{original:?}");
+            if retained > 0 {
+                assert_eq!(
+                    buffer.cursors().as_slice()[0].head.byte_offset,
+                    start + retained
+                );
+            }
+        }
+        // An off-grid target inside a tab keeps exactly the needed visual columns.
+        style.indent.size = 3;
+        let mut buffer = TextBuffer::load_from_str(BufferId(203), " if ($x) {\n\t\t ");
+        let end = buffer.rope().len_bytes();
+        let head = buffer.position_at(end)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        TextEditorView::replace_inner(&mut buffer, "", Some(Key::Delete), Some((Some(&style), 4)))?;
+        assert_eq!(buffer.rope().to_string(), " if ($x) {\n\t ");
+        // A selection bypasses blank-line inference, including a partial selection.
+        let mut buffer = TextBuffer::load_from_str(BufferId(204), "x\n    \ny");
+        buffer.set_cursors(vec![Cursor {
+            anchor: buffer.position_at(3)?,
+            head: buffer.position_at(5)?,
+        }])?;
+        TextEditorView::replace_inner(&mut buffer, "", Some(Key::Delete), Some((None, 4)))?;
+        assert_eq!(buffer.rope().to_string(), "x\n  \ny");
+        // Adjacent blank lines and several carets on one line form one Undo step.
+        let original = "я\n    \n  \nz";
+        let mut buffer = TextBuffer::load_from_str(BufferId(205), original);
+        let cursors = [3, 5, 8]
+            .into_iter()
+            .map(|byte| {
+                buffer
+                    .position_at(byte)
+                    .map(|head| Cursor { anchor: head, head })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        buffer.set_cursors(cursors)?;
+        TextEditorView::replace_inner(&mut buffer, "", Some(Key::Backspace), Some((None, 4)))?;
+        assert_eq!(buffer.rope().to_string(), "я\nz");
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), original);
         Ok(())
     }
 }

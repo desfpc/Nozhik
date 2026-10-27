@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+webbrowser.workspace = true
 nozhik-ai-completion.workspace = true
 serde.workspace = true
 serde_json.workspace = true

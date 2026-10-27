@@ -553,6 +553,12 @@ impl NozhikUi {
                     ) {
                         self.status = error.to_string();
                     }
+                    if let Some(
+                        nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(url),
+                    ) = self.editor.documentation_target.take()
+                    {
+                        crate::editor_view::open_documentation(url);
+                    }
                 } else {
                     ui.add_space((ui.available_height() * 0.35).max(0.0));
                     ui.vertical_centered(|ui| {

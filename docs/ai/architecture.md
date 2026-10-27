@@ -716,3 +716,37 @@ case pointer.press_origin is already cleared and is_pointer_button_down_on is
 false. Editor hit-testing now also accepts Response::clicked_by and falls back
 to interact_pointer_pos, preserving drag/selection handling and allowing a fast
 click to place the caret (and trigger idle AI) in an empty indented line.
+
+## Контекстная документация (2026-10-27)
+
+`language_support::doc_provider` задаёт языконезависимые `EntityKind`,
+`SymbolDocInfo`, `LanguageDocProvider` и `DefinitionTarget::{LocalFile, ExternalUrl}`.
+`PhpSymbolKind` остаётся совместимым alias общего EntityKind. LocalFile резервирует
+native path и zero-based line/UTF-8 column для будущего project index; текущий
+PHP provider выдаёт ExternalUrl. LSP navigation сохраняет существующий контракт.
+
+`PhpVersionStubs` реализует exact lookup активной версии: функции/типы/методы
+сравниваются без ASCII-регистра, константы — с регистром; поддерживаются FQN и
+Class::member. Правила DocRules читаются worker вместе с каталогом: встроенный
+php_doc_rules.json либо пользовательский sibling doc_rules.json рядом с versions/.
+Правила отделены от portable stubs schema, не записываются в JSON каталога.
+HTTPS templates, case/underscore transforms и fallback выбираются по категории;
+подстановка percent-encodes небезопасные байты имени. Ошибка правил не подменяет
+пользовательские данные defaults и сохраняет старый snapshot в SettingsDialog.
+
+LanguageUi связывает PHP-каталог с DocumentationSource (language_id, label,
+Arc<dyn LanguageDocProvider + Send + Sync>). EditorView использует только этот
+контракт для инспекции; php.net и правила URL в renderer отсутствуют. Hit testing
+опирается на видимые Galley, UTF-8 границы и фактический glyph под указателем;
+отступы, gutter, punctuation, переменные и известные string/comment spans не
+инспектируются. Модификатор выбирается по target OS, освобождение скрывает popup.
+Area имеет Tooltip order, Darcula frame, ограниченный viewport и встроенный
+JetBrains Mono. При переходе press/release не меняют CursorSet; view передаёт
+типизированный target оболочке. Системный webbrowser::open выполняется на отдельном
+именованном потоке; ошибки пишутся в stderr, UI не ждёт процесс браузера.
+
+Новая прямая UI-зависимость webbrowser использует уже существующую транзитивную
+версию eframe. JetBrains Mono Regular и SIL OFL находятся в crates/ui/assets/fonts;
+именованное семейство используется только для документации, шрифт редактора
+не меняется. Разрешение project shadows/import aliases и типов экземпляров
+остаётся задачей LSP/будущего индекса, lookup имени этого не заменяет.

@@ -5,8 +5,27 @@ use nozhik_language_support::{
 };
 use std::{collections::HashMap, path::PathBuf};
 
+pub struct DocumentationSource {
+    pub language_id: String,
+    pub label: String,
+    pub provider: std::sync::Arc<
+        dyn nozhik_language_support::doc_provider::LanguageDocProvider + Send + Sync,
+    >,
+}
+impl From<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>
+    for DocumentationSource
+{
+    fn from(catalog: std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>) -> Self {
+        Self {
+            language_id: catalog.doc_rules.language_id.clone(),
+            label: catalog.doc_rules.label.clone(),
+            provider: catalog,
+        }
+    }
+}
 #[derive(Default)]
 pub struct EditorLanguage {
+    pub documentation: Option<DocumentationSource>,
     pub revision: u64,
     pub spans: Vec<nozhik_language_support::highlighter::HighlightSpan>,
     pub diagnostics: Vec<Diagnostic>,
@@ -151,6 +170,7 @@ impl crate::NozhikUi {
                 .entry(document.path.clone())
                 .or_default();
             view.stubs.clone_from(&self.settings_dialog.php_stubs);
+            view.documentation = view.stubs.clone().map(DocumentationSource::from);
             if view.revision != snapshot.revision {
                 view.revision = snapshot.revision;
                 view.spans.clear();

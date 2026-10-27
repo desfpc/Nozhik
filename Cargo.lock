@@ -3248,6 +3248,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "webbrowser",
  "zeroize",
 ]
 

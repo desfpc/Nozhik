@@ -1,0 +1,6 @@
+{
+  "language_id": "php",
+  "label": "php.net",
+  "rules": {},
+  "fallback": { "template": "https://www.php.net/{name}" }
+}

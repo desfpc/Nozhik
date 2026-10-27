@@ -1406,3 +1406,46 @@ external Ollama service remained alive. The temporary debug-only input trace was
 removed. Model files remain installed for the user's IDE. macOS binaries were
 rebuilt by update-binaries.py and source/payload checks passed. No Windows build
 or Windows cache was created; Windows/Linux GUI were not exercised.
+
+### Standard-library hover documentation and browser navigation (2026-10-27)
+
+Added language_support::doc_provider with LanguageDocProvider, shared EntityKind,
+SymbolDocInfo and DefinitionTarget (external URL / future local file coordinates).
+The active PHP version catalog implements exact globals/FQN/Class::member lookup,
+case-insensitive callables/types and case-sensitive constants. A generic
+DocumentationSource binds the provider to editor views without PHP URL logic.
+
+Bundled php_doc_rules.json selects official short php.net aliases. Optional
+~/.nozhik/languages/php/doc_rules.json replaces it during worker catalog loading;
+category templates support lowercase/underscore transforms and a fallback alias.
+HTTPS/name placeholders are validated; invalid files retain the old UI catalog
+and remain untouched. Fallback selects a missing category rule, not a network
+retry. Existing Reflection descriptions may be empty and are not fabricated.
+
+Cmd (macOS) / Ctrl (Windows/Linux) hover paints a token underline and hand cursor,
+and an immediately shown bounded Darcula documentation popup with signature,
+existing prose and platform/destination hint. JetBrains Mono Regular is embedded
+for this popup under SIL OFL 1.1. Hit testing uses visible Galley glyph coordinates
+and UTF-8 boundaries, excludes gutter/punctuation/variables and known highlighted
+string/comment spans. Press/release on an inspected symbol preserves CursorSet;
+the shell opens the provider URL on a separate named browser thread. Existing
+LSP hover and project definition requests remain available. Project shadowing,
+import aliases and instance type inference require LSP/a future project index.
+
+Verification: full native workspace/all-features tests passed outside sandbox:
+150 passed, 0 failed, 5 existing ignored. New tests cover var_dump/DateTime/
+PHP_VERSION URLs, methods/class constants/interfaces, transformations/fallback,
+active-version boundaries, case rules, unknown symbols and invalid rule-file
+preservation; real headless egui frames cover popup/hand, modifier release,
+press/release target, unchanged caret/text and ordinary unknown-name clicks.
+Geometry tests cover Unicode/FQN/static members, variables, punctuation, gutter,
+trailing area and platform modifier selection. Native fmt, workspace Clippy
+all-targets/all-features with -D warnings, release workspace build and
+ git diff --check passed. The sandbox run stopped at existing local TCP tests
+with PermissionDenied; the full unrestricted run passed. Browser launch and
+native GUI appearance were not manually exercised; headless tests inspect the
+navigation target without launching a browser. Windows/Linux were not run.
+
+macOS ARM64 executable and Nozhik.app.zip were rebuilt by the default
+scripts/update-binaries.py command; default --check verified source fingerprints
+and payload hashes. No Windows build or Windows target cache was created.

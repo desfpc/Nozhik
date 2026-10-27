@@ -1,5 +1,6 @@
 //! Background PHP syntax and LSP services. UI owns authoritative document text.
 pub mod completion;
+pub mod doc_provider;
 pub mod formatting;
 pub mod highlighter;
 pub mod lsp;

@@ -10,23 +10,8 @@ pub const VERSIONS: &[&str] = &[
 /// The generated PHP 8.5 standard CLI runtime inventory.
 pub const BUILTIN: &str = include_str!("../data/php_8.5.json");
 
-/// Category used by both the JSON catalog and completion icons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PhpSymbolKind {
-    /// Global callable.
-    Function,
-    /// Class method.
-    Method,
-    /// Instantiable or abstract class.
-    Class,
-    /// Interface contract.
-    Interface,
-    /// Global or class constant.
-    Constant,
-    /// PHP syntax keyword.
-    Keyword,
-}
+/// PHP catalog category, shared with the language-neutral documentation contract.
+pub use crate::doc_provider::EntityKind as PhpSymbolKind;
 
 /// One callable parameter; default is PHP source text, not a JSON value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +79,9 @@ pub struct PhpSymbol {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PhpVersionStubs {
+    /// Documentation rules loaded with the catalog, excluded from its portable schema.
+    #[serde(skip)]
+    pub doc_rules: crate::doc_provider::DocRules,
     /// Schema revision; currently 1.
     pub schema_version: u32,
     /// PHP major.minor version.
@@ -123,7 +111,9 @@ impl PhpVersionStubs {
     /// # Errors
     /// Rejects unsupported schema/version, empty names, duplicates or misplaced members.
     pub fn from_json(source: &str) -> Result<Self, StubsError> {
-        let catalog: Self = serde_json::from_str(source)?;
+        let mut catalog: Self = serde_json::from_str(source)?;
+        catalog.doc_rules =
+            crate::doc_provider::DocRules::from_json(include_str!("../data/php_doc_rules.json"))?;
         if catalog.schema_version != 1 || !VERSIONS.contains(&catalog.version.as_str()) {
             return Err(StubsError::Invalid("unsupported schema or language level"));
         }
@@ -164,7 +154,7 @@ impl PhpVersionStubs {
         if !VERSIONS.contains(&version) {
             return Err(StubsError::Invalid("unsupported language level"));
         }
-        match std::fs::read_to_string(root.join(format!("php_{version}.json"))) {
+        let mut catalog = match std::fs::read_to_string(root.join(format!("php_{version}.json"))) {
             Ok(source) => {
                 let catalog = Self::from_json(&source)?;
                 if catalog.version != version {
@@ -174,7 +164,21 @@ impl PhpVersionStubs {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::bundled(version),
             Err(e) => Err(e.into()),
+        }?;
+        if let Some(parent) = root.parent() {
+            match std::fs::read_to_string(parent.join("doc_rules.json")) {
+                Ok(source) => {
+                    let rules = crate::doc_provider::DocRules::from_json(&source)?;
+                    if rules.language_id != "php" {
+                        return Err(StubsError::Invalid("documentation language mismatch"));
+                    }
+                    catalog.doc_rules = rules;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
+        Ok(catalog)
     }
     /// Searches global names or explicit `Class::member` prefixes without an LSP.
     #[must_use]

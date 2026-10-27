@@ -14,6 +14,8 @@ pub struct TextEditorView {
     pub code_style: Option<nozhik_config::code_style::CodeStyle>,
     /// Render editor text using the proportional built-in family.
     pub proportional_font: bool,
+    pub(crate) documentation_target:
+        Option<nozhik_language_support::doc_provider::DefinitionTarget>,
     mouse_anchor: Option<(nozhik_core::BufferId, u64, usize)>,
 }
 
@@ -230,6 +232,8 @@ impl TextEditorView {
         let reveal = self.reveal_line.take();
         let mut popup_origin = None;
         let mut hovered_byte = None;
+        let mut inspected_doc = None;
+        let inspect = enabled && ui.input(|i| primary_modifier(i.modifiers));
         let mut scroll = egui::ScrollArea::both().scroll_source(egui::scroll_area::ScrollSource {
             drag: false,
             ..egui::scroll_area::ScrollSource::default()
@@ -311,7 +315,7 @@ impl TextEditorView {
                     let origin = rect.min + egui::vec2(66.0, 3.0);
                     if !synthetic
                         && ghost_row.is_none()
-                        && row.hovered()
+                        && row.contains_pointer()
                         && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
                     {
                         let index = galley.cursor_from_pos(pos - origin).index;
@@ -322,6 +326,40 @@ impl TextEditorView {
                                     .nth(index)
                                     .map_or(text.len(), |(i, _)| i),
                         );
+                    }
+                    if inspect
+                        && !synthetic
+                        && ghost_row.is_none()
+                        && row.contains_pointer()
+                        && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+                        && let Some(range) = doc_token(text, &galley, origin, pos)
+                        && let Some(state) = language.as_ref()
+                        && !visible_spans.iter().any(|span| {
+                            span.range.contains(&(start + range.start))
+                                && (span.token.starts_with("comment")
+                                    || span.token.starts_with("string")
+                                    || span.token.starts_with("variable"))
+                        })
+                        && let Some(docs) = state.documentation.as_ref()
+                        && let Some(info) = docs
+                            .provider
+                            .resolve_symbol_info(&docs.language_id, &text[range.clone()])
+                        && info.target.is_some()
+                    {
+                        let x = |byte| {
+                            origin.x
+                                + galley
+                                    .pos_from_cursor(CCursor::new(text[..byte].chars().count()))
+                                    .min
+                                    .x
+                        };
+                        let y = origin.y + galley.size().y;
+                        ui.painter().line_segment(
+                            [egui::pos2(x(range.start), y), egui::pos2(x(range.end), y)],
+                            Stroke::new(1.0_f32, theme::INFO),
+                        );
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        inspected_doc = Some((info, docs.label.clone(), pos));
                     }
                     if ghost_row.is_none()
                         && let Some(state) = &language
@@ -502,6 +540,7 @@ impl TextEditorView {
             }
             if let Some(hover) = &state.hover
                 && hovered_byte.is_some()
+                && inspected_doc.is_none()
             {
                 egui::Tooltip::for_widget(&response)
                     .at_pointer()
@@ -523,6 +562,23 @@ impl TextEditorView {
                 }
             }
         }
+        if let Some((info, label, pos)) = &inspected_doc {
+            doc_popup(ui, id, info, label, *pos, font_size);
+            // Suppress both press-time selection and release-time caret movement.
+            self.mouse_anchor = None;
+            if response.clicked_by(egui::PointerButton::Primary)
+                && let Some(nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(
+                    url,
+                )) = &info.target
+            {
+                self.documentation_target = Some(
+                    nozhik_language_support::doc_provider::DefinitionTarget::ExternalUrl(
+                        url.clone(),
+                    ),
+                );
+            }
+            return Ok(());
+        }
         let changed = self.pointer_input(
             ui,
             buffer,
@@ -541,7 +597,7 @@ impl TextEditorView {
             }
         } else if enabled
             && response.clicked_by(egui::PointerButton::Primary)
-            && ui.input(|i| i.modifiers.command)
+            && ui.input(|i| primary_modifier(i.modifiers))
             && let Some(pos) = response.interact_pointer_pos()
             && let Some(byte) = hit_byte(&hit_rows, pos)
             && let Some(state) = language
@@ -577,7 +633,7 @@ impl TextEditorView {
         if (pointer.button_pressed(egui::PointerButton::Primary)
             && response.is_pointer_button_down_on()
             || response.clicked_by(egui::PointerButton::Primary))
-            && !ui.input(|i| i.modifiers.command)
+            && !ui.input(|i| primary_modifier(i.modifiers))
             && let Some(pos) = pointer
                 .press_origin()
                 .or_else(|| response.interact_pointer_pos())
@@ -1239,6 +1295,146 @@ fn markdown(ui: &mut Ui, source: &str) {
                 }
             }
         });
+    }
+}
+
+const fn primary_modifier(modifiers: egui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.mac_cmd
+    } else {
+        modifiers.ctrl
+    }
+}
+
+// Unlike caret hit testing, documentation requires a glyph under the pointer:
+// gutter, trailing whitespace and the right half of punctuation must not snap to a name.
+fn doc_token(
+    text: &str,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    pos: egui::Pos2,
+) -> Option<std::ops::Range<usize>> {
+    let x = pos.x - origin.x;
+    if x < 0.0 || x >= galley.size().x {
+        return None;
+    }
+    let mut index = galley.cursor_from_pos(pos - origin).index;
+    if galley.pos_from_cursor(CCursor::new(index)).min.x > x {
+        index = index.saturating_sub(1);
+    }
+    let byte = text.char_indices().nth(index)?.0;
+    let identifier = |c: char| c.is_alphanumeric() || c == '_';
+    if !text[byte..].chars().next().is_some_and(identifier) {
+        return None;
+    }
+    let allowed = |c| identifier(c) || c == '\\' || c == ':';
+    let start = text[..byte]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| allowed(*c))
+        .last()
+        .map_or(byte, |(i, _)| i);
+    let end = byte
+        + text[byte..]
+            .char_indices()
+            .take_while(|(_, c)| allowed(*c))
+            .last()
+            .map_or(0, |(i, c)| i + c.len_utf8());
+    if start > 0 && (text[..start].ends_with('$') || text[..start].ends_with("->")) {
+        return None;
+    }
+    let name = text[start..end].trim_start_matches('\\');
+    if name.starts_with(|c: char| c.is_ascii_digit()) || name.ends_with(':') {
+        return None;
+    }
+    Some(start..end)
+}
+
+fn doc_popup(
+    ui: &Ui,
+    id: egui::Id,
+    info: &nozhik_language_support::doc_provider::SymbolDocInfo,
+    label: &str,
+    pos: egui::Pos2,
+    font_size: f32,
+) {
+    use nozhik_language_support::doc_provider::EntityKind;
+    let screen = ui.ctx().screen_rect();
+    let width = 520.0_f32.min((screen.width() - 24.0).max(80.0));
+    egui::Area::new(id.with("symbol_documentation"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .movable(false)
+        .fixed_pos(egui::pos2(
+            pos.x.min(screen.right() - width - 12.0).max(screen.left()),
+            pos.y + 20.0,
+        ))
+        .constrain_to(screen.shrink(4.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(43, 45, 48))
+                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .corner_radius(7)
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    ui.set_width(width - 20.0);
+                    let doc_font =
+                        FontId::new(font_size, egui::FontFamily::Name("JetBrains Mono".into()));
+                    ui.style_mut().override_font_id = Some(doc_font.clone());
+                    let icon = match info.kind {
+                        EntityKind::Function | EntityKind::Method => "fx",
+                        EntityKind::Class => "C",
+                        EntityKind::Interface => "I",
+                        EntityKind::Constant | EntityKind::Keyword => "k",
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("({icon}) {}", info.name))
+                            .font(doc_font.clone())
+                            .strong()
+                            .color(theme::INFO),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height((screen.height() * 0.4).max(40.0))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&info.signature)
+                                        .font(doc_font)
+                                        .color(theme::TEXT),
+                                )
+                                .wrap(),
+                            );
+                            if !info.description.is_empty() {
+                                ui.separator();
+                                ui.add(egui::Label::new(&info.description).wrap());
+                            }
+                        });
+                    ui.separator();
+                    let modifier = if cfg!(target_os = "macos") {
+                        "Cmd"
+                    } else {
+                        "Ctrl"
+                    };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{modifier}+Click to open {label} documentation"
+                        ))
+                        .small()
+                        .color(theme::MUTED),
+                    );
+                });
+        });
+}
+pub(crate) fn open_documentation(url: String) {
+    if let Err(error) = std::thread::Builder::new()
+        .name("documentation-browser".into())
+        .spawn(move || {
+            if let Err(error) = webbrowser::open(&url) {
+                eprintln!("Open documentation: {error}");
+            }
+        })
+    {
+        eprintln!("Start documentation browser worker: {error}");
     }
 }
 
@@ -2181,6 +2377,189 @@ mod tests {
         TextEditorView::replace(&mut buffer, "Я", None)?;
         assert_eq!(buffer.rope().to_string(), "Я");
         assert_eq!(buffer.cursors().as_slice()[0].head.byte_offset, 2);
+        Ok(())
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises real hover, press, release and ordinary selection frames together"
+    )]
+    fn documentation_hover_click_and_release() -> Result<(), Box<dyn std::error::Error>> {
+        use nozhik_language_support::doc_provider::DefinitionTarget;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut editor = TextEditorView::default();
+        let source = "var_dump($x); unknown(); DateTime::format(); PHP_VERSION;";
+        let mut buffer = TextBuffer::load_from_str(BufferId(101), source);
+        let mut language = crate::language::EditorLanguage {
+            stubs: Some(std::sync::Arc::new(
+                nozhik_language_support::php_stubs::PhpVersionStubs::builtin()?,
+            )),
+            ..Default::default()
+        };
+        language.documentation = language
+            .stubs
+            .clone()
+            .map(crate::language::DocumentationSource::from);
+        let primary = egui::Modifiers {
+            mac_cmd: cfg!(target_os = "macos"),
+            command: true,
+            ctrl: !cfg!(target_os = "macos"),
+            ..Default::default()
+        };
+        let mut frame = |editor: &mut TextEditorView,
+                         buffer: &mut TextBuffer,
+                         events,
+                         modifiers,
+                         time|
+         -> Result<egui::FullOutput, BufferError> {
+            let mut result = Ok(());
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    modifiers,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        result =
+                            editor.show_language(ui, buffer, 14.0, 4, true, Some(&mut language));
+                    });
+                },
+            );
+            result?;
+            Ok(output)
+        };
+        let painted = frame(&mut editor, &mut buffer, vec![], egui::Modifiers::NONE, 0.0)?;
+        let pos =
+            text_position(&painted, source, 3).ok_or("symbol geometry")? + egui::vec2(2.0, 0.0);
+        let before = buffer.cursors().clone();
+        for time in [0.1, 0.2] {
+            let output = frame(
+                &mut editor,
+                &mut buffer,
+                vec![Event::PointerMoved(pos)],
+                primary,
+                time,
+            )?;
+            assert_eq!(
+                output.platform_output.cursor_icon,
+                egui::CursorIcon::PointingHand
+            );
+        }
+        let popup = frame(&mut editor, &mut buffer, vec![], primary, 0.3)?;
+        assert!(text_position(&popup, "(fx) var_dump", 0).is_some());
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(pos, true, primary),
+            primary,
+            0.4,
+        )?;
+        assert!(editor.documentation_target.is_none());
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(pos, false, primary),
+            primary,
+            0.5,
+        )?;
+        assert_eq!(
+            editor.documentation_target.take(),
+            Some(DefinitionTarget::ExternalUrl(
+                "https://www.php.net/var_dump".into()
+            ))
+        );
+        assert_eq!(buffer.cursors(), &before);
+        assert_eq!(buffer.rope().to_string(), source);
+        let released = frame(&mut editor, &mut buffer, vec![], egui::Modifiers::NONE, 0.6)?;
+        assert_ne!(
+            released.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        assert!(text_position(&released, "(fx) var_dump", 0).is_none());
+        let unknown = text_position(&painted, source, 17).ok_or("unknown geometry")?;
+        let output = frame(
+            &mut editor,
+            &mut buffer,
+            vec![Event::PointerMoved(unknown)],
+            primary,
+            0.7,
+        )?;
+        assert_ne!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        assert!(text_position(&output, "(fx) var_dump", 0).is_none());
+        // A standard click still places the caret on an unknown name.
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(unknown, true, egui::Modifiers::NONE),
+            egui::Modifiers::NONE,
+            0.8,
+        )?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(unknown, false, egui::Modifiers::NONE),
+            egui::Modifiers::NONE,
+            0.9,
+        )?;
+        assert!(buffer.cursors().as_slice()[0].head.byte_offset > 13);
+        Ok(())
+    }
+
+    #[test]
+    fn documentation_token_geometry_and_platform_modifier() -> Result<(), Box<dyn std::error::Error>>
+    {
+        assert_eq!(
+            primary_modifier(egui::Modifiers {
+                mac_cmd: true,
+                ..Default::default()
+            }),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            primary_modifier(egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }),
+            !cfg!(target_os = "macos")
+        );
+        assert!(!primary_modifier(egui::Modifiers::NONE));
+        let ctx = egui::Context::default();
+        let source = "я \\DateTime::format(); $var_dump; unknown;";
+        let mut galley = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            galley =
+                Some(ctx.fonts(|f| {
+                    f.layout_no_wrap(source.into(), FontId::monospace(14.0), theme::TEXT)
+                }));
+        });
+        let galley = galley.ok_or("galley")?;
+        let point =
+            |column| galley.pos_from_cursor(CCursor::new(column)).min + egui::vec2(2.0, 3.0);
+        let range =
+            doc_token(source, &galley, egui::Pos2::ZERO, point(6)).ok_or("qualified symbol")?;
+        assert_eq!(&source[range], "\\DateTime::format");
+        assert!(doc_token(source, &galley, egui::Pos2::ZERO, egui::pos2(-10.0, 3.0)).is_none());
+        assert!(
+            doc_token(
+                source,
+                &galley,
+                egui::Pos2::ZERO,
+                egui::pos2(galley.size().x + 10.0, 3.0)
+            )
+            .is_none()
+        );
+        assert!(doc_token(source, &galley, egui::Pos2::ZERO, point(19)).is_none());
+        assert!(doc_token(source, &galley, egui::Pos2::ZERO, point(25)).is_none());
         Ok(())
     }
 }

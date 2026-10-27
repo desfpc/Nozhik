@@ -60,6 +60,19 @@ pub const CARET: Color32 = Color32::from_rgba_premultiplied(85, 85, 85, 85);
 
 /// Applies palette and compact desktop spacing.
 pub fn apply(ctx: &Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "JetBrains Mono".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/JetBrainsMono-Regular.ttf"
+        ))),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name("JetBrains Mono".into()),
+        vec!["JetBrains Mono".into()],
+    );
+    ctx.set_fonts(fonts);
+
     let mut visuals = Visuals::dark();
     visuals.override_text_color = Some(TEXT);
     visuals.panel_fill = CHROME;

@@ -8,6 +8,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+webbrowser = "1.2.5"
 nozhik-ai-completion = { path = "crates/ai_completion" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }

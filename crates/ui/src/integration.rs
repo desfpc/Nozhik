@@ -79,7 +79,8 @@ impl NozhikUi {
         }
     }
     pub(crate) const fn global_modal(&self) -> bool {
-        self.language.usages.is_some()
+        self.welcome.clone.open
+            || self.language.usages.is_some()
             || self.language.invalidate_dialog
             || self.integration.close.is_some()
             || self.integration.path_action.is_some()
@@ -490,18 +491,8 @@ impl NozhikUi {
             egui::Window::new("About Nozhik")
                 .open(&mut open)
                 .show(ctx, |ui| {
-                    ui.heading("Nozhik v0.1.0-RC1");
-                    ui.label(format!(
-                        "Base commit {} · {}",
-                        env!("NOZHIK_COMMIT"),
-                        env!("NOZHIK_RUSTC")
-                    ));
-                    ui.label(format!(
-                        "{} / {} · egui 0.32 / Glow · Tokio workers",
-                        std::env::consts::OS,
-                        std::env::consts::ARCH
-                    ));
-                    ui.label("Core Editor · Git · PHP LSP · Terminal · SSH/SFTP · SQL");
+                    ui.heading(concat!("Nozhik ", env!("CARGO_PKG_VERSION")));
+                    ui.hyperlink_to("GitHub · desfpc/Nozhik", "https://github.com/desfpc/Nozhik");
                 });
             self.integration.about = open;
         }
@@ -906,6 +897,15 @@ mod splitter_tests {
         let bus = EventBus::new(64)?;
         let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
         let mut shell = NozhikUi::new(bus, settings, Config::default());
+        shell.open_project(dir.path().to_path_buf());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while shell.project.is_none() {
+            shell.receive_files();
+            if std::time::Instant::now() > deadline {
+                return Err("Project did not open".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let ctx = egui::Context::default();
         shell
             .layout

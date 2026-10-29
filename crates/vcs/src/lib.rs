@@ -1,4 +1,5 @@
 //! Git engine with one serial worker. All repository and network I/O stays there.
+pub mod clone;
 mod git_worker;
 mod history_actions;
 mod history_selection;

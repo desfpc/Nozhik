@@ -1100,3 +1100,35 @@ intent; late snapshots populate the cache without reopening rows. Project change
 and worker errors clear pending intents. Hide uses the existing left-dock state,
 retaining documents, selection and tree cache. Four vector header icons have
 English tooltips and accessibility labels and remain outside the scroll viewport.
+
+
+### Project launcher and repository cloning (v0.1.1, 2026-10-29)
+
+Default startup no longer treats cwd as a project. NozhikUi renders a compact
+launcher until the filesystem worker supplies ProjectOpened/ProjectCreated.
+The existing ordered recent-project worker supplies the searchable MRU; failures
+leave the launcher visible. Explicit CLI project arguments still open directly.
+The same viewport grows to the IDE on successful open. Launcher navigation contains
+only Projects/About and uses the existing embedded app icon and Cargo package version.
+
+UI owns session-only Zeroizing credential forms and a single pending operation.
+Dedicated threads run blocking vcs::clone or a current-thread Tokio runtime for
+reqwest GitHub REST calls. GET /user validates the account; /user/repos pages of
+100 include owner/collaborator/organization access (10,000 entry safety limit).
+Requests have 20-second timeouts and refuse redirects. No OAuth client registration
+is required: connection uses a user-provided PAT. No Enterprise endpoints or disk
+credential storage. Late cancelled replies cannot open a project. Worker completion
+requests repaint; no idle polling repaint is added.
+
+VCS clone accepts public/helper/agent, token, basic credentials and explicit SSH key.
+Secrets never enter persisted URLs or error text; callbacks refuse credential-bearing
+redirects and bound authentication retries. libgit2 retains certificate/host-key checks.
+Clone runs in a temporary sibling, checks cancellation, reserves the final directory
+exclusively and moves the completed checkout there. Existing destinations are refused;
+transport errors/cancellation clean temporary data. A filesystem failure during final
+publication may leave a partial destination; its user-visible error is retained.
+No submodule recursion or persistent credential binding for later fetch/push is added.
+
+Dependency boundaries: ui adds reqwest for GitHub; vcs adds zeroize for transient
+credentials and tempfile for clone staging. Neither adds shell Git dependence.
+Version is inherited from workspace.package by all crates and app bundle metadata.

@@ -1,6 +1,8 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
 mod data_grid;
+mod repository_clone;
+mod welcome;
 pub use data_grid::DataGrid;
 mod ai_inline;
 mod database_panel;
@@ -85,6 +87,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    welcome: welcome::Welcome,
     integration: integration::Integration,
     tabs: editor_tabs::TabStrip,
     recent_projects: recent_projects::RecentProjects,
@@ -157,6 +160,7 @@ impl NozhikUi {
             }
         };
         Self {
+            welcome: welcome::Welcome::default(),
             settings_dialog: settings_dialog::SettingsDialog::start(
                 settings.path().to_path_buf(),
                 bus.clone(),

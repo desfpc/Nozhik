@@ -1999,3 +1999,43 @@ and Hide/reopen retention. No manual native GUI smoke or Windows build/Clippy/GU
 was run. Default update-binaries.py rebuilds the macOS ARM64 executable and signed
 app archive; --check verified the current source fingerprint and both payload
 checksums. No Windows target cache was created.
+
+
+### Project launcher, cloning and version 0.1.1 (2026-10-29)
+
+Default launch shows a compact Projects/About screen with existing logo, Cargo
+version, searchable persistent project MRU, Open Folder and Clone Repository.
+Successful folder/clone opening expands the same viewport into the IDE; failures
+retain the launcher. Explicit CLI project paths retain direct-opening behavior.
+Removed implicit cwd opening. About links to https://github.com/desfpc/Nozhik.
+Workspace, package lockfile, UI and app bundle now share 0.1.1; AGENTS.md records
+one patch increment per follow-up change/commit, with 0.1.2 next.
+
+Clone URL authentication supports public/helper/agent, HTTPS token, login/password,
+and SSH key/passphrase. GitHub.com PAT connection validates GET /user and loads
+all available user repositories with pagination, filtering and private badges.
+No Enterprise or OAuth client registration. GitHub account passwords cannot be
+used for Git. Secrets are session-only Zeroizing strings, excluded from URLs,
+settings, Git config and error messages. Credential redirects are refused; default
+TLS/SSH host verification remains enabled. Cloning stages a completed checkout
+off-thread, refuses existing destinations and opens it automatically. Cancellation
+suppresses late replies; network transport controls how quickly it completes.
+Forms scroll on small viewports. Later IDE fetch/push still use system credentials.
+
+Validation: native workspace/all-features tests passed — 211 passed, 0 failed,
+5 existing system/live tests ignored. Sandbox execution was blocked by existing
+local TCP mocks; the full run with system access passed. Regressions cover actual
+launcher project-row clicks/search, invalid-project retention, successful viewport
+transition, local clone content/origin, existing-destination protection/cancellation,
+credential selection, secret clearing, cancelled completion rejection and mock
+GitHub account authentication/pagination (101 repositories, bearer header). The
+existing IDE splitter test now opens a real temporary project before checking docks.
+Native Clippy workspace/all-targets/all-features with -D warnings and rustfmt passed.
+
+Native macOS smoke used an isolated temporary app bundle/settings/project history,
+with AI/languages off: verified logo/version/MRU, About link, clone dialog and actual
+local URL clone → expanded IDE with cloned project tree. Checkout contents and MRU
+were verified on disk. Quit was issued to the test app. No real GitHub account,
+private remote authentication, remote push or Windows build/Clippy/GUI was exercised.
+Final workspace release build and default update-binaries.py/--check refresh only
+macOS ARM64 executable and signed app archive; no Windows cache was created.

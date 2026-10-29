@@ -43,7 +43,7 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   thiserror. Без UI.
 - fs_model: event_bus, vcs (read-only ignore/membership snapshots), notify, ignore, fuzzy-matcher, ropey, tempfile, thiserror.
   Без UI; синхронные операции вызываются выделенным worker.
-- vcs: git2 (vendored libgit2/OpenSSL), thiserror. Без UI/runtime/event_bus;
+- vcs: git2 (vendored libgit2/OpenSSL), thiserror, zeroize, tempfile (clone staging). Без UI/runtime/event_bus;
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
@@ -147,3 +147,11 @@ classification; repository/index handles must stay local to that call and never 
 Keep deferred receiver type facts bounded and retain their dependencies for relinking;
 navigation and reverse usages must share resolved edges. PHPDoc type tags are
 references; prose is not.
+
+### Launcher / GitHub
+
+UI may use reqwest for session-only GitHub REST access on a dedicated worker.
+Never serialize clone credentials or embed secrets in remote URLs/errors. Explicit
+Git credentials must reach libgit2 callbacks; certificate/host-key verification
+must stay enabled. Cancelled completions must not open projects. Version follows
+workspace.package; increase patch once per follow-up change/commit (see AGENTS.md).

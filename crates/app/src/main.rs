@@ -60,7 +60,7 @@ fn main() -> Result<()> {
         }
     });
     let options = eframe::NativeOptions {
-        viewport: egui_viewport()?,
+        viewport: egui_viewport(project_path.is_some())?,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -72,9 +72,8 @@ fn main() -> Result<()> {
             theme::apply(&cc.egui_ctx);
             let mut ui = NozhikUi::new(bus.clone(), settings, config);
             ui.attach_runtime(&cc.egui_ctx, &ui_runtime);
-            match project_path.map_or_else(std::env::current_dir, Ok) {
-                Ok(path) => ui.open_project(path),
-                Err(error) => eprintln!("Cannot resolve project folder: {error}"),
+            if let Some(path) = project_path {
+                ui.open_project(path);
             }
             bus.publish(Event::ActionTriggered("app.started".into()));
             Ok(Box::new(ui))
@@ -92,11 +91,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn egui_viewport() -> Result<eframe::egui::ViewportBuilder> {
+fn egui_viewport(project: bool) -> Result<eframe::egui::ViewportBuilder> {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/window-icon.png"))
         .context("Cannot decode the application icon")?;
     Ok(eframe::egui::ViewportBuilder::default()
-        .with_inner_size([1440.0, 900.0])
+        .with_inner_size(if project {
+            [1440.0, 900.0]
+        } else {
+            [1000.0, 680.0]
+        })
         .with_min_inner_size([800.0, 540.0])
         .with_title("Nozhik")
         .with_icon(icon))

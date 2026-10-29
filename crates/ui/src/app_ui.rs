@@ -600,9 +600,21 @@ impl NozhikUi {
     pub(crate) fn update_frame(&mut self, ctx: &Context) {
         let wake_context = ctx.clone();
         self.fs.set_wakeup(move || wake_context.request_repaint());
+        self.receive_files();
+        if self.project.is_none() {
+            self.receive_events();
+            self.integration_tick(ctx);
+            #[cfg(target_os = "macos")]
+            if self.native_menu.is_some() {
+                self.menu_bar(ctx);
+            }
+            self.welcome_screen(ctx);
+            self.integration_dialogs(ctx);
+            return;
+        }
+        self.welcome_transition(ctx);
         self.shortcuts(ctx);
         self.receive_events();
-        self.receive_files();
         self.integration_tick(ctx);
         self.database_tick(ctx);
         self.receive_remote(ctx);

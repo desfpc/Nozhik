@@ -424,33 +424,6 @@ impl NozhikUi {
             .push(SqlConsole::new(id, name, schema, sql, title));
         self.database.active = self.database.tabs.len().checked_sub(1);
     }
-    pub(crate) fn database_tabs(&mut self, ui: &mut egui::Ui) {
-        let mut close = None;
-        for (index, tab) in self
-            .database
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.open)
-        {
-            if ui
-                .selectable_label(
-                    self.database.active == Some(index),
-                    format!("▤ {} · {}", tab.title, tab.connection),
-                )
-                .clicked()
-            {
-                self.database.active = Some(index);
-            }
-            if ui.small_button("×").clicked() {
-                close = Some(index);
-            }
-        }
-        if let Some(index) = close {
-            self.request_close(crate::integration::CloseTarget::Sql(index), ui.ctx());
-        }
-    }
-
     pub(crate) fn database_editor(&mut self, ui: &mut egui::Ui, enabled: bool) {
         if let Some(index) = self.database.active
             && let Some(tab) = self.database.tabs.get_mut(index)

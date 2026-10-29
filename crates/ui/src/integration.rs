@@ -6,6 +6,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 #[derive(Clone, Copy)]
 pub enum CloseTarget {
     Window,
+    Files,
     File(usize),
     Sql(usize),
 }
@@ -105,6 +106,7 @@ impl NozhikUi {
                 self.documents.iter().any(|d| d.buffer.is_dirty())
                     || self.database.tabs.iter().any(|t| t.buffer.is_dirty())
             }
+            CloseTarget::Files => self.documents.iter().any(|d| d.open && d.buffer.is_dirty()),
             CloseTarget::File(i) => self.documents.get(i).is_some_and(|d| d.buffer.is_dirty()),
             CloseTarget::Sql(i) => self
                 .database
@@ -128,6 +130,13 @@ impl NozhikUi {
             CloseTarget::Window => {
                 self.integration.confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            CloseTarget::Files => {
+                for i in (0..self.documents.len()).rev() {
+                    if self.documents[i].open {
+                        self.finish_close(CloseTarget::File(i), ctx);
+                    }
+                }
             }
             CloseTarget::File(i) => {
                 if i < self.documents.len() {
@@ -394,11 +403,12 @@ impl NozhikUi {
         self.global_actions(ctx);
         if self.integration.waiting && self.integration.path_action.is_none() {
             // Resolve further unsaved SQL destinations one at a time.
-            if self
-                .database
-                .tabs
-                .iter()
-                .any(|t| t.buffer.is_dirty() && t.path.is_none())
+            if !matches!(self.integration.close, Some(CloseTarget::Files))
+                && self
+                    .database
+                    .tabs
+                    .iter()
+                    .any(|t| t.buffer.is_dirty() && t.path.is_none())
             {
                 self.save_all();
             }
@@ -441,7 +451,15 @@ impl NozhikUi {
                 }
             });
             if save {
-                self.save_all();
+                if matches!(target, CloseTarget::Files) {
+                    for i in 0..self.documents.len() {
+                        if self.documents[i].open && self.documents[i].buffer.is_dirty() {
+                            self.save_document(i);
+                        }
+                    }
+                } else {
+                    self.save_all();
+                }
                 self.integration.waiting = true;
             }
             if discard {

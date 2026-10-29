@@ -907,3 +907,26 @@ tags contribute exact UTF-8 references; ordinary comments/descriptive text do no
 Invalidate seeds the live index with retained overlays before emitting their revision
 gates. Reconciliation installs disk facts without temporarily advertising valid
 buffer revisions with missing facts. Unsaved contents remain excluded from disk.
+
+
+### Editor tab strip (2026-10-29)
+
+`ui::editor_tabs` renders file and SQL tabs in one horizontal ScrollArea with
+fixed trailing overflow/actions controls. Tab rectangles and the actual scroll
+viewport determine overflow-menu membership on each frame, including partially
+visible tabs on either edge. Selection reveals the whole tab; manual scrolling
+is retained until the active buffer changes. The strip uses zero clip expansion
+so reveal coordinates and overflow classification share the same boundaries.
+
+Go to File opens the existing Search Everywhere Files filter. File-only bulk
+closure uses CloseTarget::Files and the existing dirty/revision save gate;
+Save All in this flow saves only open file documents, with SQL destinations left
+outside the operation. Close Unmodified removes clean files in reverse order via
+the same close lifecycle, retaining modified buffers and active indices.
+
+
+Overflow popup dimensions follow measured file labels and row count, capped at
+half the central editor region in each axis (including frame margins). Explicit
+content bounds override egui Area's remembered size, allowing both growth and
+shrinkage while open. Rows remain single-line with ellipsis and full-path tooltips;
+a vertical ScrollArea handles lists taller than the limit.

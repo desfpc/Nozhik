@@ -5,6 +5,7 @@ pub use data_grid::DataGrid;
 mod ai_inline;
 mod database_panel;
 mod diff_view;
+mod editor_tabs;
 pub mod editor_view;
 mod integration;
 mod language;
@@ -83,6 +84,7 @@ enum RefreshState {
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
     integration: integration::Integration,
+    tabs: editor_tabs::TabStrip,
     recent_projects: recent_projects::RecentProjects,
     layout: layout::LayoutManager,
     wake_task: Option<tokio::task::JoinHandle<()>>,
@@ -161,6 +163,7 @@ impl NozhikUi {
                 settings.path().with_file_name("recent_projects.json"),
             ),
             integration: integration::Integration::default(),
+            tabs: editor_tabs::TabStrip::default(),
             layout: layout::LayoutManager::default(),
             wake_task: None,
             #[cfg(target_os = "macos")]

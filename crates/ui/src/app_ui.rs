@@ -469,44 +469,7 @@ impl NozhikUi {
         egui::CentralPanel::default()
             .frame(theme::dock_frame(theme::BACKGROUND))
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    self.database_tabs(ui);
-                    let mut close = None;
-                    for (index, document) in
-                        self.documents.iter().enumerate().filter(|(_, d)| d.open)
-                    {
-                        if ui
-                            .selectable_label(
-                                self.active == Some(index) && self.database.active.is_none(),
-                                format!(
-                                    "{}{}",
-                                    document.name,
-                                    if document.buffer.is_dirty() {
-                                        " ●"
-                                    } else {
-                                        ""
-                                    }
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.active = Some(index);
-                            self.editor.focus_buffer = Some(document.buffer.snapshot().buffer_id);
-                            self.database.active = None;
-                        }
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Close tab (asks before discarding changes)")
-                            .clicked()
-                        {
-                            close = Some(index);
-                        }
-                    }
-                    if let Some(index) = close {
-                        self.request_close(crate::integration::CloseTarget::File(index), ctx);
-                    }
-                });
-                ui.separator();
+                self.editor_tabs(ui);
                 self.find_bar(ui);
                 if self.database.active.is_some() {
                     let enabled = !self.language.invalidate_dialog

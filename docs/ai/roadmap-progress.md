@@ -1662,3 +1662,44 @@ all 607 original PHP files and its existing cache unchanged (608 files total).
 Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
 --check verified source fingerprint and both payload checksums. Windows builds,
 Clippy and GUI were not run and no Windows target cache was created.
+
+
+### Single-row editor tabs and viewport overflow (2026-10-29)
+
+Replaced wrapped file/SQL controls with compact rounded tabs in one horizontal
+scroll area. Fixed trailing down-arrow appears only on overflow; its popup derives
+fully/partially hidden files from current scroll geometry, and selection reveals
+the target. A trailing horizontal ellipsis menu provides Go to File (Files filter),
+Close All Tabs through the unsaved-change gate, and Close Unmodified Tabs retaining
+all dirty file buffers. Bulk file actions exclude separate SQL consoles.
+
+Headless pointer/wheel regressions exercise one-row geometry, partial visibility,
+left/right hidden tabs, selection/reveal, viewport resize, menu actions, clean-tab
+removal and modified-buffer close confirmation.
+
+Final native verification: workspace/all-features tests passed outside sandbox —
+170 passed, 0 failed, 5 existing live/system tests ignored. The sandbox repeat
+encountered PermissionDenied in existing local TCP mocks; unrestricted tests passed.
+Native workspace Clippy all-targets/all-features with -D warnings, rustfmt,
+git diff --check and workspace release build passed. Default update-binaries.py
+rebuilt macOS ARM64 executable/app archive; --check verified source and payload
+hashes. Native GUI appearance was not manually exercised. Windows builds/Clippy/GUI
+were not run and no Windows target cache was created.
+
+
+### Content-sized hidden-tabs popup (2026-10-29)
+
+Replaced the fixed 240-point width/360-point height with measured label/row sizing.
+The popup grows and shrinks with its currently hidden tabs and is capped at half
+the central editor's width and height, including frame margins. Explicit inner
+bounds avoid a remembered small egui Area clipping the list. Long names truncate
+on one line at the cap, retain full-path tooltips, and long lists scroll vertically.
+A headless regression checks short→long→resized→short geometry with themed fonts.
+
+
+Verification: 171 native workspace/all-features tests passed, 0 failed, 5 existing
+system/live tests ignored. Native workspace Clippy all-targets/all-features with
+-D warnings, rustfmt, diff checks and workspace release build passed. Popup geometry
+and existing activation/menu behavior were verified headlessly; no manual native
+GUI smoke or Windows build/Clippy/GUI was run. Default update-binaries.py refreshes
+macOS ARM64 executable/app archive only; source/payload checksum verification passed.

@@ -38,6 +38,11 @@ pub struct SearchEverywhere {
 }
 
 impl SearchEverywhere {
+    #[cfg(test)]
+    pub(crate) const fn files_filter_selected(&self) -> bool {
+        self.filter == 2
+    }
+
     /// Opens the modal and requests input focus on its first frame.
     pub const fn open(&mut self) {
         self.open = true;

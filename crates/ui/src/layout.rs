@@ -24,16 +24,18 @@ impl Default for Layout {
         Self {
             left: 0.21,
             right: 0.22,
-            bottom: 0.26,
+            bottom: 0.40,
             sql: 0.45,
         }
     }
 }
 impl Layout {
     fn valid(self) -> bool {
-        [self.left, self.right, self.bottom, self.sql]
+        [self.left, self.right, self.sql]
             .into_iter()
             .all(|v| v.is_finite() && (0.1..=0.8).contains(&v))
+            && self.bottom.is_finite()
+            && (0.05..=1.0).contains(&self.bottom)
             && self.left + self.right <= 0.8
     }
 }
@@ -151,7 +153,7 @@ impl LayoutManager {
 }
 
 pub fn seed(ctx: &egui::Context, id: &str, width: f32, height: f32) {
-    if !ctx.input(|i| i.pointer.any_down()) {
+    if !ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
         ctx.data_mut(|d| {
             d.insert_persisted(
                 egui::Id::new(id),

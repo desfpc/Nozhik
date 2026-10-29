@@ -172,7 +172,9 @@ impl NozhikUi {
                                     }
                                     paint_tab(
                                         ui,
-                                        tab,
+                                        &tab.name,
+                                        tab.selected,
+                                        tab.dirty,
                                         rect,
                                         response.hovered(),
                                         close_response.hovered(),
@@ -336,9 +338,23 @@ fn overflow_menu(
         })
 }
 
-fn paint_tab(ui: &Ui, tab: &Tab, rect: Rect, hovered: bool, close_hovered: bool, font: &FontId) {
+#[allow(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "Shared file/terminal tab painting uses independent selection, dirty and hover states"
+)]
+pub fn paint_tab(
+    ui: &Ui,
+    name: &str,
+    selected: bool,
+    dirty: bool,
+    rect: Rect,
+    hovered: bool,
+    close_hovered: bool,
+    font: &FontId,
+) {
     let painter = ui.painter();
-    if tab.selected || hovered {
+    if selected || hovered {
         painter.rect_filled(
             rect.shrink2(vec2(0.0, 2.0)),
             CornerRadius {
@@ -347,24 +363,20 @@ fn paint_tab(ui: &Ui, tab: &Tab, rect: Rect, hovered: bool, close_hovered: bool,
                 sw: 0,
                 se: 0,
             },
-            if tab.selected {
-                theme::HOVER
-            } else {
-                theme::PANEL
-            },
+            if selected { theme::HOVER } else { theme::PANEL },
         );
     }
     painter.text(
         pos2(rect.left() + 12.0, rect.center().y),
         Align2::LEFT_CENTER,
-        &tab.name,
+        name,
         font.clone(),
         theme::TEXT,
     );
     let center = pos2(rect.right() - 15.0, rect.center().y);
-    if tab.dirty && !close_hovered {
+    if dirty && !close_hovered {
         painter.circle_filled(center, 3.0, theme::TEXT);
-    } else if hovered || tab.selected || close_hovered {
+    } else if hovered || selected || close_hovered {
         let stroke = Stroke::new(
             1.2_f32,
             if close_hovered {

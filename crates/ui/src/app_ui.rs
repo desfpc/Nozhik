@@ -301,6 +301,7 @@ impl NozhikUi {
             );
             let panel = egui::TopBottomPanel::bottom("bottom_dock")
                 .resizable(true)
+                .height_range(70.0..=viewport.height())
                 .default_height(viewport.height() * self.layout.value.bottom)
                 .show_separator_line(false)
                 .frame(theme::dock_frame(theme::PANEL))
@@ -333,10 +334,15 @@ impl NozhikUi {
                     }
                 });
             let mut layout = self.layout.value;
-            layout.bottom = (panel.response.rect.height() / viewport.height()).clamp(0.1, 0.8);
-            if ctx.input(|i| i.pointer.any_down()) {
+            layout.bottom = (panel.response.rect.height() / viewport.height()).clamp(0.05, 1.0);
+            if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
             }
+        }
+        if self.bottom != Some(crate::terminal_panel::TERMINAL_LABEL)
+            && let Some(panel) = &mut self.terminal
+        {
+            panel.hidden();
         }
         self.side_panels(ctx);
     }
@@ -410,7 +416,7 @@ impl NozhikUi {
                 });
             let mut layout = self.layout.value;
             layout.right = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
-            if ctx.input(|i| i.pointer.any_down()) {
+            if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
             }
         }
@@ -447,7 +453,7 @@ impl NozhikUi {
                 });
             let mut layout = self.layout.value;
             layout.left = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
-            if ctx.input(|i| i.pointer.any_down()) {
+            if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
             }
         }
@@ -645,8 +651,7 @@ mod tests {
     use nozhik_event_bus::EventBus;
 
     #[test]
-    fn terminal_keymap_opens_panel_without_spawning_outside_a_project()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn terminal_keymap_opens_panel_without_a_project() -> Result<(), Box<dyn std::error::Error>> {
         let bus = EventBus::new(32)?;
         let dir = tempfile::tempdir()?;
         let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
@@ -677,6 +682,63 @@ mod tests {
             );
         }
         assert!(shell.terminal.is_some());
+        if let Some(panel) = &mut shell.terminal {
+            panel.shutdown();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_resize_survives_hide_and_reopen() -> Result<(), Box<dyn std::error::Error>> {
+        use egui::{Event as InputEvent, Pos2, Rect, vec2};
+        let bus = EventBus::new(32)?;
+        let dir = tempfile::tempdir()?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        shell.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
+        let frame = |shell: &mut NozhikUi, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| shell.panels(ctx),
+            )
+        };
+        let panel_rect = || {
+            egui::containers::panel::PanelState::load(&ctx, egui::Id::new("bottom_dock"))
+                .map(|s| s.rect)
+                .ok_or("missing bottom dock")
+        };
+        frame(&mut shell, vec![]);
+        let initial = panel_rect()?;
+        assert!(initial.height() > 280.0 && initial.height() < 400.0);
+        let start = initial.center_top() + vec2(0.0, 2.0);
+        let end = start - vec2(0.0, 140.0);
+        let pointer = |pos, pressed| InputEvent::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut shell,
+            vec![InputEvent::PointerMoved(start), pointer(start, true)],
+        );
+        frame(&mut shell, vec![InputEvent::PointerMoved(end)]);
+        frame(&mut shell, vec![pointer(end, false)]);
+        let resized = panel_rect()?;
+        assert!(
+            resized.height() > initial.height() + 100.0,
+            "initial={initial:?}, resized={resized:?}"
+        );
+        shell.bottom = None;
+        frame(&mut shell, vec![]);
+        shell.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
+        frame(&mut shell, vec![]);
+        assert!((panel_rect()?.height() - resized.height()).abs() < 2.0);
         if let Some(panel) = &mut shell.terminal {
             panel.shutdown();
         }

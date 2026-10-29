@@ -930,3 +930,29 @@ half the central editor region in each axis (including frame margins). Explicit
 content bounds override egui Area's remembered size, allowing both growth and
 shrinkage while open. Rows remain single-line with ellipsis and full-path tooltips;
 a vertical ScrollArea handles lists taller than the limit.
+
+### Terminal tabs, selection and dock height (2026-10-29)
+
+Terminal tabs share the editor-tab painter (font, padding, active/hover colors,
+rounded top corners and close hit area). The single scrolling row has an inline
+new-session button and fixed trailing vertical actions/Hide controls. Close All
+removes sessions through TerminalManager; Hide retains them. Opening an empty
+panel creates one local session, including without a project (application cwd).
+Empty panels do not respawn shells every frame after Close All or process exit.
+
+TerminalView owns per-session cell-boundary selections, paints them with the
+shared selection color and extracts Unicode text without wide-cell duplication.
+Drag/Shift-click and a context menu provide Copy/Cut/Paste. Native Edit actions
+route to the focused terminal before editor actions. Paste uses egui-winit's
+clipboard request and existing bracketed-paste encoding; background/disabled
+terminals never consume clipboard input. With a selection, Copy never sends
+SIGINT. Without selection, Ctrl+C retains shell interruption. Cut edits a selected
+range on the live cursor row through line-editor cursor/backspace bytes; history,
+multiline output and alternate-screen selections are copy-only. The PTY remains
+a stream owned by the shell rather than an editable output document.
+
+Initial bottom height is 40% of the window, leaving a larger editor region.
+Existing stored proportions remain respected. User resizing may use the available
+window height; seed and persistence retain the release-frame geometry so hiding
+and reopening restores the selected height. Layout validation accepts the enlarged
+bottom range while retaining the previous side-dock limits.

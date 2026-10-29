@@ -1703,3 +1703,40 @@ system/live tests ignored. Native workspace Clippy all-targets/all-features with
 and existing activation/menu behavior were verified headlessly; no manual native
 GUI smoke or Windows build/Clippy/GUI was run. Default update-binaries.py refreshes
 macOS ARM64 executable/app archive only; source/payload checksum verification passed.
+
+### Terminal header, clipboard selection and remembered height (2026-10-29)
+
+Unified terminal tab painting with file tabs: one scrolling row, matching font,
+padding, corners, active/hover state and per-session close hit area. Inline +
+creates a shell; fixed vertical dots (drawn geometry, avoiding a missing font
+symbol) offer Close All, followed by a Hide minus that preserves sessions.
+Opening an empty panel creates one local shell; closing/exiting sessions while
+visible does not respawn them until the panel is reopened. No-project shells
+use the application's current directory.
+
+Initial bottom height is 40% of the viewport. Dragged heights may exceed the
+editor's remaining height and survive Hide/reopen; the release frame participates
+in splitter state persistence. Existing stored layouts remain respected.
+
+Per-session mouse/Shift-click selection uses cell boundaries and handles Unicode,
+wide characters, reverse and multiline ranges. Ordered pointer-event replay
+covers native drags whose press/move/release arrive in one frame. Context menu,
+keyboard clipboard events and native Edit actions target the focused terminal;
+paste retains bracketed-paste negotiation. Cut deletes a selected live cursor-row
+range with line-editor input; history/multiline/alternate-screen output is copy-only.
+Copy with a selection does not interrupt the shell; plain Ctrl+C without a
+selection remains available. Disabled/unfocused views ignore clipboard input.
+
+Validation: 175 native workspace/all-features tests passed, 0 failed, 5 existing
+system/live tests ignored. Full tests ran with system access after sandbox TCP
+PermissionDenied failures. Native workspace Clippy all-targets/all-features with
+-D warnings, rustfmt, workspace release build and git diff --check passed.
+Regressions cover actual egui drag/fast drag, Unicode clipboard output, exact
+bracketed paste and live-line cut bytes, focus/modal suppression, real header
+menu clicks, Close All, reopening an empty panel and actual splitter resizing.
+Native macOS smoke on an isolated temporary project/settings (AI/languages off)
+confirmed appearance, the drawn vertical menu icon, automatic shell creation,
+system-clipboard command paste/execution and visible mouse selection. Final test
+process was explicitly stopped; native menu/bulk actions are covered headlessly.
+Default update-binaries.py rebuilt macOS ARM64 executable/app archive; --check
+verified current source and payload hashes. Windows build/Clippy/GUI were not run.

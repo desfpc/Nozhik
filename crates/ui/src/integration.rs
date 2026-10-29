@@ -289,6 +289,14 @@ impl NozhikUi {
                     }
                 }
                 "ui.cut" | "ui.copy" | "ui.paste" => {
+                    if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
+                        && self
+                            .terminal
+                            .as_mut()
+                            .is_some_and(|panel| panel.clipboard_action(ctx, &action))
+                    {
+                        continue;
+                    }
                     if action == "ui.copy"
                         && let Some(text) = self
                             .database

@@ -249,3 +249,180 @@ fn staging_rename_does_not_stage_resurrected_source()
     );
     Ok(())
 }
+
+fn merge_fixture()
+-> std::result::Result<(tempfile::TempDir, Repository, String), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    fs::write(dir.path().join("file.txt"), "base\n")?;
+    stage(&repo, &["file.txt".into()], true)?;
+    commit(&repo, "Base", "")?;
+    let original = status(&repo)?.branch;
+    checkout(&repo, "feature", true)?;
+    fs::write(dir.path().join("file.txt"), "theirs\n")?;
+    stage(&repo, &["file.txt".into()], true)?;
+    commit(&repo, "Theirs", "")?;
+    checkout(&repo, &original, false)?;
+    fs::write(dir.path().join("file.txt"), "ours\n")?;
+    stage(&repo, &["file.txt".into()], true)?;
+    commit(&repo, "Ours", "")?;
+    Ok((dir, repo, original))
+}
+#[test]
+fn merge_preview_conflict_edit_continue_and_abort()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo, _) = merge_fixture()?;
+    let before = repo.head()?.target();
+    assert_eq!(crate::merge::preview(&repo, "feature")?, 1);
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(fs::read_to_string(dir.path().join("file.txt"))?, "ours\n");
+    crate::merge::begin(&repo, "feature")?;
+    assert_eq!(repo.state(), git2::RepositoryState::Merge);
+    let snapshot = status(&repo)?;
+    assert_eq!(snapshot.conflicts.len(), 1);
+    assert_eq!(snapshot.conflicts[0].remaining, 1);
+    assert!(crate::merge::finish(&repo).is_err());
+    let diff = file_diff(
+        &repo,
+        &DiffTarget::Working {
+            path: "file.txt".into(),
+            staged: false,
+        },
+    )?;
+    assert!(
+        diff.hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .any(|l| l.text.contains("<<<<<<<"))
+    );
+    assert!(crate::merge::switch(&mut Repository::open(dir.path())?, "feature", false).is_err());
+    fs::write(dir.path().join("file.txt"), "resolved\n")?;
+    assert_eq!(status(&repo)?.conflicts[0].remaining, 0);
+    crate::merge::finish(&repo)?;
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_count(), 2);
+    assert_eq!(status(&repo)?.changes.len(), 0);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("file.txt"))?,
+        "resolved\n"
+    );
+    // Recreate the same merge, then abort without deleting unrelated untracked files.
+    let base = repo.find_commit(before.ok_or("missing original HEAD")?)?;
+    repo.reset(base.as_object(), git2::ResetType::Hard, None)?;
+    crate::merge::begin(&repo, "feature")?;
+    fs::write(dir.path().join("keep.tmp"), "keep")?;
+    crate::merge::abort(&repo)?;
+    assert_eq!(repo.head()?.target(), before);
+    assert_eq!(fs::read_to_string(dir.path().join("file.txt"))?, "ours\n");
+    assert_eq!(fs::read_to_string(dir.path().join("keep.tmp"))?, "keep");
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    Ok(())
+}
+#[test]
+fn branch_stash_roundtrip_preserves_index_and_untracked_files()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, mut repo, original) = merge_fixture()?;
+    fs::write(dir.path().join("file.txt"), "staged work\n")?;
+    stage(&repo, &["file.txt".into()], true)?;
+    fs::write(dir.path().join("file.txt"), "unstaged work\n")?;
+    fs::write(dir.path().join("new.txt"), "new work\n")?;
+    crate::merge::switch(&mut repo, "feature", true)?;
+    assert_eq!(status(&repo)?.branch, "feature");
+    assert_eq!(status(&repo)?.changes.len(), 0);
+    assert!(!dir.path().join("new.txt").exists());
+    crate::merge::switch(&mut repo, &original, false)?;
+    assert_eq!(
+        fs::read_to_string(dir.path().join("file.txt"))?,
+        "unstaged work\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("new.txt"))?,
+        "new work\n"
+    );
+    let change = status(&repo)?
+        .changes
+        .into_iter()
+        .find(|c| c.path == Path::new("file.txt"))
+        .ok_or("missing work")?;
+    assert!(change.is_staged && change.has_unstaged);
+    // Bring-changes refuses an overlapping checkout and retains all work.
+    assert!(crate::merge::switch(&mut repo, "feature", false).is_err());
+    assert_eq!(status(&repo)?.branch, original);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("file.txt"))?,
+        "unstaged work\n"
+    );
+    Ok(())
+}
+#[test]
+fn nonconflicting_merge_remote_switch_and_bulk_actions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, mut repo) = repository()?;
+    fs::write(dir.path().join("base.txt"), "base\n")?;
+    stage(&repo, &["base.txt".into()], true)?;
+    commit(&repo, "Base", "")?;
+    let original = status(&repo)?.branch;
+    checkout(&repo, "feature", true)?;
+    fs::write(dir.path().join("feature.txt"), "feature\n")?;
+    stage(&repo, &["feature.txt".into()], true)?;
+    commit(&repo, "Feature", "")?;
+    let target = repo.head()?.peel_to_commit()?;
+    repo.reference(
+        "refs/remotes/origin/remote-feature",
+        target.id(),
+        false,
+        "test",
+    )?;
+    // A fetch refspec supplies remote tracking validation without using a network.
+    repo.remote("origin", "https://example.invalid/test.git")?;
+    drop(target);
+    checkout(&repo, &original, false)?;
+    assert_eq!(crate::merge::preview(&repo, "feature")?, 0);
+    crate::merge::begin(&repo, "feature")?;
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_count(), 2);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("feature.txt"))?,
+        "feature\n"
+    );
+    assert!(
+        status(&repo)?
+            .branches
+            .iter()
+            .any(|b| b == "origin/remote-feature")
+    );
+    crate::merge::switch(&mut repo, "origin/remote-feature", false)?;
+    assert_eq!(status(&repo)?.branch, "remote-feature");
+    assert_eq!(
+        status(&repo)?.upstream.as_deref(),
+        Some("origin/remote-feature")
+    );
+    fs::write(dir.path().join("one.tmp"), "one")?;
+    fs::write(dir.path().join("two.tmp"), "two")?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    worker.execute(Task::IgnoreExtension("log".into()))?;
+    assert!(repo.status_should_ignore(Path::new("nested/a.log"))?);
+    worker.execute(Task::DiscardMany(vec!["one.tmp".into(), "two.tmp".into()]))?;
+    assert!(!dir.path().join("one.tmp").exists() && !dir.path().join("two.tmp").exists());
+    Ok(())
+}
+
+#[test]
+fn staging_markers_does_not_bypass_merge_resolution_gate()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo, _) = merge_fixture()?;
+    crate::merge::begin(&repo, "feature")?;
+    stage(&repo, &["file.txt".into()], true)?;
+    assert!(!repo.index()?.has_conflicts());
+    assert_eq!(status(&repo)?.conflicts[0].remaining, 1);
+    assert!(crate::merge::finish(&repo).is_err());
+    std::fs::write(dir.path().join("file.txt"), "resolved\n")?;
+    assert!(status(&repo)?.conflicts.iter().all(|c| c.remaining == 0));
+    crate::merge::finish(&repo)?;
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_count(), 2);
+    let head = repo.head()?.peel_to_commit()?;
+    let entry = head.tree()?.get_path(Path::new("file.txt"))?;
+    assert_eq!(repo.find_blob(entry.id())?.content(), b"resolved\n");
+    assert_eq!(status(&repo)?.changes.len(), 0);
+    Ok(())
+}

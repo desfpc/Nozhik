@@ -12,7 +12,9 @@ use std::{
 pub struct Layout {
     /// Left dock width / viewport width.
     pub left: f32,
-    /// Right dock width / viewport width.
+    /// Git sidebar width / viewport width, independent of the project dock.
+    pub git: f32,
+    /// Legacy right dock proportion retained for existing layout.json compatibility.
     pub right: f32,
     /// Bottom dock height / viewport height.
     pub bottom: f32,
@@ -23,6 +25,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             left: 0.21,
+            git: 0.27,
             right: 0.22,
             bottom: 0.40,
             sql: 0.45,
@@ -31,7 +34,7 @@ impl Default for Layout {
 }
 impl Layout {
     fn valid(self) -> bool {
-        [self.left, self.right, self.sql]
+        [self.left, self.git, self.right, self.sql]
             .into_iter()
             .all(|v| v.is_finite() && (0.1..=0.8).contains(&v))
             && self.bottom.is_finite()

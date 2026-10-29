@@ -1,6 +1,6 @@
 //! Virtualized unified diff with two gutters; only visible rows are laid out.
 use crate::theme;
-use egui::FontId;
+use egui::{Color32, FontId};
 use nozhik_vcs::model::{DiffLineKind, FileDiff};
 
 enum Row {
@@ -27,16 +27,21 @@ impl DiffView {
         }
         self.file = Some(file);
     }
+    pub(crate) fn header(&self, ui: &mut egui::Ui) {
+        if let Some(file) = &self.file {
+            ui.add(
+                egui::Label::new(egui::RichText::new(file.path.to_string_lossy()).strong())
+                    .truncate(),
+            );
+        } else {
+            ui.weak("Select a changed file");
+        }
+    }
     pub(crate) fn show(&self, ui: &mut egui::Ui, font_size: f32) {
         let Some(file) = &self.file else {
             ui.weak("Select a changed file to view its diff");
             return;
         };
-        ui.horizontal(|ui| {
-            ui.strong(file.path.to_string_lossy());
-            ui.colored_label(crate::theme::SUCCESS, format!("+{}", file.added));
-            ui.colored_label(crate::theme::ERROR, format!("−{}", file.deleted));
-        });
         if file.binary {
             ui.weak("Binary or oversized file — text diff is unavailable");
             return;
@@ -49,7 +54,8 @@ impl DiffView {
             return;
         }
         let font = FontId::monospace(font_size);
-        let height = font_size + 8.0;
+        let height = font_size + 6.0;
+        ui.spacing_mut().item_spacing.y = 0.0;
         egui::ScrollArea::both()
             .id_salt(("git_diff", &file.path))
             .auto_shrink([false, false])
@@ -62,12 +68,12 @@ impl DiffView {
                             None,
                             None,
                             ' ',
-                            crate::theme::DIFF_HUNK,
+                            Color32::from_rgb(29, 34, 38),
                         ),
                         Row::Line(h, l) => {
                             let line = &file.hunks[h].lines[l];
                             let (marker, bg) = match line.kind {
-                                DiffLineKind::Context => (' ', theme::BACKGROUND),
+                                DiffLineKind::Context => (' ', Color32::from_rgb(35, 42, 48)),
                                 DiffLineKind::Addition => ('+', crate::theme::DIFF_ADD),
                                 DiffLineKind::Deletion => ('−', crate::theme::DIFF_DELETE),
                             };
@@ -87,6 +93,25 @@ impl DiffView {
                     let (rect, _) =
                         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 0.0, background);
+                    if matches!(row, Row::Hunk(_)) || background == Color32::from_rgb(35, 42, 48) {
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
+                                rect.left_top(),
+                                egui::pos2(rect.left() + 100.0, rect.bottom()),
+                            ),
+                            0,
+                            Color32::from_rgb(29, 34, 38),
+                        );
+                    }
+                    for x in [50.0, 100.0] {
+                        ui.painter().line_segment(
+                            [
+                                rect.left_top() + egui::vec2(x, 0.0),
+                                rect.left_bottom() + egui::vec2(x, 0.0),
+                            ],
+                            egui::Stroke::new(1.0_f32, theme::BORDER),
+                        );
+                    }
                     let y = rect.top() + 4.0;
                     for (number, x) in [(old, 44.0), (new, 92.0)] {
                         if let Some(number) = number {

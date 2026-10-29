@@ -5,6 +5,8 @@ use nozhik_vcs::{
     Outcome, Task, Vcs,
     model::{ChangeStatus, CommitInfo, DiffTarget, FileChange, GitRepoStatus},
 };
+mod controls;
+
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -25,9 +27,19 @@ pub struct VcsPanel {
     generation: u64,
     sequence: u64,
     pending: HashSet<u64>,
+    mutations: HashSet<u64>,
+    selected_paths: Vec<PathBuf>,
+    dialog: controls::Dialog,
+    merge_branch: Option<String>,
+    merge_preview: Option<usize>,
+    preview_request: u64,
+    last_fetch: Option<Instant>,
+    fetch_request: u64,
+    open_paths: Vec<PathBuf>,
     repo: Option<GitRepoStatus>,
     mode: Mode,
     filter: String,
+    filter_mode: controls::FilterMode,
     summary: String,
     body: String,
     history: Vec<CommitInfo>,
@@ -39,12 +51,14 @@ pub struct VcsPanel {
     diff_target: Option<DiffTarget>,
     diff_request: u64,
     diff: DiffView,
+    diff_cache: Vec<(DiffTarget, nozhik_vcs::model::FileDiff)>,
+    displayed_target: Option<DiffTarget>,
     staged_diff: bool,
     refresh_at: Option<Instant>,
     next_poll: Instant,
     branch_filter: String,
     new_branch: String,
-    discard: Option<PathBuf>,
+    discard: Option<Vec<PathBuf>>,
     error: Option<String>,
     notice: String,
 }
@@ -57,9 +71,19 @@ impl Default for VcsPanel {
             generation: 0,
             sequence: 0,
             pending: HashSet::new(),
+            mutations: HashSet::new(),
+            selected_paths: Vec::new(),
+            dialog: controls::Dialog::None,
+            merge_branch: None,
+            merge_preview: None,
+            preview_request: 0,
+            last_fetch: None,
+            fetch_request: 0,
+            open_paths: Vec::new(),
             repo: None,
             mode: Mode::Changes,
             filter: String::new(),
+            filter_mode: controls::FilterMode::All,
             summary: String::new(),
             body: String::new(),
             history: Vec::new(),
@@ -71,6 +95,8 @@ impl Default for VcsPanel {
             diff_target: None,
             diff_request: 0,
             diff: DiffView::default(),
+            diff_cache: Vec::new(),
+            displayed_target: None,
             staged_diff: false,
             refresh_at: None,
             next_poll: Instant::now(),
@@ -91,12 +117,21 @@ impl VcsPanel {
         self.project = Some(root.into());
         self.repo = None;
         self.pending.clear();
+        self.mutations.clear();
+        self.selected_paths.clear();
+        self.dialog = controls::Dialog::None;
+        self.open_branches = false;
+        self.last_fetch = None;
+        self.fetch_request = 0;
+        self.open_paths.clear();
         self.history.clear();
         self.details = None;
         self.selected = None;
         self.history_sha = None;
         self.diff_target = None;
         self.diff.clear();
+        self.diff_cache.clear();
+        self.displayed_target = None;
         self.summary.clear();
         self.body.clear();
         self.discard = None;
@@ -111,7 +146,22 @@ impl VcsPanel {
     fn submit(&mut self, task: Task) -> u64 {
         self.sequence = self.sequence.wrapping_add(1);
         let id = self.sequence;
+        let mutation = !matches!(
+            &task,
+            Task::Open(_)
+                | Task::Refresh
+                | Task::Diff(_)
+                | Task::History(_)
+                | Task::Details(_)
+                | Task::PreviewMerge(_)
+        );
+        if matches!(&task, Task::Fetch | Task::Pull) {
+            self.fetch_request = id;
+        }
         if self.worker.send(self.generation, id, task) {
+            if mutation {
+                self.mutations.insert(id);
+            }
             self.pending.insert(id);
         } else {
             self.error = Some("Git worker stopped".into());
@@ -120,6 +170,19 @@ impl VcsPanel {
     }
     pub(crate) fn invalidate(&mut self) {
         self.refresh_at = Some(Instant::now() + Duration::from_millis(200));
+    }
+    pub(crate) fn take_open_paths(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.open_paths)
+    }
+    pub(crate) const fn modal_open(&self) -> bool {
+        !matches!(self.dialog, controls::Dialog::None)
+            || self.discard.is_some()
+            || self.open_branches
+    }
+    pub(crate) fn is_merging(&self) -> bool {
+        self.repo
+            .as_ref()
+            .is_some_and(|r| r.operation.as_deref() == Some("Merge"))
     }
     pub(crate) fn branch(&self) -> &str {
         self.repo
@@ -135,6 +198,7 @@ impl VcsPanel {
                 continue;
             }
             self.pending.remove(&reply.id);
+            self.mutations.remove(&reply.id);
             match reply.result {
                 Ok(outcome) => self.accept(reply.id, outcome, ctx),
                 Err(error) => {
@@ -168,9 +232,15 @@ impl VcsPanel {
             }
         }
         self.confirm_discard(ctx);
+        self.dialogs(ctx);
     }
     fn accept(&mut self, id: u64, outcome: Outcome, ctx: &Context) {
         match outcome {
+            Outcome::MergePreview { branch, conflicts }
+                if id == self.preview_request && self.merge_branch.as_ref() == Some(&branch) =>
+            {
+                self.merge_preview = Some(conflicts);
+            }
             Outcome::Status(repo) => {
                 let changed_head = self.repo.as_ref().and_then(|r| r.head_sha.as_ref())
                     != repo.as_ref().and_then(|r| r.head_sha.as_ref());
@@ -187,7 +257,17 @@ impl VcsPanel {
                     self.refresh_selection();
                 }
             }
-            Outcome::Diff(diff) if id == self.diff_request => self.diff.set(diff),
+            Outcome::Diff(diff) if id == self.diff_request => {
+                if let Some(target) = self.diff_target.clone() {
+                    self.diff_cache.retain(|(key, _)| key != &target);
+                    self.diff_cache.push((target.clone(), diff.clone()));
+                    if self.diff_cache.len() > 8 {
+                        self.diff_cache.remove(0);
+                    }
+                    self.displayed_target = Some(target);
+                }
+                self.diff.set(diff);
+            }
             Outcome::History(history) => {
                 self.history = history;
             }
@@ -212,6 +292,12 @@ impl VcsPanel {
             }
             Outcome::Done(message) => {
                 self.error = None;
+                if id == self.fetch_request {
+                    self.last_fetch = Some(Instant::now());
+                }
+                if message.starts_with("Merge updated") && self.merge_preview.unwrap_or(0) > 0 {
+                    self.dialog = controls::Dialog::Conflicts;
+                }
                 self.notice = message;
                 self.submit(Task::Refresh);
             }
@@ -229,7 +315,14 @@ impl VcsPanel {
             .filter(|p| repo.changes.iter().any(|c| &c.path == *p))
             .cloned()
             .or_else(|| repo.changes.first().map(|c| c.path.clone()));
+        self.selected_paths
+            .retain(|p| repo.changes.iter().any(|c| &c.path == p));
         self.selected.clone_from(&selected);
+        if self.selected_paths.is_empty()
+            && let Some(path) = &selected
+        {
+            self.selected_paths.push(path.clone());
+        }
         if let Some(path) = selected {
             self.request_diff(DiffTarget::Working {
                 path,
@@ -241,123 +334,50 @@ impl VcsPanel {
         }
     }
     fn request_diff(&mut self, target: DiffTarget) {
-        if self.diff_target.as_ref() != Some(&target) {
-            self.diff.clear();
+        if self.displayed_target.as_ref() != Some(&target)
+            && let Some((_, cached)) = self.diff_cache.iter().find(|(key, _)| key == &target)
+        {
+            self.diff.set(cached.clone());
+            self.displayed_target = Some(target.clone());
         }
         self.diff_target = Some(target.clone());
         self.diff_request = self.submit(Task::Diff(target));
     }
-    pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
-        if self.open_branches {
-            let mut open = true;
-            egui::Window::new("Branches")
-                .open(&mut open)
-                .show(ui.ctx(), |ui| {
-                    self.branch_controls(ui);
-                });
-            self.open_branches = open;
-        }
-        self.branch_controls(ui);
-    }
-    fn branch_controls(&mut self, ui: &mut egui::Ui) {
-        let label = format!("     {} v", self.branch());
-        let branches = self
-            .repo
-            .as_ref()
-            .map(|r| r.branches.clone())
-            .unwrap_or_default();
-        let branch_menu = ui.menu_button(label, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.branch_filter).hint_text("Find a branch"));
-            let filter = self.branch_filter.to_lowercase();
-            for branch in branches
-                .iter()
-                .filter(|b| b.to_lowercase().contains(&filter))
-            {
-                if ui
-                    .add_enabled(self.pending.is_empty(), egui::Button::new(branch))
-                    .clicked()
-                {
-                    self.submit(Task::Checkout(branch.clone()));
-                    ui.close();
-                }
-            }
-            ui.separator();
-            ui.add(egui::TextEdit::singleline(&mut self.new_branch).hint_text("New branch name"));
-            if ui
-                .add_enabled(
-                    self.repo.is_some()
-                        && self.pending.is_empty()
-                        && !self.new_branch.trim().is_empty(),
-                    egui::Button::new("New Branch"),
-                )
-                .clicked()
-            {
-                self.submit(Task::NewBranch(self.new_branch.trim().to_owned()));
-                ui.close();
-            }
-        });
-        crate::tool_icons::paint(
-            ui.painter(),
-            branch_menu.response.rect.left_center() + egui::vec2(14.0, 0.0),
-            crate::tool_icons::Icon::Git,
-            crate::theme::TEXT,
-        );
-        let can_network =
-            self.pending.is_empty() && self.repo.as_ref().is_some_and(|r| r.has_origin);
-        let push = self.repo.as_ref().is_some_and(|r| {
-            r.ahead > 0 || (!r.has_upstream && !r.detached && r.head_sha.is_some())
-        });
-        if ui
-            .add_enabled(
-                can_network,
-                egui::Button::new(if push { "Push origin" } else { "Fetch origin" }),
-            )
-            .clicked()
-        {
-            self.submit(if push { Task::Push } else { Task::Fetch });
-        }
-        ui.menu_button("…", |ui| {
-            for (label, task) in [
-                ("Fetch origin", Task::Fetch),
-                ("Pull origin (fast-forward)", Task::Pull),
-                ("Push origin", Task::Push),
-            ] {
-                if ui
-                    .add_enabled(can_network, egui::Button::new(label))
-                    .clicked()
-                {
-                    self.submit(task);
-                    ui.close();
-                }
-            }
-            if ui
-                .add_enabled(
-                    self.pending.is_empty() && self.repo.is_some(),
-                    egui::Button::new("Refresh Git status"),
-                )
-                .clicked()
-            {
-                self.submit(Task::Refresh);
-                ui.close();
-            }
-        });
-        if let Some(repo) = &self.repo {
-            ui.weak(format!("↑{} ↓{}", repo.ahead, repo.behind));
-        }
-        if !self.pending.is_empty() {
-            ui.spinner();
-        }
-    }
     pub(crate) fn panel(&mut self, ui: &mut egui::Ui) {
+        Self::git_style(ui);
         let count = self.repo.as_ref().map_or(0, |r| r.changes.len());
+        let tab_width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
         ui.horizontal(|ui| {
             for (mode, label) in [
                 (Mode::Changes, format!("Changes [{count}]")),
                 (Mode::History, "History".into()),
             ] {
-                if ui.selectable_label(self.mode == mode, label).clicked() && self.mode != mode {
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(tab_width, 30.0), egui::Sense::click());
+                ui.painter().rect_filled(
+                    rect,
+                    0,
+                    if self.mode == mode {
+                        egui::Color32::from_rgb(35, 42, 48)
+                    } else {
+                        egui::Color32::from_rgb(29, 34, 38)
+                    },
+                );
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(13.0),
+                    controls::TEXT,
+                );
+                if self.mode == mode {
+                    ui.painter().line_segment(
+                        [rect.left_bottom(), rect.right_bottom()],
+                        egui::Stroke::new(3.0_f32, controls::BLUE),
+                    );
+                }
+                if response.clicked() && self.mode != mode {
                     self.mode = mode;
-                    self.diff.clear();
                     self.diff_target = None;
                     // Invalidate an outstanding diff from the other mode.
                     self.diff_request = 0;
@@ -377,28 +397,19 @@ impl VcsPanel {
         if let Some(error) = &self.error {
             ui.colored_label(crate::theme::ERROR, error);
         }
-        if !self.notice.is_empty() {
-            ui.weak(&self.notice);
-        }
-        let Some(repo) = &self.repo else {
+        let Some(_repo) = &self.repo else {
             ui.weak("No Git repository found in this project");
             return;
         };
-        ui.weak(repo.root.display().to_string());
-        if let Some(operation) = &repo.operation {
-            ui.colored_label(
-                crate::theme::WARNING,
-                format!("Repository operation: {operation}"),
-            );
-        }
+
         match self.mode {
             Mode::Changes => self.changes(ui),
             Mode::History => self.history_list(ui),
         }
     }
     pub(crate) fn commit_selected(&mut self) {
-        if self.pending.is_empty()
-            && self.discard.is_none()
+        if self.mutations.is_empty()
+            && !self.modal_open()
             && !self.summary.trim().is_empty()
             && self.repo.as_ref().is_some_and(|r| {
                 r.operation.is_none()
@@ -416,13 +427,18 @@ impl VcsPanel {
         }
     }
     fn changes(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Filter"));
+        egui::Frame::new()
+            .inner_margin(10)
+            .show(ui, |ui| self.changes_contents(ui));
+    }
+    fn changes_contents(&mut self, ui: &mut egui::Ui) {
+        self.file_filter(ui);
         let Some(repo) = &self.repo else {
             return;
         };
         let changes = repo.changes.clone();
         let branch = repo.branch.clone();
-        let busy = !self.pending.is_empty();
+        let busy = !self.mutations.is_empty();
         let mut all = !changes.is_empty() && changes.iter().all(|c| c.is_staged && !c.has_unstaged);
         if ui
             .add_enabled(
@@ -437,31 +453,43 @@ impl VcsPanel {
             });
         }
         let filter = self.filter.to_lowercase();
-        let list_height = (ui.available_height() - 220.0).max(60.0);
+        let filter_mode = self.filter_mode;
+        let footer_height = (ui.text_style_height(&egui::TextStyle::Body)
+            + ui.spacing().item_spacing.y)
+            .mul_add(6.0, 35.0);
+        let list_height = (ui.available_height() - footer_height).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("git_changes")
             .max_height(list_height)
+            .min_scrolled_height(list_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for change in changes
-                    .iter()
-                    .filter(|c| c.path.to_string_lossy().to_lowercase().contains(&filter))
-                {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for change in changes.iter().filter(|c| {
+                    filter_mode.matches(c)
+                        && c.path.to_string_lossy().to_lowercase().contains(&filter)
+                }) {
                     self.change_row(ui, change, busy);
                 }
                 if changes.is_empty() {
                     ui.weak("No local changes");
                 }
             });
+        ui.add_space((ui.max_rect().bottom() - footer_height - ui.cursor().top()).max(0.0));
         ui.separator();
-        ui.add(egui::TextEdit::singleline(&mut self.summary).hint_text("Summary (required)"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.summary)
+                .hint_text("Summary (required)")
+                .desired_width(f32::INFINITY),
+        );
         ui.add(
             egui::TextEdit::multiline(&mut self.body)
                 .hint_text("Description")
-                .desired_rows(4),
+                .desired_width(f32::INFINITY)
+                .desired_rows(5),
         );
         let staged = changes.iter().filter(|c| c.is_staged).count();
-        ui.weak("Commit uses the staged version; save editor buffers first.");
+
         let allowed = !busy
             && staged > 0
             && !self.summary.trim().is_empty()
@@ -475,7 +503,13 @@ impl VcsPanel {
         if ui
             .add_enabled(
                 allowed,
-                egui::Button::new(format!("Commit {staged} files to {branch}")).fill(theme::ACCENT),
+                egui::Button::new((
+                    egui::Atom::grow(),
+                    format!("Commit {staged} files to {branch}"),
+                    egui::Atom::grow(),
+                ))
+                .fill(controls::BLUE)
+                .min_size(egui::vec2(ui.available_width(), 30.0)),
             )
             .clicked()
         {
@@ -485,63 +519,8 @@ impl VcsPanel {
             });
         }
     }
-    fn change_row(&mut self, ui: &mut egui::Ui, change: &FileChange, busy: bool) {
-        ui.horizontal(|ui| {
-            let mut staged = change.is_staged;
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::Checkbox::new(&mut staged, "")
-                        .indeterminate(change.is_staged && change.has_unstaged),
-                )
-                .changed()
-            {
-                self.submit(Task::Stage {
-                    paths: vec![change.path.clone()],
-                    staged,
-                });
-            }
-            let (marker, color) = match change.status {
-                ChangeStatus::New => ("+", crate::theme::SUCCESS),
-                ChangeStatus::Deleted => ("−", crate::theme::ERROR),
-                ChangeStatus::Renamed => ("→", crate::theme::INFO),
-                ChangeStatus::Conflicted => ("!", crate::theme::ERROR),
-                ChangeStatus::Modified => ("●", crate::theme::WARNING),
-            };
-            ui.colored_label(color, marker);
-            let row = ui.selectable_label(
-                self.selected.as_ref() == Some(&change.path),
-                change.path.to_string_lossy(),
-            );
-            if row.clicked() {
-                self.selected = Some(change.path.clone());
-                self.request_diff(DiffTarget::Working {
-                    path: change.path.clone(),
-                    staged: self.staged_diff,
-                });
-            }
-            row.context_menu(|ui| {
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Discard Changes…"))
-                    .clicked()
-                {
-                    self.discard = Some(change.path.clone());
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Ignore File (Add to .gitignore)"))
-                    .clicked()
-                {
-                    self.submit(Task::Ignore(change.path.clone()));
-                    ui.close();
-                }
-            });
-        });
-    }
     fn select_commit(&mut self, sha: String) {
         self.history_sha = Some(sha.clone());
-        self.details = None;
-        self.diff.clear();
         self.diff_target = None;
         self.diff_request = 0;
         self.details_request = self.submit(Task::Details(sha));
@@ -593,7 +572,7 @@ impl VcsPanel {
             && self.history_limit < 10_000
             && ui
                 .add_enabled(
-                    self.pending.is_empty(),
+                    self.mutations.is_empty(),
                     egui::Button::new("Load more commits"),
                 )
                 .clicked()
@@ -653,21 +632,41 @@ impl VcsPanel {
             if let Some(target) = target {
                 self.request_diff(target);
             }
-        } else {
-            ui.horizontal(|ui| {
-                ui.strong("Diff");
-                if ui.checkbox(&mut self.staged_diff, "Staged only").changed() {
-                    self.refresh_selection();
-                }
-                ui.weak(if self.staged_diff {
-                    "HEAD → index (commit contents)"
-                } else {
-                    "HEAD → working tree"
+        }
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(42, 49, 56))
+            .inner_margin(4)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+                ui.horizontal(|ui| {
+                    if self.displayed_target != self.diff_target && self.diff_target.is_some() {
+                        ui.weak("Loading… previous diff shown below");
+                    } else {
+                        self.diff.header(ui);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let menu = ui.menu_button("    ", |ui| {
+                            if ui.checkbox(&mut self.staged_diff, "Staged only").changed() {
+                                self.refresh_selection();
+                            }
+                        });
+                        crate::tool_icons::paint(
+                            ui.painter(),
+                            menu.response.rect.center(),
+                            crate::tool_icons::Icon::Settings,
+                            controls::TEXT,
+                        );
+                    });
                 });
             });
-            ui.separator();
+        if self.mode == Mode::Changes && self.selected_paths.len() > 1 {
+            ui.centered_and_justified(|ui| {
+                ui.weak(format!("{} files selected", self.selected_paths.len()));
+            });
+        } else {
+            self.diff.show(ui, font_size);
         }
-        self.diff.show(ui, font_size);
     }
     fn confirm_discard(&mut self, ctx: &Context) {
         let Some(path) = self.discard.clone() else {
@@ -675,12 +674,12 @@ impl VcsPanel {
         };
         let modal = egui::Modal::new(egui::Id::new("discard_changes")).show(ctx, |ui| {
             ui.heading("Discard Changes?");
-            ui.label(path.to_string_lossy());
+            for item in &path { ui.label(item.to_string_lossy()); }
             ui.label("This restores the file and its staging to HEAD. An untracked file is deleted. Editor buffers are retained.");
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() { self.discard = None; }
-                if ui.add_enabled(self.pending.is_empty(), egui::Button::new("Discard Changes").fill(crate::theme::DESTRUCTIVE)).clicked() {
-                    self.submit(Task::Discard(path)); self.discard = None;
+                if ui.add_enabled(self.mutations.is_empty(), egui::Button::new("Discard Changes").fill(crate::theme::DESTRUCTIVE)).clicked() {
+                    self.submit(Task::DiscardMany(path)); self.discard = None;
                 }
             });
         });
@@ -824,3 +823,7 @@ mod idle_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "vcs_panel/tests.rs"]
+mod interaction_tests;

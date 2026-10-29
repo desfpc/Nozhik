@@ -50,8 +50,12 @@ pub struct GitRepoStatus {
     pub behind: usize,
     /// Sorted changed files.
     pub changes: Vec<FileChange>,
-    /// Local branch names for the switcher.
+    /// Local and remote branch names for the switcher.
     pub branches: Vec<String>,
+    /// Branch commit ages and default-branch grouping.
+    pub branch_info: Vec<BranchInfo>,
+    /// Unmerged index entries and on-disk resolution state.
+    pub conflicts: Vec<MergeConflict>,
     /// Origin remote exists.
     pub has_origin: bool,
     /// Human-readable repository operation state, e.g. merge/rebase.
@@ -128,7 +132,7 @@ pub struct CommitInfo {
     pub relative_time: String,
 }
 /// Identifies a patch without retaining any Git object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DiffTarget {
     /// Current file: HEAD-to-worktree combined patch or HEAD-to-index staged patch.
     Working {
@@ -144,4 +148,25 @@ pub enum DiffTarget {
         /// Repository-relative file.
         path: PathBuf,
     },
+}
+
+/// Branch presentation computed on the repository worker.
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    /// Local name or remote/name.
+    pub name: String,
+    /// Age of the tip commit.
+    pub relative_time: String,
+    /// Whether this is a remote-tracking branch.
+    pub is_remote: bool,
+    /// Remote default or conventional main/master branch.
+    pub is_default: bool,
+}
+/// A conflicted path; removing markers does not mutate the index until Continue.
+#[derive(Debug, Clone)]
+pub struct MergeConflict {
+    /// Repository-relative path.
+    pub path: PathBuf,
+    /// Remaining conflict regions (at least one for binary/missing files).
+    pub remaining: usize,
 }

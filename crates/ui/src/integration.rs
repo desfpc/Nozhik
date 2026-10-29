@@ -89,6 +89,7 @@ impl NozhikUi {
             || self.remote.modal_open()
             || self.database.modal_open()
             || self.integration.about
+            || self.vcs.modal_open()
     }
     pub(crate) fn active_buffer(&mut self) -> Option<&mut nozhik_buffer::TextBuffer> {
         if let Some(index) = self.database.active {
@@ -333,10 +334,10 @@ impl NozhikUi {
                 }
                 "ui.find" | "ui.replace" => self.integration.find = true,
                 "ui.database" => {
-                    self.right = if self.right == Some("Database") {
+                    self.left = if self.left == Some(LeftTool::Database) {
                         None
                     } else {
-                        Some("Database")
+                        Some(LeftTool::Database)
                     }
                 }
                 "ui.remote" => {
@@ -375,11 +376,11 @@ impl NozhikUi {
                 "ui.pull" => self.vcs.run_global(nozhik_vcs::Task::Pull),
                 "ui.push" => self.vcs.run_global(nozhik_vcs::Task::Push),
                 "ui.new_connection" => {
-                    self.right = Some("Database");
+                    self.left = Some(LeftTool::Database);
                     self.database.new_connection();
                 }
                 "ui.sql_console" => {
-                    self.right = Some("Database");
+                    self.left = Some(LeftTool::Database);
                     self.open_database_console();
                 }
                 "ui.new_terminal" => {

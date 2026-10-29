@@ -20,6 +20,10 @@ pub struct GitWorker {
     repo: Option<Repository>,
 }
 impl GitWorker {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exhaustive serial Git command dispatch keeps every command on the owning worker"
+    )]
     pub fn execute(&mut self, task: Task) -> Result<Outcome> {
         if let Task::Open(path) = task {
             self.repo = None;
@@ -35,7 +39,7 @@ impl GitWorker {
         }
         let repo = self
             .repo
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| invalid("Open a Git repository first"))?;
         let message = match task {
             Task::Refresh => return self.snapshot(),
@@ -79,13 +83,67 @@ impl GitWorker {
                 checkout(repo, &name, false)?;
                 "Branch switched"
             }
+            Task::SwitchBranch {
+                name,
+                leave_changes,
+            } => {
+                crate::merge::switch(repo, &name, leave_changes)?;
+                "Branch switched"
+            }
+            Task::PreviewMerge(branch) => {
+                return Ok(Outcome::MergePreview {
+                    conflicts: crate::merge::preview(repo, &branch)?,
+                    branch,
+                });
+            }
+            Task::Merge(branch) => {
+                crate::merge::begin(repo, &branch)?;
+                "Merge updated; resolve any conflicts before continuing"
+            }
+            Task::ContinueMerge => {
+                crate::merge::finish(repo)?;
+                "Merge completed"
+            }
+            Task::AbortMerge => {
+                crate::merge::abort(repo)?;
+                "Merge aborted"
+            }
+            Task::DiscardMany(paths) => {
+                for path in &paths {
+                    safe_disk_path(repo, path)?;
+                }
+                for path in paths {
+                    discard(repo, &path)?;
+                }
+                "Changes discarded on disk; editor buffers retained"
+            }
             Task::NewBranch(name) => {
-                checkout(repo, &name, true)?;
+                crate::merge::create(repo, &name)?;
                 "Branch created"
             }
             Task::Discard(path) => {
                 discard(repo, &path)?;
                 "Changes discarded on disk; editor buffers retained"
+            }
+            Task::IgnoreExtension(extension) => {
+                if extension.is_empty() || extension.contains(['/', '\\', '\n', '\r', '\0']) {
+                    return Err(invalid("Invalid file extension"));
+                }
+                let mut pattern = String::from("*.");
+                for ch in extension.chars() {
+                    if matches!(ch, '\\' | ' ' | '#' | '!' | '*' | '?' | '[' | ']') {
+                        pattern.push('\\');
+                    }
+                    pattern.push(ch);
+                }
+                append_ignore(repo, &pattern)?;
+                "Added extension to .gitignore"
+            }
+            Task::OpenExternal { paths, reveal } => {
+                for path in paths {
+                    open_external(&safe_disk_path(repo, &path)?, reveal)?;
+                }
+                "Opened selected paths"
             }
             Task::Ignore(path) => {
                 ignore_file(repo, &path)?;
@@ -103,14 +161,14 @@ impl GitWorker {
             .map(Outcome::Status)
     }
 }
-fn invalid(message: &str) -> VcsError {
+pub fn invalid(message: &str) -> VcsError {
     VcsError::Invalid(message.into())
 }
-fn workdir(repo: &Repository) -> Result<&Path> {
+pub fn workdir(repo: &Repository) -> Result<&Path> {
     repo.workdir()
         .ok_or_else(|| invalid("Bare repositories are not supported"))
 }
-fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>> {
+pub fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>> {
     match repo.head() {
         Ok(head) => Ok(Some(head.peel_to_commit()?)),
         Err(error) if matches!(error.code(), ErrorCode::UnbornBranch | ErrorCode::NotFound) => {
@@ -125,8 +183,17 @@ fn parent_tree<'repo>(commit: &git2::Commit<'repo>) -> Result<Option<git2::Tree<
     }
     Ok(Some(commit.parent(0)?.tree()?))
 }
-fn status(repo: &Repository) -> Result<GitRepoStatus> {
-    let changes = status_changes(repo)?;
+pub fn status(repo: &Repository) -> Result<GitRepoStatus> {
+    let mut changes = status_changes(repo)?;
+    let conflicts = crate::merge::conflicts(repo)?;
+    for change in &mut changes {
+        if conflicts
+            .iter()
+            .any(|c| c.path == change.path && c.remaining > 0)
+        {
+            change.status = ChangeStatus::Conflicted;
+        }
+    }
     let head = head_commit(repo)?;
     let detached = repo.head_detached()?;
     let branch = if detached {
@@ -167,8 +234,10 @@ fn status(repo: &Repository) -> Result<GitRepoStatus> {
         _ => (0, 0),
     };
     let mut branches = Vec::new();
-    for branch in repo.branches(Some(BranchType::Local))? {
-        if let Some(name) = branch?.0.name()? {
+    for branch in repo.branches(None)? {
+        if let Some(name) = branch?.0.name()?
+            && !name.ends_with("/HEAD")
+        {
             branches.push(name.to_owned());
         }
     }
@@ -183,6 +252,8 @@ fn status(repo: &Repository) -> Result<GitRepoStatus> {
         ahead,
         behind,
         changes,
+        branch_info: crate::merge::branches(repo, &branches)?,
+        conflicts,
         branches,
         has_origin: repo.find_remote("origin").is_ok(),
         operation: (repo.state() != git2::RepositoryState::Clean)
@@ -291,7 +362,7 @@ fn validate_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn safe_disk_path(repo: &Repository, path: &Path) -> Result<PathBuf> {
+pub fn safe_disk_path(repo: &Repository, path: &Path) -> Result<PathBuf> {
     validate_path(path)?;
     let root = workdir(repo)?.canonicalize()?;
     let full = root.join(path);
@@ -319,7 +390,7 @@ fn safe_disk_path(repo: &Repository, path: &Path) -> Result<PathBuf> {
     }
     Ok(full)
 }
-fn stage(repo: &Repository, paths: &[PathBuf], staged: bool) -> Result<()> {
+pub fn stage(repo: &Repository, paths: &[PathBuf], staged: bool) -> Result<()> {
     let snapshot = status(repo)?;
     let mut targets = Vec::new();
     for path in paths {
@@ -427,7 +498,7 @@ fn commit(repo: &Repository, summary: &str, body: &str) -> Result<CommitInfo> {
     let id = repo.commit(Some("HEAD"), &author, &author, &message, &tree, &parents)?;
     Ok(commit_info(&repo.find_commit(id)?))
 }
-fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
+pub fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
     let signature = commit.author();
     let timestamp = commit.time().seconds();
     let now = SystemTime::now()
@@ -485,6 +556,8 @@ fn file_diff(repo: &Repository, target: &DiffTarget) -> Result<FileDiff> {
             let tree = head.as_ref().map(git2::Commit::tree).transpose()?;
             let diff = if *staged {
                 repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut options))?
+            } else if repo.index()?.has_conflicts() {
+                repo.diff_tree_to_workdir(tree.as_ref(), Some(&mut options))?
             } else {
                 repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut options))?
             };
@@ -572,7 +645,7 @@ fn parse_diff(diff: &Diff<'_>, path: &Path) -> Result<FileDiff> {
     }
     Ok(result)
 }
-fn require_clean(repo: &Repository) -> Result<()> {
+pub fn require_clean(repo: &Repository) -> Result<()> {
     if repo.state() != git2::RepositoryState::Clean || !status(repo)?.changes.is_empty() {
         return Err(invalid(
             "Commit or discard working and staged changes before switching or pulling",
@@ -580,7 +653,7 @@ fn require_clean(repo: &Repository) -> Result<()> {
     }
     Ok(())
 }
-fn checkout(repo: &Repository, name: &str, create: bool) -> Result<()> {
+pub fn checkout(repo: &Repository, name: &str, create: bool) -> Result<()> {
     require_clean(repo)?;
     if !git2::Reference::is_valid_name(&format!("refs/heads/{name}")) {
         return Err(invalid("Invalid branch name"));
@@ -766,6 +839,9 @@ fn ignore_file(repo: &Repository, path: &Path) -> Result<()> {
         }
         pattern.push(ch);
     }
+    append_ignore(repo, &pattern)
+}
+fn append_ignore(repo: &Repository, pattern: &str) -> Result<()> {
     let destination = workdir(repo)?.join(".gitignore");
     match fs::symlink_metadata(&destination) {
         Ok(metadata) if !metadata.file_type().is_file() => {
@@ -786,3 +862,40 @@ fn ignore_file(repo: &Repository, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+fn open_external(path: &Path, reveal: bool) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        if reveal {
+            c.arg("-R");
+        }
+        c.arg("--").arg(path);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = std::process::Command::new("explorer.exe");
+        if reveal {
+            c.arg(format!("/select,{}", path.display()));
+        } else {
+            c.arg(path);
+        }
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(if reveal {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        });
+        c
+    };
+    let result = command.status()?;
+    if !result.success() {
+        return Err(invalid("The external application could not open the path"));
+    }
+    Ok(())
+}

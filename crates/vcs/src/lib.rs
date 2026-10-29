@@ -1,5 +1,6 @@
 //! Git engine with one serial worker. All repository and network I/O stays there.
 mod git_worker;
+mod merge;
 pub mod model;
 pub mod project_paths;
 
@@ -58,11 +59,37 @@ pub enum Task {
     Pull,
     /// Safely switch to an existing local branch, requiring a clean worktree.
     Checkout(String),
+    /// Switch safely, optionally stashing changes on the source branch.
+    SwitchBranch {
+        /// Local or remote branch.
+        name: String,
+        /// Leave work in a named stash, restored on returning to that branch.
+        leave_changes: bool,
+    },
+    /// Preview merge conflicts without changing the index or worktree.
+    PreviewMerge(String),
+    /// Merge a branch into HEAD, leaving conflicts available for editing.
+    Merge(String),
+    /// Stage resolved conflict files and create the pending merge commit.
+    ContinueMerge,
+    /// Restore HEAD and clear a pending merge.
+    AbortMerge,
+    /// Restore multiple confirmed paths to HEAD.
+    DiscardMany(Vec<PathBuf>),
     /// Create and switch to a new local branch from HEAD.
     NewBranch(String),
     /// Restore one file's index/worktree to HEAD, or delete an untracked file.
     /// Callers must obtain explicit confirmation from the user first.
     Discard(PathBuf),
+    /// Open a file using the OS default application or reveal it in the file manager.
+    OpenExternal {
+        /// Repository-relative paths.
+        paths: Vec<PathBuf>,
+        /// Reveal in Finder/Explorer/file manager instead of opening content.
+        reveal: bool,
+    },
+    /// Append a safely escaped extension pattern to .gitignore.
+    IgnoreExtension(String),
     /// Append an escaped anchored file pattern to the root .gitignore.
     Ignore(PathBuf),
 }
@@ -84,6 +111,13 @@ pub enum Outcome {
     },
     /// Commit succeeded. Status/history must be refreshed from the repository.
     Committed(CommitInfo),
+    /// Conflict count from a read-only merge simulation.
+    MergePreview {
+        /// Selected branch name.
+        branch: String,
+        /// Number of conflicting paths.
+        conflicts: usize,
+    },
     /// Mutation completed; refresh status/history afterwards.
     Done(String),
 }

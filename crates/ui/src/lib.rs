@@ -70,8 +70,10 @@ pub enum LeftTool {
     Commit,
     /// Remote SSH hosts and SFTP browser.
     Remote,
-    /// Structure placeholder.
-    Structure,
+    /// Database explorer and connections.
+    Database,
+    /// Notifications placeholder.
+    Notifications,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -114,7 +116,6 @@ pub struct NozhikUi {
     documents: Vec<Document>,
     active: Option<usize>,
     left: Option<LeftTool>,
-    right: Option<&'static str>,
     bottom: Option<&'static str>,
     search: search_everywhere::SearchEverywhere,
     settings_open: bool,
@@ -192,7 +193,6 @@ impl NozhikUi {
             documents: Vec::new(),
             active: None,
             left: Some(LeftTool::Project),
-            right: None,
             bottom: None,
             search: search_everywhere::SearchEverywhere::default(),
             settings_open: false,

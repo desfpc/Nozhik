@@ -173,17 +173,33 @@ impl NozhikUi {
 
     fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(36.0)
-            .frame(theme::rail_frame())
+            .exact_height(if self.left == Some(LeftTool::Commit) {
+                50.0
+            } else {
+                36.0
+            })
+            .frame(if self.left == Some(LeftTool::Commit) {
+                egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38))
+            } else {
+                theme::rail_frame()
+            })
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if cfg!(target_os = "macos") {
+                    if cfg!(target_os = "macos") && self.left != Some(LeftTool::Commit) {
                         ui.add_space(72.0);
+                    }
+                    if self.left == Some(LeftTool::Commit) {
+                        self.vcs.toolbar(
+                            ui,
+                            ctx.screen_rect()
+                                .width()
+                                .mul_add(self.layout.value.git, 36.0),
+                        );
+                        return;
                     }
                     ui.menu_button("Nozhik v", |ui| {
                         ui.label("Nozhik · project workspace");
                     });
-                    self.vcs.toolbar(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if tool_icons::button(ui, Icon::Settings, false, "Settings")
                             .on_hover_text("Settings")
@@ -347,10 +363,6 @@ impl NozhikUi {
         self.side_panels(ctx);
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Left and right splitters share viewport geometry"
-    )]
     fn side_panels(&mut self, ctx: &Context) {
         egui::SidePanel::left("left_strip")
             .exact_width(36.0)
@@ -361,8 +373,9 @@ impl NozhikUi {
                 for (icon, title, tool) in [
                     (Icon::Project, "Project", LeftTool::Project),
                     (Icon::Git, "Git · Changes / History", LeftTool::Commit),
-                    (Icon::Structure, "Structure", LeftTool::Structure),
                     (Icon::Remote, "Remote Host / SSH", LeftTool::Remote),
+                    (Icon::Database, "Database", LeftTool::Database),
+                    (Icon::Bell, "Notifications", LeftTool::Notifications),
                 ] {
                     if tool_icons::button(ui, icon, self.left == Some(tool), title).clicked() {
                         self.left = if self.left == Some(tool) {
@@ -373,86 +386,68 @@ impl NozhikUi {
                     }
                 }
             });
-        egui::SidePanel::right("right_strip")
-            .exact_width(36.0)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(theme::rail_frame())
-            .show(ctx, |ui| {
-                for (icon, title) in [(Icon::Database, "Database"), (Icon::Bell, "Notifications")] {
-                    if tool_icons::button(ui, icon, self.right == Some(title), title).clicked() {
-                        self.right = if self.right == Some(title) {
-                            None
-                        } else {
-                            Some(title)
-                        };
-                    }
-                }
-            });
         let viewport = ctx
             .input(|i| i.viewport().inner_rect)
             .unwrap_or_else(|| ctx.screen_rect());
-        if let Some(title) = self.right {
-            crate::layout::seed(
-                ctx,
-                "right_dock",
-                viewport.width() * self.layout.value.right,
-                viewport.height(),
-            );
-            let panel = egui::SidePanel::right("right_dock")
-                .default_width(viewport.width() * self.layout.value.right)
-                .width_range(150.0..=viewport.width() * 0.4)
-                .resizable(true)
-                .show_separator_line(false)
-                .frame(theme::dock_frame(theme::PANEL))
-                .show(ctx, |ui| {
-                    ui.label(title);
-                    ui.separator();
-                    if title == "Database" {
-                        self.database_panel(ui);
-                    } else {
-                        ui.weak("Tool window placeholder");
-                    }
-                });
-            let mut layout = self.layout.value;
-            layout.right = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
-            if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
-                self.layout.set(layout);
-            }
-        }
         if let Some(tool) = self.left {
+            let dock_id = if tool == LeftTool::Commit {
+                "git_dock"
+            } else {
+                "left_dock"
+            };
+            let proportion = if tool == LeftTool::Commit {
+                self.layout.value.git
+            } else {
+                self.layout.value.left
+            };
             crate::layout::seed(
                 ctx,
-                "left_dock",
-                viewport.width() * self.layout.value.left,
+                dock_id,
+                viewport.width() * proportion,
                 viewport.height(),
             );
-            let panel = egui::SidePanel::left("left_dock")
+            let panel = egui::SidePanel::left(dock_id)
                 .resizable(true)
-                .default_width(viewport.width() * self.layout.value.left)
+                .default_width(viewport.width() * proportion)
                 .width_range(150.0..=viewport.width() * 0.4)
                 .show_separator_line(false)
-                .frame(theme::dock_frame(theme::PANEL))
+                .frame(if tool == LeftTool::Commit {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(35, 42, 48))
+                        .inner_margin(0)
+                } else {
+                    theme::dock_frame(theme::PANEL)
+                })
                 .show(ctx, |ui| {
-                    ui.label(match tool {
-                        LeftTool::Project => "Project v",
-                        LeftTool::Commit => "Commit",
-                        LeftTool::Structure => "Structure",
-                        LeftTool::Remote => "Remote Host / SSH",
-                    });
-                    ui.separator();
+                    if tool != LeftTool::Commit {
+                        ui.label(match tool {
+                            LeftTool::Project => "Project v",
+                            LeftTool::Commit => "Commit",
+                            LeftTool::Database => "Database",
+                            LeftTool::Notifications => "Notifications",
+                            LeftTool::Remote => "Remote Host / SSH",
+                        });
+                        ui.separator();
+                    }
                     if tool == LeftTool::Project {
                         self.project_panel(ui);
                     } else if tool == LeftTool::Commit {
                         self.vcs.panel(ui);
                     } else if tool == LeftTool::Remote {
                         self.remote_panel(ui);
+                    } else if tool == LeftTool::Database {
+                        self.database_panel(ui);
                     } else {
                         ui.weak("Tool window placeholder");
                     }
                 });
             let mut layout = self.layout.value;
-            layout.left = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
+            let width = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
+            if tool == LeftTool::Commit {
+                layout.git = width;
+            } else {
+                layout.left = width;
+            }
             if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
             }
@@ -466,7 +461,11 @@ impl NozhikUi {
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
-                .frame(theme::dock_frame(theme::BACKGROUND))
+                .frame(
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(35, 42, 48))
+                        .inner_margin(0),
+                )
                 .show(ctx, |ui| {
                     self.vcs.center(ui, f32::from(self.config.font_size));
                 });
@@ -607,9 +606,19 @@ impl NozhikUi {
             self.status = message;
         }
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
+        let git_files = self.vcs.take_open_paths();
+        for path in git_files {
+            self.open_file(path);
+            self.left = Some(LeftTool::Project);
+        }
         self.settings_tick(ctx);
         self.menu_bar(ctx);
         self.top_bar(ctx);
+        if self.left == Some(LeftTool::Commit) && self.vcs.is_merging() {
+            egui::TopBottomPanel::top("git_merge_banner")
+                .frame(theme::rail_frame())
+                .show(ctx, |ui| self.vcs.merge_banner(ui));
+        }
         self.panels(ctx);
         if self.active.is_none() || self.database.active.is_some() {
             self.editor.ai.cancel();

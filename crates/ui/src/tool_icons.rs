@@ -6,7 +6,6 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, 
 pub enum Icon {
     Project,
     Git,
-    Structure,
     Remote,
     Database,
     Bell,
@@ -83,18 +82,6 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
             circle(15.0, 4.0, 2.0);
             line(&[(5.0, 6.0), (5.0, 14.0)]);
             line(&[(15.0, 6.0), (15.0, 9.0), (5.0, 12.0)]);
-        }
-        Icon::Structure => {
-            line(&[(3.0, 3.0), (3.0, 17.0), (7.0, 17.0)]);
-            for y in [4.0, 10.0, 16.0] {
-                line(&[
-                    (8.0, y),
-                    (17.0, y),
-                    (17.0, y + 3.0),
-                    (8.0, y + 3.0),
-                    (8.0, y),
-                ]);
-            }
         }
         Icon::Remote => {
             line(&[(2.0, 6.0), (17.0, 6.0), (13.0, 2.0)]);

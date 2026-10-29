@@ -308,7 +308,7 @@ Diff: HEAD→index, HEAD→worktree with index, первый parent→commit; д
 старое дерево пустое. Binary/oversized показывается отдельно; лимиты 2 MiB,
 50 000 строк, 4096 Unicode scalars/строку. Выдача ограничена, это не механизм
 построчного staging. History до 10 000 записей с загрузкой по 100. Идентичность
-берётся из Git config; hooks/GPG/merge UI/rebase/submodule lifecycle не реализованы.
+берётся из Git config; hooks/GPG/rebase/submodule lifecycle не реализованы; merge UI добавлен ниже (2026-10-29).
 Буферы редактора авторитетны для несохранённого текста и автоматически не reload-ятся
 после Git-операций. Git status/commit/diff работают с диском/index, не с этими буферами.
 
@@ -1770,3 +1770,69 @@ Popup geometry and typing behavior were verified headlessly; no manual native GU
 smoke or Windows build/Clippy/GUI was run. Default update-binaries.py rebuilt the
 macOS ARM64 executable and signed app archive; --check verified the source fingerprint
 and both payload checksums. No Windows target cache was created.
+
+
+### Unified left tool dock (2026-10-29)
+
+Removed the Structure button, placeholder window and icon. Database and
+Notifications now share the mutually exclusive left dock with Project, Git and
+SSH; repeated clicks hide the active tool. Removed the right rail, right dock
+and application right-tool state. Database menu actions, New Connection and SQL
+Console select the left Database dock. The legacy right layout proportion remains
+only for compatibility with existing layout.json files.
+
+Validation: native workspace/all-features tests, native workspace Clippy with
+all-targets/all-features and -D warnings, rustfmt, workspace release build and
+git diff --check passed. Existing headless UI tests cover shell/menu rendering,
+database explorer/console actions and left splitter persistence. No manual native
+GUI smoke or Windows build/Clippy/GUI was run.
+Default update-binaries.py rebuilt the macOS ARM64 executable and signed app
+archive; --check verified current source and payload hashes. No Windows target
+cache was created.
+
+
+### Git reference layout, branch actions and merge resolution (2026-10-29)
+
+Added a dedicated Git header with Current Repository/Current Branch/Fetch-Pull-
+Push-Publish origin controls, context menus, vector arrows/status icons, grouped
+local/remote branch chooser, New Branch and dirty-switch Leave/Bring Changes
+cards. Git keeps its own persisted sidebar width, compact fixed rows, bottom
+commit form, filter modes and multi-select file context actions (discard/ignore/
+extension/include/exclude/copy/open/reveal). Mutating requests gate controls;
+background reads no longer dim or disable them. The diff remains visible while
+loading, caches eight targets, retains scroll IDs and rejects stale replies.
+
+Added worker-only branch stashes including staged/unstaged/untracked restoration,
+remote tracking checkout, in-memory merge preview, clean-start merge commits,
+conflict snapshots/markers, editor opening, Continue Merge and confirmed Abort.
+Continue checks saved resolution again and cannot be bypassed just by staging
+conflict markers externally. Binary/deleted/structural conflicts need explicit
+index resolution. Hooks/GPG/rebase/submodules remain outside this feature.
+
+Behavioral regressions cover conflicting/nonconflicting merges, preview without
+mutation, two-parent commits, abort preserving unrelated untracked files, dirty
+stash/index restoration, safe refusal of overlapping checkout, remote tracking,
+bulk discard/extension ignore, staged-marker gates, actual egui branch/create/
+switch/merge/continue/menu clicks, multi-selection and stable sparse-row/footer/
+diff geometry. Validation results follow after the final native checks.
+
+
+Final validation: 187 native workspace/all-features tests passed, 0 failed, 5
+existing system/live tests ignored. The sandbox-only attempt failed on existing
+local TCP mock permissions; the unrestricted full run passed. Final targeted
+Git UI tests, native workspace/all-targets/all-features Clippy with -D warnings,
+rustfmt, workspace release build and git diff --check passed. A staged-markers
+regression additionally verifies the committed blob contains the saved resolution,
+not an older staged marker version. Git modals block global/commit shortcuts.
+
+Native macOS smoke used an isolated temporary app/settings/project (AI/languages
+off): branch picker, Leave Changes stash, conflicting merge preview/start,
+Open in Nozhik, actual editor replacement/save, disabled→enabled Continue Merge
+and resulting two-parent merge commit. The final packaged executable also verified
+layout, vector icons, filter/file menus, Switch Branch cards and automatic stash
+restoration on return. The test app was explicitly closed. The real workspace
+repository was not switched, merged, committed or pushed. Network behavior is
+covered against a disposable local bare origin; no real origin push was run.
+Default update-binaries.py refreshed macOS ARM64 executable and signed app archive;
+--check verified the source fingerprint and both payload checksums. Windows builds,
+Clippy and GUI were not run; no Windows target cache was created.

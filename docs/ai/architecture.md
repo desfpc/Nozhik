@@ -199,6 +199,39 @@ Git работает с диском; буферы редактора сохра
 Полные задачи, ответы и ограничения описаны в
 [roadmap Phase 3.4](roadmap-progress.md#phase-34--vcs-engine--github-desktop-ui).
 
+### Git branch and merge UI (2026-10-29)
+
+`vcs::merge` owns local/remote branch switching, branch metadata, branch-named
+stashes, read-only merge previews and the merge/continue/abort lifecycle. All
+operations stay on the serial repository worker. Remote checkout establishes a
+local tracking branch and removes it if safe checkout fails. New branches keep
+the current index/worktree. Leave Changes includes untracked paths in a named
+stash; returning restores its index as well as working contents. A failed stash
+apply retains the stash. Bring Changes uses libgit2 safe checkout.
+
+Merge preview uses an in-memory merge index. Merge starts only from a clean
+repository; a conflict-free merge commits immediately, while conflicted merges
+retain MERGE_HEAD and expose owned path/remaining-conflict snapshots. Marker-free
+regular same-path text resolutions are eligible for Continue; structural, binary,
+missing and symlink paths require explicit index resolution. Snapshot/Continue
+also detect leftover markers in already-staged files, so external git add cannot
+bypass the resolution gate. Continue rechecks the disk and creates the merge
+commit with both parents before cleanup_state. Abort requires UI confirmation
+and restores HEAD, retaining unrelated untracked files. Marker detection is a
+conservative line-prefix check, not a language parser.
+
+`vcs_panel::controls` paints the Git chrome and owns branch/modal/file actions;
+`VcsPanel` separates mutation requests from background reads. Only mutations gate
+controls. It retains the current diff during async loading, labels previous
+content while an uncached target loads, keeps eight bounded display patches and
+checks project generation/request IDs before installing replies. Fixed row/footer
+geometry and stable scroll IDs prevent status polling from moving controls.
+`Layout.git` defaults to 27% and is persisted separately from the Project dock;
+older layout files receive the serde default. File menus support real multi-path
+staging/discard/ignore and worker-side OS open/reveal; editor-open requests return
+to the existing application document loader. Git still acts on saved disk/index
+contents, and existing editor buffers remain retained after repository mutations.
+
 ## Плагины и действия (Phase 4)
 
 `PluginManager` — неблокирующий UI handle с bounded mpsc requests и watch
@@ -429,7 +462,12 @@ Cut/Copy обрабатывают штатные egui clipboard
 события, RequestPaste читает clipboard в winit; menu paste восстанавливает фокус
 последнего активного редактора. Recent Files ограничен 30 путями.
 
-`layout::Layout` хранит относительные left/right/bottom/sql размеры. Ordered worker
+Project, Git, SSH, Database и Notifications используют единый левый dock и
+типизированный `LeftTool`; Structure и правые rail/dock удалены. Menu/actions
+Database, New Connection и SQL Console также открывают левый Database dock.
+
+`layout::Layout` хранит относительные left/bottom/sql размеры; legacy right
+сохранён только для совместимости существующего layout.json. Ordered worker
 загружает и атомарно записывает соседний `layout.json`; UI сохраняет изменения
 с debounce 250 ms, на shutdown ждёт final write до 1s. Только drag меняет dock
 пропорции; resize окна пересчитывает размеры из пропорций. Ошибка чтения/JSON

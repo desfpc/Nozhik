@@ -1836,3 +1836,33 @@ covered against a disposable local bare origin; no real origin push was run.
 Default update-binaries.py refreshed macOS ARM64 executable and signed app archive;
 --check verified the source fingerprint and both payload checksums. Windows builds,
 Clippy and GUI were not run; no Windows target cache was created.
+
+### Git History columns and selectable diff (2026-10-29)
+
+History now paints commits as full-width 56-point hit areas with consistent padding,
+hover/active backgrounds and secondary author/time lines. Changed files occupy a
+separate resizable second column with full-width 32-point rows, status icons and
+independent vertical scrolling. Commit metadata spans above the files/diff area;
+selecting a commit invalidates its outstanding details/diff requests.
+
+Diff retains virtualized painting and stores Unicode-scalar selection endpoints.
+Ordered pointer replay supports forward/reverse multiline drags, including a full
+drag arriving within one frame; dragging content no longer pans the ScrollArea.
+Both scrollbars and wheel axes remain enabled. Copy excludes gutters/patch markers
+and works through Cmd/Ctrl+C, the context menu and native Edit Copy; Cmd/Ctrl+A
+selects the displayed patch. File replacement clears selection. Patch width is
+measured once per file/font to keep horizontal range stable across vertical scroll.
+Copy is available without an open editor because Git is a read-only text surface.
+
+Validation: 189 native workspace/all-features tests passed, 0 failed, 5 existing
+system/live tests ignored. Sandbox mock TCP permissions required running the full
+suite with system access. Native workspace/all-targets/all-features Clippy with
+-D warnings, rustfmt, whitespace checks and workspace release build passed.
+New pointer regressions cover padded commit/file clicks, separate column geometry,
+Unicode multiline/reverse/one-frame selection, clipboard output, Select All, both
+scroll axes and selection reset. Native macOS smoke used an isolated temporary
+project/settings and verified three columns, full-width highlights, visible text
+selection without panning, context Copy and Cmd+C by pasting the selected fragments
+into a temporary commit-description field. No commit was made; the app was closed.
+Default update-binaries.py refreshes only macOS ARM64 executable/app archive and
+--check verifies source/payload hashes. Windows builds/Clippy/GUI were not run.

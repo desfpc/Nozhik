@@ -188,7 +188,13 @@ UTF-8 текст, native пути и модель дерева. `FileSystem` о�
 передаётся между потоками. UI отправляет надёжные mpsc задачи, получает owned
 снимки и проверяет generation/request ID. `VcsPanel` отвечает за выбор файла,
 режим Changes/History, commit form и branch/remote controls; `DiffView` рендерит
-видимые строки unified patch. Результаты worker будят egui callback-ом.
+видимые строки unified patch. History содержит полноширинные строки коммитов,
+отдельную изменяемую по ширине колонку файлов и diff справа. Выделение diff
+хранит пары row/Unicode-scalar offset, копирует только текст без gutter/маркеров
+через Cmd/Ctrl+C, контекстное меню или native Edit → Copy. Drag выделяет текст;
+колесо и обе полосы прокрутки остаются независимыми. Ширина patch измеряется
+при смене файла/шрифта, чтобы горизонтальный scrollbar не зависел от видимых строк.
+Результаты worker будят egui callback-ом.
 
 `FileEvent::Changed`, broadcast lag и успешный Save инвалидируют Git status с
 200 ms debounce. Фоновый опрос раз в 3 секунды покрывает `.git` и внешние команды,

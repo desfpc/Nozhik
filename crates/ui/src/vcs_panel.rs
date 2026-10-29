@@ -521,6 +521,7 @@ impl VcsPanel {
     }
     fn select_commit(&mut self, sha: String) {
         self.history_sha = Some(sha.clone());
+        self.details = None;
         self.diff_target = None;
         self.diff_request = 0;
         self.details_request = self.submit(Task::Details(sha));
@@ -530,42 +531,26 @@ impl VcsPanel {
         if self.history.is_empty() {
             ui.weak("No commits yet");
         }
+        ui.spacing_mut().item_spacing.y = 0.0;
         let height = (ui.available_height() - 36.0).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("git_history")
             .max_height(height)
             .auto_shrink([false, false])
-            .show_rows(ui, 48.0, self.history.len(), |ui, rows| {
+            .show_rows(ui, 56.0, self.history.len(), |ui, rows| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 for index in rows {
                     let commit = &self.history[index];
                     let selected = self.history_sha.as_ref() == Some(&commit.sha);
-                    egui::Frame::new()
-                        .fill(if selected {
-                            theme::ACCENT
-                        } else {
-                            Color32::TRANSPARENT
-                        })
-                        .inner_margin(6)
-                        .show(ui, |ui| {
-                            let response = ui.add(
-                                egui::Label::new(egui::RichText::new(&commit.summary).strong())
-                                    .truncate()
-                                    .sense(egui::Sense::click()),
-                            );
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!(
-                                        "{} · {}",
-                                        commit.author, commit.relative_time
-                                    ))
-                                    .small(),
-                                )
-                                .truncate(),
-                            );
-                            if response.clicked() {
-                                select = Some(commit.sha.clone());
-                            }
-                        });
+                    let response = history_row(
+                        ui,
+                        selected,
+                        &commit.summary,
+                        Some(&format!("{} · {}", commit.author, commit.relative_time)),
+                    );
+                    if response.clicked() {
+                        select = Some(commit.sha.clone());
+                    }
                 }
             });
         if self.history.len() >= self.history_limit
@@ -585,54 +570,87 @@ impl VcsPanel {
         }
     }
     pub(crate) fn center(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        Self::git_style(ui);
         if self.mode == Mode::History {
-            let mut target = None;
-            if let Some((commit, files)) = &self.details {
-                ui.heading(&commit.summary);
+            self.history_center(ui, font_size);
+        } else {
+            self.diff_contents(ui, font_size);
+        }
+    }
+    fn history_center(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        let Some((commit, files)) = self.details.clone() else {
+            ui.weak("Select a commit in History");
+            return;
+        };
+        egui::Frame::new().inner_margin(10).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(egui::RichText::new(&commit.summary).strong()).truncate());
+            ui.horizontal(|ui| {
                 ui.label(format!("{} · {}", commit.author, commit.relative_time));
-                if !commit.body.is_empty() {
-                    egui::ScrollArea::vertical()
-                        .id_salt("commit_body")
-                        .max_height(100.0)
-                        .show(ui, |ui| {
-                            ui.label(&commit.body);
-                        });
+                if ui
+                    .small_button(commit.sha.get(..7).unwrap_or(&commit.sha))
+                    .on_hover_text("Copy SHA")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(commit.sha.clone());
                 }
-                ui.horizontal(|ui| {
-                    ui.monospace(&commit.sha);
-                    if ui.button("Copy SHA").clicked() {
-                        ui.ctx().copy_text(commit.sha.clone());
-                    }
-                    ui.weak(format!("short: {}", &commit.sha[..7]));
+            });
+            if !commit.body.is_empty() {
+                egui::ScrollArea::vertical()
+                    .id_salt("commit_body")
+                    .max_height(80.0)
+                    .show(ui, |ui| {
+                        ui.label(&commit.body);
+                    });
+            }
+        });
+        ui.separator();
+        let width = (ui.available_width() * 0.32).clamp(140.0, 340.0);
+        let mut target = None;
+        egui::SidePanel::left("history_files_column")
+            .default_width(width)
+            .width_range(120.0..=420.0)
+            .frame(egui::Frame::new().fill(controls::SURFACE))
+            .show_inside(ui, |ui| {
+                egui::Frame::new().inner_margin(10).show(ui, |ui| {
+                    ui.label(format!("{} changed files", files.len()));
                 });
                 egui::ScrollArea::vertical()
-                    .id_salt("commit_files")
-                    .max_height(130.0)
+                    .id_salt(("commit_files", &commit.sha))
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for file in files {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for file in &files {
                             let diff_target = DiffTarget::Commit {
                                 sha: commit.sha.clone(),
                                 path: file.path.clone(),
                             };
-                            if ui
-                                .selectable_label(
-                                    self.diff_target.as_ref() == Some(&diff_target),
-                                    file.path.to_string_lossy(),
-                                )
-                                .clicked()
-                            {
+                            let response = history_row(
+                                ui,
+                                self.diff_target.as_ref() == Some(&diff_target),
+                                &file.path.to_string_lossy(),
+                                None,
+                            );
+                            controls::paint_file_status(ui, file, response.rect);
+                            if response.clicked() {
                                 target = Some(diff_target);
                             }
                         }
                     });
-                ui.separator();
-            } else {
-                ui.weak("Select a commit in History");
-            }
-            if let Some(target) = target {
-                self.request_diff(target);
-            }
+            });
+        if let Some(target) = target {
+            self.request_diff(target);
         }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show_inside(ui, |ui| {
+                self.diff_contents(ui, font_size);
+            });
+    }
+    pub(crate) fn copy_diff(&self, ctx: &Context) -> bool {
+        self.diff.copy(ctx)
+    }
+    fn diff_contents(&mut self, ui: &mut egui::Ui, font_size: f32) {
         egui::Frame::new()
             .fill(egui::Color32::from_rgb(42, 49, 56))
             .inner_margin(4)
@@ -645,19 +663,21 @@ impl VcsPanel {
                     } else {
                         self.diff.header(ui);
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let menu = ui.menu_button("    ", |ui| {
-                            if ui.checkbox(&mut self.staged_diff, "Staged only").changed() {
-                                self.refresh_selection();
-                            }
+                    if self.mode == Mode::Changes {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let menu = ui.menu_button("    ", |ui| {
+                                if ui.checkbox(&mut self.staged_diff, "Staged only").changed() {
+                                    self.refresh_selection();
+                                }
+                            });
+                            crate::tool_icons::paint(
+                                ui.painter(),
+                                menu.response.rect.center(),
+                                crate::tool_icons::Icon::Settings,
+                                controls::TEXT,
+                            );
                         });
-                        crate::tool_icons::paint(
-                            ui.painter(),
-                            menu.response.rect.center(),
-                            crate::tool_icons::Icon::Settings,
-                            controls::TEXT,
-                        );
-                    });
+                    }
                 });
             });
         if self.mode == Mode::Changes && self.selected_paths.len() > 1 {
@@ -687,6 +707,66 @@ impl VcsPanel {
             self.discard = None;
         }
     }
+}
+
+// One hit area and one background cover the entire row, including its padding.
+fn history_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    subtitle: Option<&str>,
+) -> egui::Response {
+    let height = if subtitle.is_some() { 56.0 } else { 32.0 };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let background = if selected {
+        controls::BLUE
+    } else if response.hovered() {
+        egui::Color32::from_rgb(48, 57, 65)
+    } else {
+        controls::SURFACE
+    };
+    ui.painter().rect_filled(rect, 0, background);
+    ui.painter().hline(
+        rect.x_range(),
+        rect.bottom(),
+        egui::Stroke::new(1.0_f32, theme::BORDER),
+    );
+    let mut text_rect = rect.shrink2(egui::vec2(12.0, 6.0));
+    if subtitle.is_none() {
+        text_rect.max.x -= 16.0;
+    }
+    let painter = ui
+        .painter()
+        .with_clip_rect(text_rect.intersect(ui.clip_rect()));
+    let title_pos = if subtitle.is_some() {
+        text_rect.left_top() + egui::vec2(0.0, 2.0)
+    } else {
+        text_rect.left_center() - egui::vec2(0.0, 7.0)
+    };
+    painter.text(
+        title_pos,
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(13.0),
+        controls::TEXT,
+    );
+    if let Some(subtitle) = subtitle {
+        painter.text(
+            text_rect.left_top() + egui::vec2(0.0, 25.0),
+            egui::Align2::LEFT_TOP,
+            subtitle,
+            egui::FontId::proportional(12.0),
+            if selected {
+                controls::TEXT
+            } else {
+                theme::MUTED
+            },
+        );
+    }
+    response.on_hover_text(title)
 }
 
 #[cfg(test)]

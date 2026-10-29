@@ -347,3 +347,86 @@ fn sparse_file_rows_and_footer_keep_their_geometry_across_popup_and_refresh()
     assert!((sidebar_point(&after, "one.txt")?.y - one.y).abs() < 0.1);
     Ok(())
 }
+
+#[test]
+fn history_full_width_rows_select_commits_and_files_in_separate_columns()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo, mut panel, ctx) = fixture()?;
+    commit_file(&repo, "second.txt", "second file\n", "Two files")?;
+    // Amend the newest commit so the selected commit has two changed paths.
+    let head = repo.head()?.peel_to_commit()?;
+    std::fs::write(
+        repo.workdir().ok_or("worktree")?.join("file.txt"),
+        "updated\n",
+    )?;
+    let mut index = repo.index()?;
+    index.add_path(std::path::Path::new("file.txt"))?;
+    index.write()?;
+    let tree = repo.find_tree(index.write_tree()?)?;
+    head.amend(Some("HEAD"), None, None, None, None, Some(&tree))?;
+    panel.submit(Task::Refresh);
+    settle(&mut panel, &ctx)?;
+    click(&mut panel, &ctx, "History")?;
+    settle(&mut panel, &ctx)?;
+    let newest = panel.history[0].sha.clone();
+    let output = frame(&mut panel, &ctx, vec![]);
+    let old = text_point(&output, "Ours")?;
+    // Far beyond the short title, inside the right-hand padding of its row.
+    click_at(
+        &mut panel,
+        &ctx,
+        Pos2::new(280.0, old.y + 20.0),
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    settle(&mut panel, &ctx)?;
+    assert_ne!(panel.history_sha.as_ref(), Some(&newest));
+    let output = frame(&mut panel, &ctx, vec![]);
+    let newest_point = text_point(&output, "Two files")?;
+    click_at(
+        &mut panel,
+        &ctx,
+        Pos2::new(280.0, newest_point.y + 20.0),
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    settle(&mut panel, &ctx)?;
+    assert_eq!(panel.history_sha.as_ref(), Some(&newest));
+    let output = frame(&mut panel, &ctx, vec![]);
+    let second = text_point(&output, "second.txt")?;
+    let first = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "file.txt" && t.pos.x < 600.0 => {
+                Some(t.pos + t.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .ok_or("file row")?;
+    assert!(second.x > 300.0 && second.x < 600.0);
+    assert!((second.y - first.y - 32.0).abs() < 1.0);
+    // Click empty space at the end of the file row.
+    click_at(
+        &mut panel,
+        &ctx,
+        Pos2::new(530.0, second.y),
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    settle(&mut panel, &ctx)?;
+    assert_eq!(
+        panel.diff_target,
+        Some(DiffTarget::Commit {
+            sha: newest,
+            path: "second.txt".into()
+        })
+    );
+    let output = frame(&mut panel, &ctx, vec![]);
+    let diff_header = text_point(&output, "second file")?;
+    assert!(
+        diff_header.x > 600.0,
+        "diff is to the right of the files: {diff_header:?}"
+    );
+    Ok(())
+}

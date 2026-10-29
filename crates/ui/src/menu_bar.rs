@@ -29,7 +29,8 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
             ("ui.undo", "Undo", "editorOpen"),
             ("ui.redo", "Redo", "editorOpen"),
             ("ui.cut", "Cut", "editorOpen"),
-            ("ui.copy", "Copy", "editorOpen"),
+            // Read-only surfaces such as Git diff can copy without an open editor.
+            ("ui.copy", "Copy", ""),
             ("ui.paste", "Paste", "editorOpen"),
             ("ui.find", "Find in File", "editorOpen"),
             ("ui.replace", "Replace", "editorOpen"),

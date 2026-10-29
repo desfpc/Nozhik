@@ -930,7 +930,7 @@ impl VcsPanel {
     }
 }
 
-fn paint_file_status(ui: &egui::Ui, change: &FileChange, rect: egui::Rect) {
+pub(super) fn paint_file_status(ui: &egui::Ui, change: &FileChange, rect: egui::Rect) {
     let color = match change.status {
         ChangeStatus::New => theme::SUCCESS,
         ChangeStatus::Deleted => theme::ERROR,

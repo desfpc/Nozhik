@@ -299,6 +299,12 @@ impl NozhikUi {
                         continue;
                     }
                     if action == "ui.copy"
+                        && self.left == Some(crate::LeftTool::Commit)
+                        && self.vcs.copy_diff(ctx)
+                    {
+                        continue;
+                    }
+                    if action == "ui.copy"
                         && let Some(text) = self
                             .database
                             .active

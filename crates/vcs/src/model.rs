@@ -72,7 +72,7 @@ pub enum DiffLineKind {
     Deletion,
 }
 /// A line in a textual patch. Numbers are one-based.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
     /// Rendering category.
     pub kind: DiffLineKind,
@@ -84,7 +84,7 @@ pub struct DiffLine {
     pub text: String,
 }
 /// One contiguous patch hunk.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffHunk {
     /// Unified header, including `@@` positions.
     pub header: String,
@@ -100,12 +100,14 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 /// A bounded display patch, generated off the UI thread.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDiff {
     /// Selected repository-relative file.
     pub path: PathBuf,
     /// Parsed hunks.
     pub hunks: Vec<DiffHunk>,
+    /// Complete context from the same Git comparison, absent if display limits prevent it.
+    pub full_hunks: Option<Vec<DiffHunk>>,
     /// Addition count in displayed hunks.
     pub added: usize,
     /// Deletion count in displayed hunks.

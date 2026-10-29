@@ -542,12 +542,22 @@ fn history(repo: &Repository, limit: usize) -> Result<Vec<CommitInfo>> {
         .collect()
 }
 fn file_diff(repo: &Repository, target: &DiffTarget) -> Result<FileDiff> {
+    let mut patch = file_diff_context(repo, target, 3)?;
+    if !patch.binary && !patch.truncated && !patch.hunks.is_empty() {
+        let full = file_diff_context(repo, target, u32::MAX)?;
+        if !full.binary && !full.truncated {
+            patch.full_hunks = Some(full.hunks);
+        }
+    }
+    Ok(patch)
+}
+fn file_diff_context(repo: &Repository, target: &DiffTarget, context: u32) -> Result<FileDiff> {
     let mut options = DiffOptions::new();
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
         .show_untracked_content(true)
-        .context_lines(3)
+        .context_lines(context)
         .max_size(2 * 1024 * 1024);
     let (path, mut diff) = match target {
         DiffTarget::Working { path, staged } => {
@@ -581,6 +591,7 @@ fn parse_diff(diff: &Diff<'_>, path: &Path) -> Result<FileDiff> {
     let mut result = FileDiff {
         path: path.to_path_buf(),
         hunks: Vec::new(),
+        full_hunks: None,
         added: 0,
         deleted: 0,
         binary: false,

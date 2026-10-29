@@ -467,6 +467,7 @@ impl NozhikUi {
                         .inner_margin(0),
                 )
                 .show(ctx, |ui| {
+                    self.vcs.configure_diff(&self.config);
                     self.vcs.center(ui, f32::from(self.config.font_size));
                 });
             return;

@@ -1019,3 +1019,26 @@ last index with caret coordinates mapped back to that snapshot until the new ove
 arrives. No parser, file I/O or full-buffer String is added to the paint/input path.
 The completion Area explicitly resets both inner bounds, sizes to up to nine 24-point
 rows and measured labels (440-point width/45% screen height caps), and scrolls longer lists.
+
+
+### Git diff syntax and expandable context (2026-10-29)
+
+FileDiff retains the bounded three-context-line patch and optionally full_hunks
+from the same target (HEAD/index/worktree or parent/commit), prepared on the VCS
+worker. A complete-context comparison exceeding the existing 2 MiB/50,000-row/
+4096-character-line limits is discarded, preserving the original display patch.
+DiffView uses the complete hunks when available, initially showing changes plus
+three adjacent rows and explicit gaps. Each gap offers the applicable directions
+and reveals up to 20 rows per click; adjoining regions merge without duplication.
+Rebuilding visible rows clears selection to avoid stale row coordinates. Identical
+normalized snapshots are ignored, retaining expansion/colors/selection during status
+polling.
+
+DiffView's syntax helper parses immutable old/new PHP snapshots on a background
+thread using the existing language_support Highlighter, without starting LSP or
+opening editor buffers. Deletions use old captures; context/additions use new
+captures, clipped to UTF-8 line ranges. Partial hunks stay plain. Replacing the
+file drops its receiver so stale replies cannot install colors. Config's shared
+language registry, enabled_languages and file_types syntax palette govern parsing
+and painting. egui lays out only visible colored rows; selection/copy and both
+scroll axes remain available. No new crate dependency or source file mutation.

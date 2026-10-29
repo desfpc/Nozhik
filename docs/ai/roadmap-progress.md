@@ -1866,3 +1866,30 @@ selection without panning, context Copy and Cmd+C by pasting the selected fragme
 into a temporary commit-description field. No commit was made; the app was closed.
 Default update-binaries.py refreshes only macOS ARM64 executable/app archive and
 --check verifies source/payload hashes. Windows builds/Clippy/GUI were not run.
+
+### Git diff syntax and expandable context (2026-10-29)
+
+Changes and History share PHP/PHTML Tree-sitter colors and configured syntax
+palettes. Independent background parsing of full old/new Git snapshots preserves
+multiline lexical context and colors removed lines from the old version. Shared
+language availability/enabled preferences gate parsing; unsupported/partial files
+stay plain. No formatter runs and no source files are rewritten.
+
+VCS supplies optional complete context alongside its existing bounded patch.
+DiffView starts with changes plus three adjacent rows. Gaps expose vector up/down
+arrows as applicable, revealing 20 rows at a time until the file boundary or the
+next visible region. Full-context limits retain the original partial patch.
+Identical normalized polling replies retain expanded context, colors and selection;
+actual replacement/expansion clears obsolete row selection coordinates.
+
+Validation: 193 native workspace/all-features tests passed, 0 failed, 5 existing
+system/live tests ignored. Full tests required system access for existing TCP
+mocks after sandbox PermissionDenied failures. Native workspace Clippy with
+all-targets/all-features and -D warnings, rustfmt, whitespace checks and workspace
+release build passed. Regressions exercise actual egui up/down clicks, repeated
+expansion/EOF, polling retention, Unicode drag/copy/scroll, multiline comments,
+old/new token colors, plain palette/disabled language and worktree/index/historical
+snapshot isolation. No manual native GUI smoke or Windows build/Clippy/GUI was run.
+Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
+--check verified current source fingerprint and both payload checksums. No Windows
+target cache was created.

@@ -647,6 +647,9 @@ impl VcsPanel {
                 self.diff_contents(ui, font_size);
             });
     }
+    pub(crate) fn configure_diff(&mut self, config: &nozhik_config::Config) {
+        self.diff.configure(config);
+    }
     pub(crate) fn copy_diff(&self, ctx: &Context) -> bool {
         self.diff.copy(ctx)
     }

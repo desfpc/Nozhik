@@ -3,7 +3,11 @@ use crate::theme;
 use egui::{Color32, FontId};
 use nozhik_vcs::model::{DiffLineKind, FileDiff};
 
+mod syntax;
+
+#[derive(Clone, Copy)]
 enum Row {
+    Gap { h: usize, start: usize, end: usize },
     Hunk(usize),
     Line(usize, usize),
 }
@@ -14,6 +18,8 @@ pub struct DiffView {
     selection: Option<((usize, usize), (usize, usize))>,
     dragging: bool,
     measured_width: Option<(f32, f32)>,
+    shown: Vec<Vec<bool>>,
+    syntax: syntax::Syntax,
 }
 impl DiffView {
     pub(crate) fn clear(&mut self) {
@@ -22,19 +28,68 @@ impl DiffView {
         self.selection = None;
         self.dragging = false;
         self.measured_width = None;
+        self.shown.clear();
+        self.syntax = syntax::Syntax::default();
     }
-    pub(crate) fn set(&mut self, file: FileDiff) {
+    pub(crate) fn set(&mut self, mut file: FileDiff) {
+        let complete = file.full_hunks.is_some();
+        if let Some(hunks) = file.full_hunks.take() {
+            file.hunks = hunks;
+        }
+        if self.file.as_ref() == Some(&file) {
+            return;
+        }
+        self.clear();
+        self.shown = file
+            .hunks
+            .iter()
+            .map(|hunk| {
+                let mut shown = vec![!complete; hunk.lines.len()];
+                for (i, line) in hunk.lines.iter().enumerate() {
+                    if line.kind != DiffLineKind::Context {
+                        let end = (i + 4).min(shown.len());
+                        shown[i.saturating_sub(3)..end].fill(true);
+                    }
+                }
+                shown
+            })
+            .collect();
+        self.file = Some(file);
+        self.rebuild_rows();
+    }
+    fn rebuild_rows(&mut self) {
         self.rows.clear();
+        for (h, shown) in self.shown.iter().enumerate() {
+            self.rows.push(Row::Hunk(h));
+            let mut l = 0;
+            while l < shown.len() {
+                if shown[l] {
+                    self.rows.push(Row::Line(h, l));
+                    l += 1;
+                } else {
+                    let start = l;
+                    while l < shown.len() && !shown[l] {
+                        l += 1;
+                    }
+                    self.rows.push(Row::Gap { h, start, end: l });
+                }
+            }
+        }
         self.selection = None;
         self.dragging = false;
         self.measured_width = None;
-        for (h, hunk) in file.hunks.iter().enumerate() {
-            self.rows.push(Row::Hunk(h));
-            for l in 0..hunk.lines.len() {
-                self.rows.push(Row::Line(h, l));
-            }
-        }
-        self.file = Some(file);
+    }
+    fn expand(&mut self, h: usize, start: usize, end: usize, up: bool) {
+        let range = if up {
+            end.saturating_sub(20).max(start)..end
+        } else {
+            start..(start + 20).min(end)
+        };
+        self.shown[h][range].fill(true);
+        self.rebuild_rows();
+    }
+    pub(crate) fn configure(&mut self, config: &nozhik_config::Config) {
+        self.syntax.configure(config, self.file.as_ref());
     }
     fn text(&self, row: usize) -> &str {
         let Some(file) = &self.file else {
@@ -43,7 +98,7 @@ impl DiffView {
         match self.rows.get(row) {
             Some(Row::Hunk(h)) => file.hunks[*h].header.trim_end_matches(['\n', '\r']),
             Some(Row::Line(h, l)) => file.hunks[*h].lines[*l].text.trim_end_matches(['\n', '\r']),
-            None => "",
+            Some(Row::Gap { .. }) | None => "",
         }
     }
     fn selected_text(&self) -> Option<String> {
@@ -99,6 +154,7 @@ impl DiffView {
                     pressed: true,
                     modifiers,
                 } if ui.is_enabled()
+                    && pos.x >= origin.x + 100.0
                     && ui.clip_rect().contains(pos)
                     && ui.ctx().layer_id_at(pos) == Some(ui.layer_id()) =>
                 {
@@ -174,6 +230,7 @@ impl DiffView {
         }
     }
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        self.syntax.poll(ui.ctx(), self.file.as_ref());
         let Some(file) = &self.file else {
             ui.weak("Select a changed file to view its diff");
             return;
@@ -210,6 +267,7 @@ impl DiffView {
             .available_width()
             .max(self.measured_width.map_or(0.0, |(_, w)| w));
         ui.spacing_mut().item_spacing.y = 0.0;
+        let mut expansion = None;
         egui::ScrollArea::both()
             .id_salt(("git_diff", &path))
             .scroll_source(
@@ -222,9 +280,75 @@ impl DiffView {
                 let origin = ui.cursor().min - egui::vec2(0.0, visible.start as f32 * height);
                 self.selection_input(ui, origin, height, &font);
                 for index in visible {
-                    self.paint_row(ui, index, &font, egui::vec2(width, height));
+                    if let Row::Gap { h, start, end } = self.rows[index] {
+                        expansion = self
+                            .paint_gap(ui, h, start, end, &font, egui::vec2(width, height))
+                            .or(expansion);
+                    } else {
+                        self.paint_row(ui, index, &font, egui::vec2(width, height));
+                    }
                 }
             });
+        if let Some((h, start, end, up)) = expansion {
+            self.expand(h, start, end, up);
+            ui.ctx().request_repaint();
+        }
+    }
+    fn paint_gap(
+        &self,
+        ui: &mut egui::Ui,
+        h: usize,
+        start: usize,
+        end: usize,
+        font: &FontId,
+        size: egui::Vec2,
+    ) -> Option<(usize, usize, usize, bool)> {
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, Color32::from_rgb(29, 34, 38));
+        let height = size.y;
+        let mut expansion = None;
+        let count = self.shown[h].len();
+        for (up, x, visible) in [(true, 0.0, end < count), (false, 50.0, start > 0)] {
+            if !visible {
+                continue;
+            }
+            let hit =
+                egui::Rect::from_min_size(rect.min + egui::vec2(x, 0.0), egui::vec2(50.0, height));
+            let response = ui
+                .interact(
+                    hit,
+                    ui.id().with(("expand", h, start, up)),
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(if up {
+                    "Expand Up (20 lines)"
+                } else {
+                    "Expand Down (20 lines)"
+                });
+            if response.hovered() {
+                ui.painter().rect_filled(hit, 0.0, theme::ACCENT);
+            }
+            let center = hit.center();
+            let direction = if up { -1.0 } else { 1.0 };
+            ui.painter().arrow(
+                center - egui::vec2(0.0, direction * 4.0),
+                egui::vec2(0.0, direction * 8.0),
+                egui::Stroke::new(1.5_f32, theme::TEXT),
+            );
+            if response.clicked() {
+                expansion = Some((h, start, end, up));
+            }
+        }
+        ui.painter().text(
+            rect.min + egui::vec2(126.0, 4.0),
+            egui::Align2::LEFT_TOP,
+            format!("… {} lines hidden", end - start),
+            font.clone(),
+            theme::MUTED,
+        );
+        expansion
     }
     fn paint_row(&self, ui: &mut egui::Ui, index: usize, font: &FontId, size: egui::Vec2) {
         let Some(file) = &self.file else {
@@ -232,6 +356,7 @@ impl DiffView {
         };
         let row = &self.rows[index];
         let (text, old, new, marker, background) = match *row {
+            Row::Gap { .. } => return,
             Row::Hunk(h) => (
                 file.hunks[h].header.trim_end_matches(['\n', '\r']),
                 None,
@@ -255,9 +380,13 @@ impl DiffView {
                 )
             }
         };
+        let spans = match *row {
+            Row::Line(h, l) => self.syntax.spans(h, l),
+            _ => &[],
+        };
         let galley = ui
             .painter()
-            .layout_no_wrap(text.into(), font.clone(), theme::TEXT);
+            .layout_job(syntax::job(text, font, spans, self.syntax.palette()));
 
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, background);
@@ -352,6 +481,7 @@ mod tests {
             deleted: 0,
             binary: false,
             truncated: false,
+            full_hunks: None,
             hunks: vec![DiffHunk {
                 header: "@@ patch @@".into(),
                 old_start: 1,
@@ -373,6 +503,90 @@ mod tests {
             }],
         });
         view
+    }
+    fn context_fixture() -> DiffView {
+        let mut view = fixture();
+        let Some(mut file) = view.file.take() else {
+            return view;
+        };
+        let mut hunk = file.hunks[0].clone();
+        hunk.lines = (0..140)
+            .map(|n| DiffLine {
+                kind: if n == 70 {
+                    DiffLineKind::Addition
+                } else {
+                    DiffLineKind::Context
+                },
+                old_line: (n != 70).then_some(n + 1),
+                new_line: Some(n + 1),
+                text: format!("line {n}\n"),
+            })
+            .collect();
+        file.full_hunks = Some(vec![hunk]);
+        view.set(file);
+        view
+    }
+    #[test]
+    fn arrows_expand_repeatedly_and_stop_at_file_boundaries() {
+        let ctx = egui::Context::default();
+        let mut view = context_fixture();
+        let (_, origin, _) = frame(&mut view, &ctx, vec![]);
+        assert_eq!(view.shown[0].iter().filter(|v| **v).count(), 7);
+        let up = origin + egui::vec2(25.0, 30.0);
+        frame(&mut view, &ctx, vec![Event::PointerMoved(up)]);
+        frame(&mut view, &ctx, vec![button(up, true)]);
+        frame(&mut view, &ctx, vec![button(up, false)]);
+        assert_eq!(view.shown[0].iter().filter(|v| **v).count(), 27);
+        if let Some(same) = context_fixture().file {
+            view.set(same);
+        }
+        assert_eq!(
+            view.shown[0].iter().filter(|v| **v).count(),
+            27,
+            "unchanged status polling retains expanded context"
+        );
+        assert!(view.selection.is_none(), "arrow clicks do not select text");
+        while let Some(Row::Gap { h, start, end }) = view
+            .rows
+            .iter()
+            .find(|r| matches!(r, Row::Gap { start: 0, .. }))
+            .copied()
+        {
+            view.expand(h, start, end, true);
+        }
+        assert!(view.shown[0][0]);
+        while let Some(Row::Gap { h, start, end }) = view
+            .rows
+            .iter()
+            .find(|r| matches!(r, Row::Gap { .. }))
+            .copied()
+        {
+            view.expand(h, start, end, false);
+        }
+        assert!(view.shown[0].iter().all(|v| *v));
+        assert_eq!(view.rows.len(), 141);
+        assert!(view.text(1).contains("line 0"));
+        assert!(view.text(140).contains("line 139"));
+    }
+    #[test]
+    fn bottom_arrow_reveals_following_context_with_real_clicks() {
+        let ctx = egui::Context::default();
+        let mut view = context_fixture();
+        let Some(mut file) = view.file.take() else {
+            return;
+        };
+        file.hunks[0].lines[70].kind = DiffLineKind::Context;
+        file.hunks[0].lines[3].kind = DiffLineKind::Addition;
+        file.full_hunks = Some(file.hunks.clone());
+        view.set(file);
+        let (_, origin, _) = frame(&mut view, &ctx, vec![]);
+        let down = origin + egui::vec2(75.0, 170.0);
+        frame(&mut view, &ctx, vec![Event::PointerMoved(down)]);
+        frame(&mut view, &ctx, vec![button(down, true)]);
+        frame(&mut view, &ctx, vec![button(down, false)]);
+        assert!(view.shown[0][26]);
+        assert!(!view.shown[0][27]);
+        assert!(view.selection.is_none());
     }
     fn frame(
         view: &mut DiffView,
@@ -476,7 +690,8 @@ mod tests {
             scrolled.x > 0.0 && scrolled.y > 0.0,
             "both axes: {scrolled:?}"
         );
-        if let Some(file) = fixture().file {
+        if let Some(mut file) = fixture().file {
+            file.path = "different.rs".into();
             view.set(file);
         }
         assert!(view.selected_text().is_none());

@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt::Write;
 fn repository() -> std::result::Result<(tempfile::TempDir, Repository), Box<dyn std::error::Error>>
 {
     let dir = tempfile::tempdir()?;
@@ -424,5 +425,53 @@ fn staging_markers_does_not_bypass_merge_resolution_gate()
     let entry = head.tree()?.get_path(Path::new("file.txt"))?;
     assert_eq!(repo.find_blob(entry.id())?.content(), b"resolved\n");
     assert_eq!(status(&repo)?.changes.len(), 0);
+    Ok(())
+}
+
+#[test]
+fn full_context_tracks_worktree_index_and_historical_versions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    let path = PathBuf::from("context.php");
+    let mut source = String::new();
+    for n in 1..=140 {
+        writeln!(source, "// line {n}")?;
+    }
+    fs::write(dir.path().join(&path), &source)?;
+    stage(&repo, std::slice::from_ref(&path), true)?;
+    commit(&repo, "Base", "")?;
+    let staged = source.replace("// line 70\n", "$value = 'staged';\n");
+    fs::write(dir.path().join(&path), &staged)?;
+    stage(&repo, std::slice::from_ref(&path), true)?;
+    fs::write(dir.path().join(&path), staged.replace("staged", "working"))?;
+    for (staged_only, expected) in [(true, "staged"), (false, "working")] {
+        let display = file_diff(
+            &repo,
+            &DiffTarget::Working {
+                path: path.clone(),
+                staged: staged_only,
+            },
+        )?;
+        assert_eq!((display.added, display.deleted), (1, 1));
+        assert_eq!(display.hunks[0].new_start, 67);
+        let full = display.full_hunks.ok_or("missing full context")?;
+        assert_eq!(full.len(), 1);
+        assert_eq!(full[0].new_start, 1);
+        assert_eq!(full[0].new_len, 140);
+        assert!(full[0].lines.iter().any(|l| l.text.contains(expected)));
+        assert_eq!(full[0].lines.last().and_then(|l| l.new_line), Some(140));
+    }
+    let created = commit(&repo, "Staged", "")?;
+    fs::write(dir.path().join(&path), "unrelated on-disk contents\n")?;
+    let display = file_diff(
+        &repo,
+        &DiffTarget::Commit {
+            sha: created.sha,
+            path,
+        },
+    )?;
+    let full = display.full_hunks.ok_or("missing history context")?;
+    assert!(full[0].lines.iter().any(|l| l.text.contains("staged")));
+    assert!(!full[0].lines.iter().any(|l| l.text.contains("unrelated")));
     Ok(())
 }

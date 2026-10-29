@@ -1,6 +1,6 @@
 //! Tree-sitter extraction. Parsing is confined to the project worker.
 use crate::symbol_index::{
-    FileSymbols, ReferenceLocation, SymbolDeclaration, SymbolKind, Visibility,
+    FileSymbols, PhpTypeSource, ReferenceLocation, SymbolDeclaration, SymbolKind, Visibility,
 };
 use std::{collections::HashMap, ops::Range, path::Path};
 use tree_sitter::Node;
@@ -165,7 +165,7 @@ fn declaration(
         k if class_kind(k) => SymbolKind::Class,
         "function_definition" => SymbolKind::Function,
         "method_declaration" => SymbolKind::Method,
-        "property_element" => SymbolKind::Property,
+        "property_element" | "property_promotion_parameter" => SymbolKind::Property,
         "const_element" => SymbolKind::Constant,
         "simple_parameter" | "variadic_parameter" | "assignment_expression" => SymbolKind::Variable,
         _ => return None,
@@ -186,7 +186,9 @@ fn declaration(
     }
     let name = text(name_node, source).to_string();
     let parent = node.parent().unwrap_or(node);
-    let header = if matches!(kind, SymbolKind::Property | SymbolKind::Constant) {
+    let header = if matches!(kind, SymbolKind::Property | SymbolKind::Constant)
+        && node.kind() != "property_promotion_parameter"
+    {
         parent
     } else {
         node
@@ -270,6 +272,7 @@ fn declaration(
         visibility: visibility(&raw),
         is_static: raw.split_whitespace().any(|s| s == "static"),
         type_name,
+        type_source: None,
         signature: raw,
         documentation: previous
             .filter(|n| n.kind() == "comment")
@@ -280,8 +283,27 @@ fn declaration(
 }
 fn collect(node: Node<'_>, source: &str, path: &Path, context: &Context, facts: &mut FileSymbols) {
     // Class declarations must use their enclosing namespace, before entering their own scope.
-    if let Some(d) = declaration(node, source, path, context) {
-        facts.declarations.push(d);
+    if let Some(mut d) = declaration(node, source, path, context) {
+        if node.kind() == "assignment_expression" {
+            d.type_source = node
+                .child_by_field_name("right")
+                .and_then(|right| expression_type(right, source, context, facts, 0));
+        }
+        if node.kind() == "property_promotion_parameter" {
+            let mut parameter = d.clone();
+            parameter.kind = SymbolKind::Variable;
+            parameter.owner = None;
+            parameter.fqn = format!(
+                "{}:{}:{}",
+                path.display(),
+                context.scope.start,
+                parameter.name
+            );
+            facts.declarations.push(d);
+            facts.declarations.push(parameter);
+        } else {
+            facts.declarations.push(d);
+        }
     }
     let mut context = enter(node, source, context);
     if matches!(
@@ -336,6 +358,100 @@ fn receiver(raw: &str, byte: usize, context: &Context, facts: &FileSymbols) -> O
     }
     Some(context.qualify(raw).to_lowercase())
 }
+fn member_name(node: Node<'_>, source: &str) -> Option<String> {
+    let name = node
+        .child_by_field_name("name")
+        .or_else(|| node.named_child(1))?;
+    // Dynamic method/property names cannot be resolved statically.
+    if !matches!(name.kind(), "name" | "variable_name") {
+        return None;
+    }
+    let raw = text(name, source);
+    if node.kind().contains("call") {
+        (name.kind() == "name").then(|| raw.to_lowercase())
+    } else {
+        (name.kind() == "name" || node.kind() == "scoped_property_access_expression")
+            .then(|| raw.trim_start_matches('$').into())
+    }
+}
+fn expression_type(
+    node: Node<'_>,
+    source: &str,
+    context: &Context,
+    facts: &FileSymbols,
+    depth: usize,
+) -> Option<PhpTypeSource> {
+    if depth >= 32 {
+        return None;
+    }
+    match node.kind() {
+        "parenthesized_expression" => {
+            expression_type(node.named_child(0)?, source, context, facts, depth + 1)
+        }
+        "object_creation_expression" => {
+            let name = node.named_child(0)?;
+            matches!(
+                name.kind(),
+                "name" | "qualified_name" | "relative_name" | "relative_scope"
+            )
+            .then(|| PhpTypeSource::Class(context.qualify(text(name, source)).to_lowercase()))
+        }
+        "variable_name" if text(node, source) == "$this" => {
+            context.owner.clone().map(PhpTypeSource::Class)
+        }
+        "variable_name" => {
+            let declaration = facts
+                .declarations
+                .iter()
+                .filter(|d| {
+                    d.kind == SymbolKind::Variable
+                        && d.name == text(node, source)
+                        && d.scope.contains(&node.start_byte())
+                        && d.range.start < node.start_byte()
+                })
+                .max_by_key(|d| d.range.start)?;
+            declaration
+                .type_name
+                .clone()
+                .map(PhpTypeSource::Class)
+                .or_else(|| declaration.type_source.clone())
+        }
+        "name" | "qualified_name" | "relative_name" | "relative_scope" => Some(
+            PhpTypeSource::Class(context.qualify(text(node, source)).to_lowercase()),
+        ),
+        "member_call_expression"
+        | "member_access_expression"
+        | "nullsafe_member_call_expression"
+        | "nullsafe_member_access_expression"
+        | "scoped_call_expression"
+        | "scoped_property_access_expression" => {
+            let receiver = node
+                .child_by_field_name("object")
+                .or_else(|| node.child_by_field_name("scope"))?;
+            Some(PhpTypeSource::Member(
+                Box::new(expression_type(
+                    receiver,
+                    source,
+                    context,
+                    facts,
+                    depth + 1,
+                )?),
+                member_name(node, source)?,
+            ))
+        }
+        "function_call_expression" => {
+            let name = node.child_by_field_name("function")?;
+            matches!(name.kind(), "name" | "qualified_name" | "relative_name").then(|| {
+                let raw = text(name, source);
+                PhpTypeSource::Symbol(vec![
+                    context.qualify(raw).to_lowercase(),
+                    format!("\\{}", raw.to_lowercase()),
+                ])
+            })
+        }
+        _ => None,
+    }
+}
 fn push_reference(
     facts: &mut FileSymbols,
     names: Vec<String>,
@@ -346,24 +462,108 @@ fn push_reference(
     if names.is_empty() {
         return;
     }
-    let line_start = name
-        .start_byte()
-        .saturating_sub(name.start_position().column);
-    facts.references.push((
-        names,
-        ReferenceLocation {
-            path: path.into(),
-            byte: name.start_byte(),
-            length: name.byte_range().len(),
-            line: u32::try_from(name.start_position().row).unwrap_or(u32::MAX),
-            column: u32::try_from(name.start_position().column).unwrap_or(u32::MAX),
-            preview: source
-                .get(line_start..)
-                .and_then(|s| s.lines().next())
-                .unwrap_or("")
-                .into(),
-        },
-    ));
+    facts
+        .references
+        .push((names, reference_location(name, source, path)));
+}
+fn reference_location(name: Node<'_>, source: &str, path: &Path) -> ReferenceLocation {
+    let byte = name.start_byte();
+    let line_start = byte.saturating_sub(name.start_position().column);
+    ReferenceLocation {
+        path: path.into(),
+        byte,
+        length: name.byte_range().len(),
+        line: u32::try_from(name.start_position().row).unwrap_or(u32::MAX),
+        column: u32::try_from(name.start_position().column).unwrap_or(u32::MAX),
+        preview: source
+            .get(line_start..)
+            .and_then(|s| s.lines().next())
+            .unwrap_or("")
+            .into(),
+    }
+}
+fn location_at(byte: usize, length: usize, source: &str, path: &Path) -> ReferenceLocation {
+    let before = source.get(..byte).unwrap_or("");
+    let line_start = before.rfind('\n').map_or(0, |n| n + 1);
+    ReferenceLocation {
+        path: path.into(),
+        byte,
+        length,
+        line: u32::try_from(before.bytes().filter(|b| *b == b'\n').count()).unwrap_or(u32::MAX),
+        column: u32::try_from(byte - line_start).unwrap_or(u32::MAX),
+        preview: source
+            .get(line_start..)
+            .and_then(|s| s.lines().next())
+            .unwrap_or("")
+            .into(),
+    }
+}
+fn doc_references(
+    node: Node<'_>,
+    source: &str,
+    path: &Path,
+    context: &Context,
+    facts: &mut FileSymbols,
+) {
+    let raw = text(node, source);
+    if node.kind() != "comment" || !raw.starts_with("/**") {
+        return;
+    }
+    for (offset, _) in raw.match_indices('@') {
+        let after = &raw[offset..];
+        let Some(tag_end) = after.find(char::is_whitespace) else {
+            continue;
+        };
+        if !matches!(
+            &after[..tag_end],
+            "@var" | "@param" | "@return" | "@throws" | "@extends" | "@implements"
+        ) {
+            continue;
+        }
+        let rest = after[tag_end..].trim_start();
+        let type_start = node.start_byte() + offset + after.len() - rest.len();
+        let type_text = rest.split_whitespace().next().unwrap_or("");
+        // Named types, nullable/union/intersection and array suffixes. Descriptive
+        // prose and arbitrary comment/string occurrences never become references.
+        let mut start = None;
+        for (i, ch) in type_text
+            .char_indices()
+            .chain(std::iter::once((type_text.len(), '|')))
+        {
+            if ch.is_alphanumeric() || matches!(ch, '_' | '\\') {
+                start.get_or_insert(i);
+            } else if let Some(begin) = start.take() {
+                let name = &type_text[begin..i];
+                if !matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "array"
+                        | "bool"
+                        | "boolean"
+                        | "callable"
+                        | "class-string"
+                        | "false"
+                        | "float"
+                        | "int"
+                        | "integer"
+                        | "iterable"
+                        | "list"
+                        | "mixed"
+                        | "never"
+                        | "null"
+                        | "object"
+                        | "resource"
+                        | "string"
+                        | "true"
+                        | "void"
+                ) {
+                    facts.references.push((
+                        vec![context.qualify(name).to_lowercase()],
+                        location_at(type_start + begin, name.len(), source, path),
+                    ));
+                }
+            }
+        }
+    }
 }
 fn type_references<'a>(
     node: Node<'a>,
@@ -415,6 +615,7 @@ fn references(
     facts: &mut FileSymbols,
 ) {
     let mut context = enter(node, source, context);
+    doc_references(node, source, path, &context, facts);
     let member = matches!(
         node.kind(),
         "member_call_expression"
@@ -425,6 +626,14 @@ fn references(
             | "scoped_property_access_expression"
             | "class_constant_access_expression"
     );
+    let typed_member = if member {
+        node.child_by_field_name("object")
+            .or_else(|| node.child_by_field_name("scope"))
+            .and_then(|object| expression_type(object, source, &context, facts, 0))
+            .zip(member_name(node, source))
+    } else {
+        None
+    };
     let target = if member {
         node.child_by_field_name("name")
             .or_else(|| node.named_child(1))
@@ -447,7 +656,13 @@ fn references(
     };
     if let Some(name) = target {
         let raw = text(name, source);
-        let names = if member {
+        let names = if member && member_name(node, source).is_none() {
+            Vec::new()
+        } else if let Some((receiver, member)) = typed_member {
+            let location = reference_location(name, source, path);
+            facts.member_references.push((receiver, member, location));
+            Vec::new()
+        } else if member {
             let object = node
                 .child_by_field_name("object")
                 .or_else(|| node.child_by_field_name("scope"))
@@ -515,4 +730,48 @@ pub fn parse(path: &Path, source: &str) -> crate::Result<FileSymbols> {
     collect(tree.root_node(), source, path, &context, &mut facts);
     references(tree.root_node(), source, path, &context, &mut facts);
     Ok(facts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::symbol_index::{LanguageId, SymbolIndex};
+    #[test]
+    fn phpdoc_types_have_exact_bidirectional_locations() -> Result<(), Box<dyn std::error::Error>> {
+        let path = Path::new("docs.php");
+        let source = "<?php namespace App; use Vendor\\FlashVars as Alerts; /** unrelated Alerts prose */ class Controller { /** @var ?Alerts[] Alerts in prose */ private $alerts; /** @param Alerts|int $value\n * @return \\Vendor\\FlashVars|null\n */ function test($value) {} } namespace Vendor; class FlashVars {}";
+        let mut index = SymbolIndex::new(LanguageId::Php);
+        index.replace(path.into(), parse(path, source)?);
+        let declaration = index.declaration("\\vendor\\flashvars").ok_or("class")?;
+        assert_eq!(
+            declaration.usages_count, 4,
+            "import and three typed PHPDoc occurrences only"
+        );
+        for reference in index
+            .references_by_symbol
+            .get(&declaration.fqn)
+            .ok_or("refs")?
+        {
+            assert_eq!(
+                index.at(path, reference.byte).map(|d| d.fqn.as_str()),
+                Some("\\vendor\\flashvars")
+            );
+            assert_eq!(
+                source
+                    .get(reference.byte..reference.byte + reference.length)
+                    .map(|s| s.trim_start_matches('\\')),
+                Some(
+                    if (reference.preview.contains("@return")
+                        && !reference.preview.contains("@param"))
+                        || reference.byte < source.find(" as Alerts").ok_or("import")?
+                    {
+                        "Vendor\\FlashVars"
+                    } else {
+                        "Alerts"
+                    }
+                )
+            );
+        }
+        Ok(())
+    }
 }

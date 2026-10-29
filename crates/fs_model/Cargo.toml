@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nozhik-vcs = { path = "../vcs" }
 nozhik-event-bus.workspace = true
 notify.workspace = true
 ignore.workspace = true
@@ -14,6 +15,7 @@ ropey.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+git2.workspace = true
 tokio.workspace = true
 
 [lints]

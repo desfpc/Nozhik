@@ -2,7 +2,7 @@
 use crate::symbol_index::{FileSymbols, LanguageId, SymbolIndex};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -52,6 +52,15 @@ impl ProjectIndexer {
     /// Loads the cache and reconciles file metadata on a dedicated thread.
     #[must_use]
     pub fn start(root: PathBuf, wake: impl Fn() + Send + 'static) -> Self {
+        Self::with_languages(root, nozhik_config::languages::default_enabled(), wake)
+    }
+    /// Starts only the implemented language partitions selected in settings.
+    #[must_use]
+    pub fn with_languages(
+        root: PathBuf,
+        enabled_languages: BTreeSet<LanguageId>,
+        wake: impl Fn() + Send + 'static,
+    ) -> Self {
         let (sender, commands) = mpsc::channel();
         let (output, events) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -62,6 +71,12 @@ impl ProjectIndexer {
                 wake();
             };
             let mut worker = Worker::new(root);
+            worker.enabled_languages = enabled_languages;
+            if !worker.php_enabled() {
+                notify(worker.snapshot());
+                notify(IndexEvent::Finished);
+                return;
+            }
             match worker.load() {
                 Ok(()) => notify(worker.snapshot()),
                 Err(e) => notify(IndexEvent::Error(e.to_string())),
@@ -69,16 +84,19 @@ impl ProjectIndexer {
             if let Err(e) = worker.reconcile(&stopping, &notify) {
                 notify(IndexEvent::Error(e.to_string()));
             }
+            if stopping.load(Ordering::Relaxed) {
+                return;
+            }
             notify(worker.snapshot());
             while !stopping.load(Ordering::Relaxed) {
                 let Ok(command) = commands.recv() else {
                     break;
                 };
-                let result = worker.command(command, &stopping, &notify);
-                if let Err(e) = result {
-                    notify(IndexEvent::Error(e.to_string()));
+                match worker.command(command, &stopping, &notify) {
+                    Ok(true) => notify(worker.snapshot()),
+                    Ok(false) => {}
+                    Err(e) => notify(IndexEvent::Error(e.to_string())),
                 }
-                notify(worker.snapshot());
             }
         });
         Self {
@@ -127,8 +145,16 @@ struct Cache {
     stamps: HashMap<PathBuf, Stamp>,
     index: SymbolIndex,
 }
+#[derive(Serialize)]
+struct CacheRef<'a> {
+    version: u32,
+    root: &'a Path,
+    stamps: &'a HashMap<PathBuf, Stamp>,
+    index: &'a SymbolIndex,
+}
 struct Worker {
     root: PathBuf,
+    enabled_languages: BTreeSet<LanguageId>,
     disk: SymbolIndex,
     live: SymbolIndex,
     stamps: HashMap<PathBuf, Stamp>,
@@ -139,6 +165,7 @@ impl Worker {
     fn new(root: PathBuf) -> Self {
         Self {
             root,
+            enabled_languages: nozhik_config::languages::default_enabled(),
             disk: SymbolIndex::new(LanguageId::Php),
             live: SymbolIndex::new(LanguageId::Php),
             stamps: HashMap::new(),
@@ -146,17 +173,31 @@ impl Worker {
             parsed: 0,
         }
     }
+    fn php_enabled(&self) -> bool {
+        nozhik_config::languages::enabled(&self.enabled_languages, LanguageId::Php)
+    }
+    fn supports_path(&self, path: &Path) -> bool {
+        self.php_enabled()
+            && nozhik_config::languages::language_for_path(path) == Some(LanguageId::Php)
+    }
+    fn eligible(&self, path: &Path) -> bool {
+        path.strip_prefix(&self.root)
+            .is_ok_and(|relative| !relative.components().any(|c| excluded(c.as_os_str())))
+    }
     fn cache_dir(&self) -> PathBuf {
         self.root.join(".nozhik/cache")
     }
     fn load(&mut self) -> std::io::Result<()> {
+        if !self.php_enabled() {
+            return Ok(());
+        }
         let file = match std::fs::File::open(self.cache_dir().join("index_php.json")) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
         let cache: Cache = serde_json::from_reader(std::io::BufReader::new(file))?;
-        if cache.version != 2 {
+        if cache.version != 3 {
             return Ok(());
         }
         if cache.root != self.root || cache.index.language != LanguageId::Php {
@@ -174,11 +215,11 @@ impl Worker {
         let mut file = tempfile::NamedTempFile::new_in(self.cache_dir())?;
         serde_json::to_writer(
             std::io::BufWriter::new(file.as_file_mut()),
-            &Cache {
-                version: 2,
-                root: self.root.clone(),
-                stamps: self.stamps.clone(),
-                index: self.disk.clone(),
+            &CacheRef {
+                version: 3,
+                root: &self.root,
+                stamps: &self.stamps,
+                index: &self.disk,
             },
         )?;
         file.persist(self.cache_dir().join("index_php.json"))
@@ -194,61 +235,103 @@ impl Worker {
                 .collect(),
         )
     }
-    fn update(&mut self, path: &Path) -> std::io::Result<()> {
-        if !path.is_file() {
-            self.disk.remove(path);
-            self.stamps.remove(path);
-            if !self.overlays.contains_key(path) {
-                self.live.remove(path);
-            }
-            return Ok(());
+    fn remove(&mut self, path: &Path) -> bool {
+        if self.stamps.remove(path).is_none() {
+            return false;
         }
-        if !crate::lsp::manager::is_php(path) {
-            return Ok(());
+        self.disk.remove(path);
+        if !self.overlays.contains_key(path) {
+            self.live.remove(path);
+        }
+        true
+    }
+    fn read_update(&mut self, path: &Path) -> std::io::Result<Option<(FileSymbols, Stamp)>> {
+        if !self.supports_path(path) {
+            return Ok(None);
         }
         let before = stamp(path)?;
         if self.stamps.get(path) == Some(&before) {
-            return Ok(());
+            return Ok(None);
         }
         let source = std::fs::read_to_string(path)?;
         let facts = crate::php_symbols::parse(path, &source).map_err(std::io::Error::other)?;
-        // A concurrent write must be reconciled again rather than stamped as parsed.
-        if stamp(path)? != before {
-            self.stamps.remove(path);
-            return self.update(path);
-        }
         self.parsed += 1;
-        self.disk.replace(path.into(), facts.clone());
-        if !self.overlays.contains_key(path) {
-            self.live.replace(path.into(), facts);
+        if stamp(path)? != before {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "File changed while indexing; retry on the next watcher update",
+            ));
         }
-        self.stamps.insert(path.into(), before);
-        Ok(())
+        Ok(Some((facts, before)))
     }
-    fn paths(root: &Path) -> Vec<PathBuf> {
-        ignore::WalkBuilder::new(root)
-            .hidden(false)
-            .filter_entry(|entry| {
-                !matches!(
-                    entry.file_name().to_str(),
-                    Some(".git" | ".nozhik" | "target" | "vendor" | "node_modules")
-                )
+    fn apply_updates(&mut self, updates: Vec<(PathBuf, FileSymbols, Stamp)>) -> bool {
+        if updates.is_empty() {
+            return false;
+        }
+        let live = updates
+            .iter()
+            .filter(|(p, _, _)| !self.overlays.contains_key(p))
+            .map(|(p, facts, _)| (p.clone(), facts.clone()))
+            .collect();
+        let disk = updates
+            .into_iter()
+            .map(|(path, facts, stamp)| {
+                self.stamps.insert(path.clone(), stamp);
+                (path, facts)
             })
-            .build()
-            .filter_map(Result::ok)
-            .filter(|e| {
-                e.file_type().is_some_and(|t| t.is_file()) && crate::lsp::manager::is_php(e.path())
-            })
-            .map(ignore::DirEntry::into_path)
-            .collect()
+            .collect();
+        self.disk.replace_files(disk);
+        self.live.replace_files(live);
+        true
+    }
+    fn update(&mut self, path: &Path) -> std::io::Result<bool> {
+        if !self.supports_path(path) {
+            return Ok(false);
+        }
+        if !path.is_file() {
+            return Ok(self.remove(path));
+        }
+        let Some((facts, stamp)) = self.read_update(path)? else {
+            return Ok(false);
+        };
+        Ok(self.apply_updates(vec![(path.into(), facts, stamp)]))
+    }
+    fn paths(&self, root: &Path, stop: &AtomicBool) -> std::io::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        // Git membership is a display concern. Every supported source participates,
+        // including ignored dependencies; only application/Git internals are skipped.
+        let mut walk = ignore::WalkBuilder::new(root);
+        walk.hidden(false)
+            .follow_links(false)
+            .parents(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .filter_entry(|entry| !excluded(entry.file_name()) || entry.depth() == 0);
+        for entry in walk.build().take_while(|_| !stop.load(Ordering::Relaxed)) {
+            let entry = entry.map_err(std::io::Error::other)?;
+            if entry.file_type().is_some_and(|t| t.is_file()) && self.supports_path(entry.path()) {
+                paths.push(entry.into_path());
+            }
+        }
+        paths.sort();
+        Ok(paths)
     }
     fn reconcile(
         &mut self,
         stop: &AtomicBool,
         notify: &impl Fn(IndexEvent),
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<bool> {
+        if !self.php_enabled() {
+            notify(IndexEvent::Finished);
+            return Ok(false);
+        }
         notify(IndexEvent::Progress(0, 0));
-        let paths = Self::paths(&self.root);
+        let paths = self.paths(&self.root, stop)?;
+        if stop.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
         let known: HashSet<_> = paths.iter().cloned().collect();
         let removed: Vec<_> = self
             .stamps
@@ -256,114 +339,476 @@ impl Worker {
             .filter(|p| !known.contains(*p))
             .cloned()
             .collect();
+        let mut changed = false;
         for path in removed {
-            self.update(&path)?;
+            changed |= self.remove(&path);
         }
+        let mut updates = Vec::new();
         for (i, path) in paths.iter().enumerate() {
             if stop.load(Ordering::Relaxed) {
-                return Ok(());
+                return Ok(false);
             }
-            if let Err(e) = self.update(path) {
-                notify(IndexEvent::Error(format!("{}: {e}", path.display())));
+            match self.read_update(path) {
+                Ok(Some((facts, stamp))) => updates.push((path.clone(), facts, stamp)),
+                Ok(None) => {}
+                Err(e) => notify(IndexEvent::Error(format!("{}: {e}", path.display()))),
             }
             if i % 20 == 0 {
                 notify(IndexEvent::Progress(i, paths.len()));
             }
         }
-        self.persist()?;
+        if stop.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        changed |= self.apply_updates(updates);
+        if stop.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        if changed {
+            self.persist()?;
+        }
         notify(IndexEvent::Progress(paths.len(), paths.len()));
         notify(IndexEvent::Finished);
-        Ok(())
+        Ok(changed)
+    }
+    fn invalidate(
+        &mut self,
+        stop: &AtomicBool,
+        notify: &impl Fn(IndexEvent),
+    ) -> std::io::Result<bool> {
+        match std::fs::remove_dir_all(self.cache_dir()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        self.disk = SymbolIndex::new(LanguageId::Php);
+        self.live = self.disk.clone();
+        self.stamps.clear();
+        // Revision gates must only advertise facts present in this snapshot.
+        self.live.replace_files(
+            self.overlays
+                .iter()
+                .map(|(path, (_, facts))| (path.clone(), facts.clone()))
+                .collect(),
+        );
+        notify(self.snapshot());
+        self.reconcile(stop, notify)?;
+        Ok(true)
     }
     fn command(
         &mut self,
         command: IndexCommand,
         stop: &AtomicBool,
         notify: &impl Fn(IndexEvent),
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<bool> {
+        if !self.php_enabled() {
+            return Ok(false);
+        }
         match command {
             IndexCommand::Overlay {
                 path,
                 revision,
                 text,
             } => {
-                if !path.starts_with(&self.root) {
-                    return Ok(());
+                if !self.eligible(&path)
+                    || !self.supports_path(&path)
+                    || self
+                        .overlays
+                        .get(&path)
+                        .is_some_and(|(r, _)| *r == revision)
+                {
+                    return Ok(false);
                 }
-                if self.overlays.get(&path).is_none_or(|(r, _)| *r != revision) {
-                    let facts = crate::php_symbols::parse(&path, &text.to_string())
-                        .map_err(std::io::Error::other)?;
-                    self.parsed += 1;
-                    self.live.replace(path.clone(), facts.clone());
-                    self.overlays.insert(path, (revision, facts));
-                }
+                let facts = crate::php_symbols::parse(&path, &text.to_string())
+                    .map_err(std::io::Error::other)?;
+                self.parsed += 1;
+                self.live.replace(path.clone(), facts.clone());
+                self.overlays.insert(path, (revision, facts));
+                Ok(true)
             }
             IndexCommand::Close(path) => {
-                self.overlays.remove(&path);
+                if self.overlays.remove(&path).is_none() {
+                    return Ok(false);
+                }
                 self.update(&path)?;
-                self.live.replace(
-                    path.clone(),
-                    self.disk.file_symbols(&path).cloned().unwrap_or_default(),
-                );
+                if let Some(facts) = self.disk.file_symbols(&path).cloned() {
+                    self.live.replace(path, facts);
+                } else {
+                    self.live.remove(&path);
+                }
+                Ok(true)
             }
             IndexCommand::Changed(path) => {
-                if !path.starts_with(&self.root)
-                    || path.strip_prefix(&self.root).is_ok_and(|p| {
-                        p.components().any(|c| {
-                            matches!(
-                                c.as_os_str().to_str(),
-                                Some(".nozhik" | ".git" | "target" | "vendor" | "node_modules")
-                            )
-                        })
-                    })
-                {
-                    return Ok(());
+                if !self.eligible(&path) {
+                    return Ok(false);
                 }
+                let mut changed = false;
                 if path.is_dir() {
-                    for file in Self::paths(&path) {
+                    let mut updates = Vec::new();
+                    for file in self.paths(&path, stop)? {
                         if stop.load(Ordering::Relaxed) {
-                            return Ok(());
+                            return Ok(false);
                         }
-                        self.update(&file)?;
+                        if let Some((facts, stamp)) = self.read_update(&file)? {
+                            updates.push((file, facts, stamp));
+                        }
                     }
+                    changed |= self.apply_updates(updates);
                 } else {
-                    let removed: Vec<_> = self
-                        .stamps
-                        .keys()
-                        .filter(|p| p.starts_with(&path))
-                        .cloned()
-                        .collect();
-                    for file in removed {
-                        self.update(&file)?;
+                    if !self.supports_path(&path) && path.is_file() {
+                        return Ok(false);
                     }
-                    self.update(&path)?;
+                    // Only a removed directory can invalidate descendants. Ordinary file
+                    // saves, including unsupported types, must not scan every indexed path.
+                    let removed: Vec<_> = if path.exists() {
+                        Vec::new()
+                    } else {
+                        self.stamps
+                            .keys()
+                            .filter(|p| *p != &path && p.starts_with(&path))
+                            .cloned()
+                            .collect()
+                    };
+                    for file in removed {
+                        changed |= self.remove(&file);
+                    }
+                    changed |= self.update(&path)?;
                 }
-                self.persist()?;
+                if changed {
+                    self.persist()?;
+                }
+                Ok(changed)
             }
-            IndexCommand::Reconcile => self.reconcile(stop, notify)?,
-            IndexCommand::Invalidate => {
-                match std::fs::remove_dir_all(self.cache_dir()) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e),
-                }
-                self.disk = SymbolIndex::new(LanguageId::Php);
-                self.live = self.disk.clone();
-                self.stamps.clear();
-                notify(self.snapshot());
-                self.reconcile(stop, notify)?;
-                for (path, (_, facts)) in &self.overlays {
-                    self.live.replace(path.clone(), facts.clone());
-                }
-            }
+            IndexCommand::Reconcile => self.reconcile(stop, notify),
+            IndexCommand::Invalidate => self.invalidate(stop, notify),
         }
-        Ok(())
     }
+}
+fn excluded(name: &std::ffi::OsStr) -> bool {
+    matches!(name.to_str(), Some(".git" | ".nozhik"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises cold/warm cache, invalidation, overlays and incremental cross-file type relinking together"
+    )]
+    fn ignored_vendor_promotion_typed_chains_and_invalidation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("vendor/local/framework"))?;
+        std::fs::create_dir_all(root.join("vendor/unused"))?;
+        std::fs::write(root.join(".gitignore"), "vendor/\n")?;
+        std::fs::write(
+            root.join("composer.json"),
+            r#"{"autoload":{"psr-4":{"Framework\\":"vendor/local/framework/"}}}"#,
+        )?;
+        let base = root.join("vendor/local/framework/Base.php");
+        std::fs::write(
+            &base,
+            "<?php namespace Framework; class Settings { public function read() {} } class Base { protected Settings $settings; public function inherited() {} public function factory(): Settings {} }",
+        )?;
+        std::fs::write(root.join("vendor/unused/Skip.php"), "<?php class Skip {}")?;
+        std::fs::create_dir_all(root.join(".nozhik"))?;
+        std::fs::write(
+            root.join(".nozhik/internal.php"),
+            "<?php class InternalCache {}",
+        )?;
+        std::fs::write(root.join("vendor/unused/data.json"), [0xff, 0xfe])?;
+        let outside = tempfile::tempdir()?;
+        std::fs::write(outside.path().join("escape.php"), "<?php class Outside {}")?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), root.join("linked-outside"))?;
+
+        let path = root.join("Service.php");
+        let source = "<?php use Framework\\Base; use Framework\\Settings; class Service extends Base { public function __construct(private readonly Settings $config) { $config->read(); $this->config->read(); } public function work() { $this->inherited(); $this->settings->read(); $value = $this->factory(); $value->read(); (new Settings())->read(); } }";
+        std::fs::write(&path, source)?;
+        let stop = AtomicBool::new(false);
+        let mut worker = Worker::new(root.into());
+        worker.reconcile(&stop, &|_| {})?;
+        assert_eq!(worker.parsed, 3);
+        assert!(worker.live.declaration("\\skip").is_some());
+        assert!(worker.live.declaration("\\internalcache").is_none());
+        assert!(worker.live.declaration("\\outside").is_none());
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\framework\\settings::read")
+                .map(|d| d.usages_count),
+            Some(5)
+        );
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\framework\\base::inherited")
+                .map(|d| d.usages_count),
+            Some(1)
+        );
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\service::config")
+                .map(|d| d.usages_count),
+            Some(1)
+        );
+        for (offset, _) in source.match_indices("read()") {
+            assert_eq!(
+                worker.live.at(&path, offset).map(|d| d.fqn.as_str()),
+                Some("\\framework\\settings::read")
+            );
+        }
+        worker.command(
+            IndexCommand::Overlay {
+                path: path.clone(),
+                revision: 7,
+                text: ropey::Rope::from_str(source),
+            },
+            &stop,
+            &|_| {},
+        )?;
+        worker.command(IndexCommand::Invalidate, &stop, &|event| {
+            if let IndexEvent::Snapshot(index, revisions) = event {
+                assert_eq!(revisions.get(&path), Some(&7));
+                assert!(
+                    index.declaration("\\service::work").is_some(),
+                    "revision gate never points at missing overlay facts"
+                );
+            }
+        })?;
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\framework\\settings::read")
+                .map(|d| d.usages_count),
+            Some(5)
+        );
+        let mut warm = Worker::new(root.into());
+        warm.load()?;
+        warm.reconcile(&stop, &|_| {})?;
+        assert_eq!(warm.parsed, 0);
+        assert_eq!(
+            warm.live
+                .at(&path, source.rfind("read()").ok_or("call")?)
+                .map(|d| d.fqn.as_str()),
+            Some("\\framework\\settings::read")
+        );
+        // The caller remains parsed once when a dependency's declared return type changes.
+        std::fs::write(
+            &base,
+            "<?php namespace Framework; class Other { public function read() {} } class Settings { public function read() {} } class Base { protected Other $settings; public function inherited() {} public function factory(): Other {} }",
+        )?;
+        let parsed = warm.parsed;
+        warm.command(IndexCommand::Changed(base), &stop, &|_| {})?;
+        assert_eq!(warm.parsed, parsed + 1);
+        assert_eq!(
+            warm.live
+                .declaration("\\framework\\other::read")
+                .map(|d| d.usages_count),
+            Some(2)
+        );
+        assert_eq!(
+            warm.live
+                .declaration("\\framework\\settings::read")
+                .map(|d| d.usages_count),
+            Some(3)
+        );
+        // No Composer configuration is required: even ignored dependencies remain indexed.
+        std::fs::write(root.join("composer.json"), "{broken")?;
+        assert!(!warm.command(
+            IndexCommand::Changed(root.join("composer.json")),
+            &stop,
+            &|_| {}
+        )?);
+        assert!(warm.live.declaration("\\framework\\base").is_some());
+        Ok(())
+    }
+    #[test]
+    fn mixed_files_disabled_languages_and_noop_cache_updates()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        for name in ["a.php", "b.PHTML", "c.PHP"] {
+            std::fs::write(
+                dir.path().join(name),
+                format!("<?php class {} {{}}", name.replace('.', "_")),
+            )?;
+        }
+        for name in [
+            "a.html",
+            "a.js",
+            "a.yaml",
+            "a.go",
+            "a.png",
+            "a.txt",
+            "a.php.bak",
+        ] {
+            std::fs::write(dir.path().join(name), [0xff, 0xfe, 0])?;
+        }
+        std::fs::create_dir(dir.path().join("excluded"))?;
+        std::fs::write(
+            dir.path().join("excluded/ignored.php"),
+            "<?php class Ignored {}",
+        )?;
+        std::fs::write(dir.path().join(".gitignore"), "excluded/\n")?;
+        let mut worker = Worker::new(dir.path().into());
+        let stop = AtomicBool::new(false);
+        let totals = std::cell::RefCell::new(Vec::new());
+        worker.reconcile(&stop, &|e| {
+            if let IndexEvent::Progress(_, total) = e {
+                totals.borrow_mut().push(total);
+            }
+        })?;
+        assert_eq!(
+            worker.parsed, 4,
+            "only implemented PHP extensions are opened/parsed"
+        );
+        assert_eq!(worker.stamps.len(), 4);
+        assert!(
+            totals
+                .borrow()
+                .iter()
+                .all(|total| *total == 0 || *total == 4)
+        );
+        let cache_path = worker.cache_dir().join("index_php.json");
+        let contents = std::fs::read(&cache_path)?;
+        let modified = cache_path.metadata()?.modified()?;
+        for path in ["a.html", "a.php", ".nozhik/cache/index_php.json"] {
+            assert!(!worker.command(
+                IndexCommand::Changed(dir.path().join(path)),
+                &stop,
+                &|_| {}
+            )?);
+        }
+        assert!(!worker.command(
+            IndexCommand::Overlay {
+                path: dir.path().join("a.html"),
+                revision: 1,
+                text: ropey::Rope::from_str("<?php class Wrong {}")
+            },
+            &stop,
+            &|_| {}
+        )?);
+        assert!(!worker.reconcile(&stop, &|_| {})?);
+        assert_eq!(
+            cache_path.metadata()?.modified()?,
+            modified,
+            "no-op events/startup must not rewrite the cache"
+        );
+        assert_eq!(worker.parsed, 4);
+        assert_eq!(std::fs::read(&cache_path)?, contents);
+        let mut restored = Worker::new(dir.path().into());
+        restored.load()?;
+        assert!(!restored.reconcile(&stop, &|_| {})?);
+        assert_eq!(restored.parsed, 0);
+        assert!(
+            restored.live.declaration("\\a_php").is_some(),
+            "derived lookup restored without parsing"
+        );
+        Ok(())
+    }
+    #[test]
+    fn disabled_languages_never_read_sources_or_cache() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut worker = Worker::new(dir.path().into());
+        worker.enabled_languages.clear();
+        std::fs::create_dir_all(worker.cache_dir())?;
+        let cache_path = worker.cache_dir().join("index_php.json");
+        std::fs::write(&cache_path, "invalid cache that must not be read")?;
+        std::fs::write(dir.path().join("bad.php"), [0xff, 0xfe])?;
+        worker.load()?;
+        let stop = AtomicBool::new(false);
+        assert!(!worker.reconcile(&stop, &|_| {})?);
+        assert!(!worker.command(
+            IndexCommand::Changed(dir.path().join("bad.php")),
+            &stop,
+            &|_| {}
+        )?);
+        assert!(!worker.command(
+            IndexCommand::Overlay {
+                path: dir.path().join("bad.php"),
+                revision: 1,
+                text: ropey::Rope::from_str("<?php class Wrong {}")
+            },
+            &stop,
+            &|_| {}
+        )?);
+        worker.enabled_languages.insert(LanguageId::Go);
+        assert!(
+            !worker.reconcile(&stop, &|_| {})?,
+            "unimplemented Go cannot activate the PHP worker"
+        );
+        assert_eq!(worker.parsed, 0);
+        assert_eq!(worker.disk.declarations_by_file.len(), 0);
+        assert_eq!(
+            std::fs::read_to_string(cache_path)?,
+            "invalid cache that must not be read"
+        );
+        Ok(())
+    }
+    #[test]
+    fn initial_batch_links_large_mixed_project_and_keeps_single_file_edits_local()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        for i in 0..500 {
+            std::fs::write(
+                dir.path().join(format!("class{i}.php")),
+                format!(
+                    "<?php class C{i} extends Base {{ public function test() {{ $this->run(); }} }}"
+                ),
+            )?;
+            std::fs::write(
+                dir.path().join(format!("data{i}.json")),
+                "{ malformed unsupported data }",
+            )?;
+        }
+        std::fs::write(
+            dir.path().join("base.php"),
+            "<?php class Base { public function run() {} }",
+        )?;
+        let mut worker = Worker::new(dir.path().into());
+        let stop = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        worker.reconcile(&stop, &|_| {})?;
+        eprintln!(
+            "501 PHP + 500 JSON entries indexed in {:?}",
+            started.elapsed()
+        );
+        assert_eq!(worker.parsed, 501);
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\base::run")
+                .map(|d| d.usages_count),
+            Some(500)
+        );
+        assert_eq!(
+            worker.live.declaration("\\base").map(|d| d.usages_count),
+            Some(500)
+        );
+        let path = dir.path().join("class1.php");
+        std::fs::write(
+            &path,
+            "<?php class C1 extends Base { public function test() {} }",
+        )?;
+        worker.command(IndexCommand::Changed(path), &stop, &|_| {})?;
+        assert_eq!(worker.parsed, 502);
+        assert_eq!(
+            worker
+                .live
+                .declaration("\\base::run")
+                .map(|d| d.usages_count),
+            Some(499)
+        );
+        let roundtrip: SymbolIndex = serde_json::from_str(&serde_json::to_string(&worker.live)?)?;
+        assert_eq!(
+            roundtrip.declaration("\\base::run").map(|d| d.usages_count),
+            Some(499)
+        );
+        Ok(())
+    }
     #[test]
     fn fifty_files_differential_cache_and_overlay() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
@@ -694,7 +1139,7 @@ mod tests {
         let cache_path = restored.cache_dir().join("index_php.json");
         let mut cache: serde_json::Value =
             serde_json::from_reader(std::fs::File::open(&cache_path)?)?;
-        cache["version"] = serde_json::json!(1);
+        cache["version"] = serde_json::json!(2);
         serde_json::to_writer(std::fs::File::create(cache_path)?, &cache)?;
         let mut upgraded = Worker::new(dir.path().into());
         upgraded.load()?;

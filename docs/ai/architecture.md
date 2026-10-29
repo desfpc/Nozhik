@@ -8,7 +8,7 @@
 | nozhik-event-bus | Системные события и транспорт pub/sub | core |
 | nozhik-buffer | Rope, координаты, курсоры, история, поиск | core, event_bus |
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
-| nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus |
+| nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
@@ -788,7 +788,7 @@ Disk facts/stamps and unsaved overlay facts are separate: cache writes never inc
 unsaved text. Startup loads versioned, root-bound index_php.json, then reconciles
 nanosecond mtime + length. An atomic same-directory tempfile replaces the cache.
 ignore and tempfile are now explicit language_support dependencies. Traversal
-respects ignore files and excludes .git/.nozhik/target/vendor/node_modules.
+includes ignored supported sources and skips only .git/.nozhik internals (policy clarified 2026-10-29).
 Watcher paths and successful save replies enqueue Changed; Lagged reconciles
 metadata without reparsing unchanged files. Index lifetime follows project root;
 buffer overlays outside that root are rejected. Drop cancels traversal/work.
@@ -839,3 +839,71 @@ Esc/close; tab activation rearms it. Reference clicks still emit LocalFile targe
 The end-to-end egui regression uses actual pointer press/release, background file
 opening, caret bytes and painted/visible target rows to cycle through inherited
 methods, classes/aliases and properties in both directions, without editing buffers.
+
+## Language policy and selective/batched indexing (2026-10-29)
+
+config::languages owns LanguageId, language/extension registrations and availability.
+Only PHP/PHTML is implemented. JS/TS, HTML, YAML and Go have unavailable registrations;
+they cannot accidentally activate a parser. SymbolIndex re-exports the shared ID;
+serde aliases preserve existing Php/JavaScript/Go cache values. Config.enabled_languages
+is a typed set, defaults to compiled available languages, accepts an explicit empty
+set, and persists through the existing TOML/JSON settings worker. Unknown IDs remain
+syntax errors. Settings → Languages has immediate checkboxes and unavailable markers.
+New backends register their identity/extensions here when their service is wired in.
+
+LanguageUi compares root and language policy, drops old workers/views/tokens/usages
+on policy changes and starts only selected available backends. Disabling PHP prevents
+index traversal/cache reads, LSP and catalog requests, removes semantic editor state
+and language formatting/style behavior. Pending old catalog replies are ignored.
+The cache is retained. Re-enable reloads cached disk facts and overlays open buffers;
+unchanged disk snapshots are not serialized again. All-off is plain text; AI and
+filename navigation are separate features. Filesystem FileIndex still inventories
+all non-internal names for Go to File, including ignored files, not source contents.
+
+ProjectIndexer applies the same registry filter to discovery, Changed and Overlay,
+before reading source text. Directory entries must still be enumerated for discovery;
+only enabled supported source paths contribute to progress totals, stamps and facts.
+Only .git/.nozhik internals are excluded; ignore rules affect tree coloring, not semantic discovery.
+Disabled worker entry points do not read even an invalid cache. Commands report actual
+changes so unsupported files, unchanged mtimes and unrelated cache notifications do
+not serialize the project or clone/send another full snapshot. Reconciliation batches
+changed parsed facts instead of linking after every source; partial-file updates remain
+differential. Disk serialization borrows index/stamps rather than cloning them.
+
+SymbolIndex::replace_files installs all batch declarations before linking candidate
+references and hierarchy dependencies. A derived FQN→(path,position) hash lookup
+replaces repeated whole-declaration scans; deserialization reconstructs it automatically
+without parsing and does not persist it. Existing cache schema 2 remains compatible.
+Cache restoration and no-op startup leave the cache's mtime unchanged.
+
+
+### Ignored sources and PHP cross-file receiver linking (2026-10-29)
+
+Schema 3 rebuilds older extraction facts once. All supported enabled source files
+inside the project participate in discovery, including vendor/node_modules/target
+and ignored paths. Ignore policy controls display only. Traversal disables .ignore,
+.gitignore, parent/global/exclude filters, never follows symlinks, skips only
+.git/.nozhik internals, and reports traversal errors instead of silently dropping
+files. No Composer configuration or Git membership is required to index a source.
+
+FileIndex likewise includes ignored names without parsing their contents. Tree
+coloring uses vcs::project_paths::ignored_paths: an isolated read-only Repository/
+Index belongs to the calling filesystem worker, and only owned path sets are returned.
+Tracked files and tracked directory prefixes override ignores, using index binary
+prefix lookup rather than scanning all tracked files per displayed row. Native Git
+ignore evaluation decides remaining repository paths; non-repositories retain
+ignore-matcher fallback. fs_model now depends on vcs for this read-only classification;
+vcs has no fs_model/UI dependency. Tree load/search/index never mutate the Git index.
+
+Promoted constructor parameters produce both a member and a local parameter.
+PHP extraction retains bounded AST-free PhpTypeSource expressions for assignments
+and member receivers. Linking resolves typed inherited properties, declared return
+types, call results, static factories and parenthesized object construction using
+project declarations. Missing receiver/member/ancestor dependencies are retained
+for differential relinking; a dependency edit never reparses its callers. at()
+uses actual resolved outgoing edges, matching reverse usages exactly. PHPDoc typed
+tags contribute exact UTF-8 references; ordinary comments/descriptive text do not.
+
+Invalidate seeds the live index with retained overlays before emitting their revision
+gates. Reconciliation installs disk facts without temporarily advertising valid
+buffer revisions with missing facts. Unsaved contents remain excluded from disk.

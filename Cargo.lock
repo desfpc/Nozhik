@@ -3149,9 +3149,11 @@ name = "nozhik-fs-model"
 version = "0.1.0"
 dependencies = [
  "fuzzy-matcher",
+ "git2",
  "ignore",
  "notify",
  "nozhik-event-bus",
+ "nozhik-vcs",
  "ropey",
  "tempfile",
  "thiserror 2.0.21",

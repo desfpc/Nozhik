@@ -1,4 +1,4 @@
-//! Flat ignore-aware file index and deterministic fuzzy ranking.
+//! Flat file index and deterministic fuzzy ranking.
 use crate::{FsError, tree::walker};
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ pub struct FileIndex {
     files: Vec<FileMatch>,
 }
 impl FileIndex {
-    /// Scans file paths, respecting the tree's ignore policy.
+    /// Scans file paths, including ignored files except Git/application internals.
     /// # Errors
     /// Returns traversal errors instead of silently omitting inaccessible paths.
     pub fn scan(root: &Path) -> Result<Self, FsError> {
@@ -89,7 +89,7 @@ mod tests {
         std::fs::write(dir.path().join("src/.gitignore"), "skip.rs")?;
         let index = FileIndex::scan(dir.path())?;
         assert_eq!(index.search("s\\mnrs", 5)[0].relative, "src/main.rs");
-        assert!(index.search("skip", 10).is_empty());
+        assert_eq!(index.search("skip", 10).len(), 1);
         assert!(index.search("zzz", 10).is_empty());
         assert_eq!(index.search("", 1).len(), 1);
         Ok(())

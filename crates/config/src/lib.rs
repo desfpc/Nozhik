@@ -1,6 +1,7 @@
 //! Validated TOML/JSON settings with explicit persistence and change notifications.
 
 pub mod code_style;
+pub mod languages;
 
 use std::{
     fs,
@@ -30,6 +31,8 @@ pub struct Config {
     pub editor_font: String,
     /// Global PHP major.minor language level for offline completion.
     pub php_language_level: String,
+    /// Enabled language services/indexers. Empty means plain-text editing only.
+    pub enabled_languages: std::collections::BTreeSet<languages::LanguageId>,
     /// Enable local Ollama ghost completions.
     pub ai_enabled: bool,
     /// Ollama model name; downloads are always explicit.
@@ -48,6 +51,7 @@ impl Default for Config {
             theme: "dark".into(),
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
+            enabled_languages: languages::default_enabled(),
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 350,
@@ -269,10 +273,10 @@ impl ConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigManager};
+    use super::{Config, ConfigManager, languages};
     use nozhik_core::ConfigKey;
     use nozhik_event_bus::{Event, EventBus};
-    use std::{error::Error, fs};
+    use std::{error::Error, fs, path::Path};
 
     #[test]
     fn defaults_and_round_trips() -> Result<(), Box<dyn Error>> {
@@ -285,6 +289,7 @@ mod tests {
             manager.save()?;
             let changed = Config {
                 tab_width: 2,
+                enabled_languages: std::collections::BTreeSet::new(),
                 php_language_level: "8.2".into(),
                 ai_enabled: false,
                 ai_model: "custom:7b".into(),
@@ -299,6 +304,18 @@ mod tests {
         let partial: Config = toml::from_str("tab_width = 2")?;
         assert_eq!(partial.font_size, Config::default().font_size);
         assert_eq!(partial.php_language_level, "8.5");
+        assert_eq!(partial.enabled_languages, languages::default_enabled());
+        let disabled: Config = toml::from_str("enabled_languages = []")?;
+        assert!(disabled.enabled_languages.is_empty());
+        assert!(
+            serde_json::from_str::<Config>(r#"{"enabled_languages":["unknown_language"]}"#)
+                .is_err()
+        );
+        let go_only: Config = toml::from_str("enabled_languages = ['go']")?;
+        assert!(!languages::enabled_for_path(
+            &go_only.enabled_languages,
+            Path::new("test.php")
+        ));
         let partial_json: Config = serde_json::from_str(r#"{"tab_width":2}"#)?;
         assert_eq!(partial_json, partial);
         Ok(())

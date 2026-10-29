@@ -41,7 +41,7 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   (поиск по чанкам), thiserror. Без UI, прямого tokio и файлового I/O.
 - config: core, event_bus, serde, toml, serde_json, directories, tempfile,
   thiserror. Без UI.
-- fs_model: event_bus, notify, ignore, fuzzy-matcher, ropey, tempfile, thiserror.
+- fs_model: event_bus, vcs (read-only ignore/membership snapshots), notify, ignore, fuzzy-matcher, ropey, tempfile, thiserror.
   Без UI; синхронные операции вызываются выделенным worker.
 - vcs: git2 (vendored libgit2/OpenSSL), thiserror. Без UI/runtime/event_bus;
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
@@ -130,3 +130,20 @@ files. Retain parsed reference candidates for relinking; update usage counters
 only for affected identities. Keep unsaved overlay facts out of persistent caches.
 UI receives immutable index snapshots with source revision gates; symbol/cache I/O
 and Tree-sitter extraction belong exclusively to the index worker.
+
+Language IDs, extensions, availability and enabled-language policy belong to
+config::languages; do not add independent extension allowlists to editor/worker
+paths. A backend becomes available only after its actual service/extractor is wired.
+Disabled languages must not start parsers/LSP/catalog loading or scan/read caches.
+Keep filename search independent from semantic indexing. Batch startup linking and
+skip snapshot/cache writes for no-op and unsupported-file notifications.
+
+Git ignore rules affect tree coloring only. Semantic source discovery and filename
+search include ignored/vendor files; semantic contents still require an enabled,
+implemented language. Skip only .git/.nozhik internals and do not follow symlinks.
+Tracked files and directories containing them cannot be painted ignored just because
+an ancestor matches .gitignore. Filesystem workers may call vcs read-only membership
+classification; repository/index handles must stay local to that call and never write.
+Keep deferred receiver type facts bounded and retain their dependencies for relinking;
+navigation and reverse usages must share resolved edges. PHPDoc type tags are
+references; prose is not.

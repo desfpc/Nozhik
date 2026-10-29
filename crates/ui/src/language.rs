@@ -61,6 +61,7 @@ pub struct LanguageUi {
     pub(crate) indexing: Option<(usize, usize)>,
     pub(crate) usages: Option<crate::usages_popup::UsagesPopup>,
     root: Option<PathBuf>,
+    enabled_languages: Option<std::collections::BTreeSet<nozhik_config::languages::LanguageId>>,
     service: Option<LanguageService>,
     sent: HashMap<Url, u64>,
     pub views: HashMap<PathBuf, EditorLanguage>,
@@ -88,6 +89,13 @@ impl crate::NozhikUi {
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("");
+        if !nozhik_config::languages::enabled_for_path(
+            &self.config.enabled_languages,
+            &document.path,
+        ) {
+            self.status = "Language support is disabled or unavailable for this file".into();
+            return;
+        }
         let Some(style) = self
             .settings_dialog
             .styles
@@ -151,23 +159,40 @@ impl crate::NozhikUi {
                     .first()
                     .and_then(|d| d.path.parent().map(std::path::Path::to_path_buf))
             });
-        if root != self.language.root {
+        let policy_changed = self
+            .language
+            .enabled_languages
+            .as_ref()
+            .is_some_and(|previous| previous != &self.config.enabled_languages);
+        let php_enabled = nozhik_config::languages::enabled(
+            &self.config.enabled_languages,
+            nozhik_config::languages::LanguageId::Php,
+        );
+        if root != self.language.root || policy_changed {
             self.language = LanguageUi {
                 root: root.clone(),
+                enabled_languages: Some(self.config.enabled_languages.clone()),
                 ..LanguageUi::default()
             };
-            if let Some(root) = root {
+            if let Some(root) = root
+                && php_enabled
+            {
                 let ctx = ctx.clone();
                 let index_ctx = ctx.clone();
                 self.language.indexer = Some(
-                    nozhik_language_support::project_indexer::ProjectIndexer::start(
+                    nozhik_language_support::project_indexer::ProjectIndexer::with_languages(
                         root.clone(),
+                        self.config.enabled_languages.clone(),
                         move || index_ctx.request_repaint(),
                     ),
                 );
                 self.language.service =
                     Some(LanguageService::start(root, move || ctx.request_repaint()));
             }
+        }
+        self.language.enabled_languages = Some(self.config.enabled_languages.clone());
+        if !php_enabled {
+            return;
         }
         self.project_index_tick();
         let Some(service) = &self.language.service else {
@@ -177,7 +202,10 @@ impl crate::NozhikUi {
         for document in &self.documents {
             if !document.open
                 || document.binary
-                || !nozhik_language_support::lsp::manager::is_php(&document.path)
+                || !nozhik_config::languages::enabled_for_path(
+                    &self.config.enabled_languages,
+                    &document.path,
+                )
             {
                 continue;
             }
@@ -645,7 +673,16 @@ impl crate::NozhikUi {
                     "Delete this project's .nozhik/cache directory and rebuild its symbol index?",
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Invalidate and Restart Indexing").clicked() {
+                    if ui
+                        .add_enabled(
+                            self.language.indexer.is_some(),
+                            egui::Button::new("Invalidate and Restart Indexing"),
+                        )
+                        .on_disabled_hover_text(
+                            "Enable a supported language in Settings → Languages first",
+                        )
+                        .clicked()
+                    {
                         if self.language.indexer.as_ref().is_some_and(|i| {
                             i.send(
                                 nozhik_language_support::project_indexer::IndexCommand::Invalidate,
@@ -798,6 +835,27 @@ mod tests {
             std::fs::create_dir_all(path.parent().ok_or("fixture parent")?)?;
             std::fs::copy(fixture.join(name), path)?;
         }
+        // Explicit Composer sources must participate even under ignored vendor/.
+        let vendor = root.join("vendor/local/tools");
+        std::fs::create_dir_all(&vendor)?;
+        std::fs::write(root.join(".gitignore"), "vendor/\n")?;
+        std::fs::write(
+            root.join("composer.json"),
+            r#"{"autoload":{"psr-4":{"Tools\\":"vendor/local/tools/"}}}"#,
+        )?;
+        std::fs::write(
+            vendor.join("FlashVars.php"),
+            "<?php\nnamespace Tools;\nclass FlashVars {}\n",
+        )?;
+        let fleet_path = root.join("Fleet.php");
+        let fleet_source = std::fs::read_to_string(&fleet_path)?;
+        std::fs::write(
+            &fleet_path,
+            fleet_source.replace(
+                "use Demo\\Contracts",
+                "use Tools\\FlashVars;\nuse Demo\\Contracts",
+            ),
+        )?;
         let bus = nozhik_event_bus::EventBus::new(128)?;
         let settings =
             nozhik_config::ConfigManager::from_path(root.join("settings.toml"), bus.clone())?;
@@ -836,6 +894,13 @@ mod tests {
             ..Default::default()
         };
         for (call_line, call_name, declaration_file, declaration_line, declaration_name) in [
+            (
+                "use Tools\\FlashVars;",
+                "FlashVars",
+                "vendor/local/tools/FlashVars.php",
+                "class FlashVars {}",
+                "FlashVars",
+            ),
             (
                 "        $car->run();",
                 "run",
@@ -937,7 +1002,11 @@ mod tests {
                 "clicking a row must close the list"
             );
             let reference_byte = source.find(call_line).ok_or("reference line")?
-                + call_line.rfind(call_name).ok_or("reference name")?;
+                + if call_line.starts_with("use ") {
+                    "use ".len()
+                } else {
+                    call_line.rfind(call_name).ok_or("reference name")?
+                };
             navigation_wait(&mut shell, &ctx, &fleet, reference_byte)?;
             assert_eq!(
                 shell

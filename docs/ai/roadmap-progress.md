@@ -1578,3 +1578,87 @@ Default update-binaries.py rebuilt the macOS ARM64 executable/app archive;
 .nozhik/cache directories are ignored too, so opening the example as a project
 does not add cache data to Git or binary source hashes. No Windows target cache
 was created.
+
+### Language preferences and large-project indexing (2026-10-29)
+
+Audit: the semantic extractor already parsed only PHP/PHTML; FileIndex separately
+inventories all unignored names for file navigation. However unsupported-file
+watcher events still persisted the full semantic cache and sent full snapshots,
+and startup repeatedly linked after each parsed file using linear FQN lookup.
+
+Added config::languages registrations and typed enabled_languages preferences,
+Settings → Languages with live persistent PHP checkbox, and unavailable JS/TS,
+HTML, YAML and Go entries. Old settings default to PHP; empty selection is allowed.
+Unavailable IDs cannot start a backend. Disabled PHP drops services/editor semantic
+state, skips cache traversal/reads and catalog loading, and disables code-style/
+formatter behavior for that file. Text editing, filename search and independent AI
+remain available. Re-enable keeps/reuses the disk cache and overlays open buffers.
+
+Unified worker discovery/Changed/Overlay filters, fixed ignore behavior without
+.git, made no-op events skip snapshot copies/persistence, and stopped rewriting
+unchanged cache on startup. Initial/reconcile parsing now installs a batch before
+linking once. FQN lookup is a derived hash table automatically rebuilt by cache
+deserialization; serialization borrows large disk structures. Incremental edits
+still parse exactly one file, including the existing 50-file regression.
+
+Tests cover PHP/PHTML uppercase extensions, unsupported invalid-byte sources and
+buffers, no-op cache mtime/bytes, disabled startup with invalid cache/source, future
+Go-only selection, legacy IDs/settings and TOML/JSON persistence. A synthetic
+501-PHP/500-JSON project verifies only 501 parses, all 500 cross-file inherited
+references and one parse/one removed edge on edit; warm cached restart remains zero
+parses. Headless real checkbox clicks verify disabled startup, enable/index, disable
+with an open buffer, persisted empty selection, plain-text retention/format guard,
+and re-enable without rewriting the cache. Languages settings are also checked on
+small viewports with the existing Close/control visibility regression.
+
+Final native verification: full workspace/all-features run outside sandbox —
+165 passed, 0 failed, 5 existing system/live tests ignored. fmt, workspace native
+Clippy all-targets/all-features with -D warnings, release workspace build and
+ git diff --check passed. The first expanded viewport test found that introductory
+text pushed the PHP control below the compact viewport; moving explanatory text
+below the language toggles fixed it, and the full run passed. No manual native GUI
+smoke was run for this iteration; real pointer actions/settings persistence and
+small-window geometry are covered headlessly. Default update-binaries.py rebuilt
+macOS ARM64 executable/app archive; --check verified source/payload hashes. Windows
+builds/Clippy/GUI were not run and no Windows target cache was created.
+
+
+### Read-only project cache audit and ignored-source references (2026-10-29)
+
+Audited nozhove.com without writing its files/cache. Its schema-2 cache was populated
+(432 PHP sources, 8,218 declarations, 20,299 resolved references), but unconditional
+vendor exclusion omitted its explicitly autoloaded local framework. Dynamic routing
+explains zero direct controller references; those counts were not artificially raised.
+
+Added all-supported-source discovery, constructor promotion, cross-file typed
+receiver/call-result linking, typed PHPDoc references and schema-3 cache migration.
+Fixed invalidation snapshots advertising overlay revision gates without overlay facts.
+Regression tests cover ignored vendor sources without Composer configuration, cold/warm cache,
+invalidation with overlays, incremental return/property-type changes without caller
+reparsing, PHPDoc coordinates and real headless UI import/declaration/usages clicks.
+
+Per clarified user policy, ignore rules now affect tree coloring only: all supported
+files in vendor/ignored/generated directories participate in semantic indexing, and
+all non-internal names remain searchable. Git index membership overrides ignore
+coloring for tracked files and their ancestor directories. Actual project tree loaded
+read-only confirms vendor/desfpc/icecms2/Tools/FlashVars.php and its ancestor folders
+are not marked ignored. Read-only classification uses the existing vcs libgit2 engine;
+fs_model gains a one-way vcs dependency and no external Git requirement.
+
+Full-source temporary-copy audit after policy clarification: all 607 PHP files indexed,
+11,025 declarations and 37,014 resolved references. FlashVars has 71 references,
+AbstractEntity 51 and Exception 1,267. Every reverse edge for those three classes
+resolves back to the same declaration. The Messages import cycle and counts survive
+Invalidate and warm restart. The original project remains read-only throughout.
+
+Validation: native workspace/all-features tests passed — 169 passed, 0 failed,
+5 existing live/system tests ignored. Native workspace Clippy all-targets/all-features
+with -D warnings, rustfmt, diff whitespace checks and workspace release build passed.
+Headless pointer navigation exercises import → vendor class → usages row → import;
+no manual native window smoke was run. The sandboxed standalone watcher check timed
+out; the full run with system watcher access passed. SHA-256 comparison verified
+all 607 original PHP files and its existing cache unchanged (608 files total).
+
+Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
+--check verified source fingerprint and both payload checksums. Windows builds,
+Clippy and GUI were not run and no Windows target cache was created.

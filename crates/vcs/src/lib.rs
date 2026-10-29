@@ -1,6 +1,7 @@
 //! Git engine with one serial worker. All repository and network I/O stays there.
 mod git_worker;
 pub mod model;
+pub mod project_paths;
 
 use model::{CommitInfo, DiffTarget, FileChange, FileDiff, GitRepoStatus};
 use std::{

@@ -46,7 +46,11 @@ pub fn receiver_type(
             .iter()
             .filter(|d| d.name == receiver && d.scope.contains(&byte) && d.range.start < byte)
             .max_by_key(|d| d.range.start)
-            .and_then(|d| d.type_name.clone());
+            .and_then(|d| {
+                d.type_name
+                    .clone()
+                    .or_else(|| index.php_type(d.type_source.as_ref()?))
+            });
     }
     let context = index.file_symbols(path).and_then(|f| {
         f.name_scopes

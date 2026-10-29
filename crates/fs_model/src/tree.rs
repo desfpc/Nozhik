@@ -133,7 +133,8 @@ impl ProjectTree {
             return Err(FsError::OutsideProject);
         }
         let mut nodes = Vec::new();
-        let mut matcher = walker(&self.root_path, None)
+        let mut matcher = ignore::WalkBuilder::new(&self.root_path)
+            .require_git(false)
             .build_matchers()
             .into_iter()
             .next();
@@ -151,10 +152,9 @@ impl ProjectTree {
             let relative = p
                 .strip_prefix(&self.root_path)
                 .map_err(|_| FsError::OutsideProject)?;
-            if service_path(relative)
-                || matcher
-                    .as_mut()
-                    .is_some_and(|m| m.matched(relative, file_type.is_dir()).is_ignore())
+            if matcher
+                .as_mut()
+                .is_some_and(|m| m.matched(relative, file_type.is_dir()).is_ignore())
             {
                 self.excluded.insert(p.clone());
             }
@@ -173,6 +173,13 @@ impl ProjectTree {
                 }));
             }
         }
+        let paths: Vec<_> = nodes.iter().map(|n| n.path().to_path_buf()).collect();
+        if let Some(ignored) = nozhik_vcs::project_paths::ignored_paths(&self.root_path, &paths)
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+        {
+            self.excluded.retain(|p| p.parent() != Some(path));
+            self.excluded.extend(ignored);
+        }
         nodes.sort_by(|a, b| {
             (!matches!(a, Node::Dir(_)), a.path().file_name())
                 .cmp(&(!matches!(b, Node::Dir(_)), b.path().file_name()))
@@ -188,12 +195,8 @@ impl ProjectTree {
     }
 }
 pub(crate) fn service_path(path: &Path) -> bool {
-    path.components().any(|c| {
-        matches!(
-            c.as_os_str().to_str(),
-            Some(".git" | "target" | "node_modules" | "vendor")
-        )
-    })
+    path.components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | ".nozhik")))
 }
 pub(crate) fn walker(path: &Path, depth: Option<usize>) -> ignore::WalkBuilder {
     let mut builder = ignore::WalkBuilder::new(path);
@@ -201,6 +204,11 @@ pub(crate) fn walker(path: &Path, depth: Option<usize>) -> ignore::WalkBuilder {
         .hidden(false)
         .require_git(false)
         .follow_links(false)
+        .parents(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
         .max_depth(depth)
         .filter_entry(|e| e.depth() == 0 || !service_path(Path::new(e.file_name())));
     builder
@@ -209,6 +217,51 @@ pub(crate) fn walker(path: &Path, depth: Option<usize>) -> ignore::WalkBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn git_membership_only_colors_ignored_paths_without_filtering_logic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let repo = git2::Repository::init(&root)?;
+        std::fs::create_dir_all(root.join("vendor/local"))?;
+        std::fs::create_dir_all(root.join("target"))?;
+        std::fs::write(
+            root.join("vendor/local/tracked.php"),
+            "<?php class Tracked {}",
+        )?;
+        std::fs::write(
+            root.join("vendor/local/ignored.php"),
+            "<?php class Ignored {}",
+        )?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("vendor/local/tracked.php"))?;
+        index.write()?;
+        std::fs::write(root.join(".gitignore"), "vendor/\n")?;
+        let mut tree = ProjectTree::new(&root)?;
+        for path in [&root, &root.join("vendor"), &root.join("vendor/local")] {
+            tree.load(path)?;
+        }
+        for name in [
+            "vendor",
+            "vendor/local",
+            "vendor/local/tracked.php",
+            "target",
+        ] {
+            assert!(
+                !tree.is_excluded(&root.join(name)),
+                "tracked membership or ordinary directory: {name}"
+            );
+        }
+        assert!(tree.is_excluded(&root.join("vendor/local/ignored.php")));
+        let files = crate::fuzzy::FileIndex::scan(&root)?;
+        assert_eq!(files.search("tracked.php", 10).len(), 1);
+        assert_eq!(files.search("ignored.php", 10).len(), 1);
+        index.remove_path(Path::new("vendor/local/tracked.php"))?;
+        index.write()?;
+        tree.load(&root.join("vendor/local"))?;
+        assert!(tree.is_excluded(&root.join("vendor/local/tracked.php")));
+        Ok(())
+    }
     #[test]
     fn lazy_sorted_and_ignored() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
@@ -251,11 +304,11 @@ mod tests {
             ]
         );
         assert!(tree.is_excluded(&root.join("hidden.log")));
-        assert!(tree.is_excluded(&root.join("vendor")));
+        assert!(!tree.is_excluded(&root.join("vendor")));
         assert!(!tree.is_excluded(&root.join("b.rs")));
         std::fs::write(root.join("vendor/test.php"), "")?;
         tree.load(&root.join("vendor"))?;
-        assert!(tree.is_excluded(&root.join("vendor/test.php")));
+        assert!(!tree.is_excluded(&root.join("vendor/test.php")));
         std::fs::write(root.join("a/.gitignore"), "*.rs\n!keep.rs\n")?;
         std::fs::write(root.join("a/keep.rs"), "")?;
         assert!(tree.directories[&root.join("a")].children.is_none());

@@ -544,11 +544,17 @@ impl NozhikUi {
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    self.editor.code_style = self
-                        .settings_dialog
-                        .styles
-                        .selected(&extension, &self.config.file_types)
-                        .cloned();
+                    self.editor.code_style = if nozhik_config::languages::enabled_for_path(
+                        &self.config.enabled_languages,
+                        &self.documents[index].path,
+                    ) {
+                        self.settings_dialog
+                            .styles
+                            .selected(&extension, &self.config.file_types)
+                            .cloned()
+                    } else {
+                        None
+                    };
                     self.editor.ai.configure(&self.config);
                     self.editor.proportional_font = self.config.editor_font == "proportional";
                     if let Some(language) = self.language.views.get_mut(&self.documents[index].path)

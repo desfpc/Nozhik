@@ -26,16 +26,13 @@ pub struct LanguageDefinition {
 pub const PHP: LanguageDefinition = LanguageDefinition {
     id: PHP_PLUGIN_ID,
     language_id: "php",
-    extensions: &["php", "phtml"],
+    extensions: nozhik_config::languages::PHP_EXTENSIONS,
 };
 /// PHP and HTML-embedded PHP file associations.
 #[must_use]
 pub fn is_php(path: &Path) -> bool {
-    path.extension().and_then(|x| x.to_str()).is_some_and(|x| {
-        PHP.extensions
-            .iter()
-            .any(|extension| x.eq_ignore_ascii_case(extension))
-    })
+    nozhik_config::languages::language_for_path(path)
+        == Some(nozhik_config::languages::LanguageId::Php)
 }
 /// Searches PATH without launching a shell, preferring phpactor.
 #[must_use]

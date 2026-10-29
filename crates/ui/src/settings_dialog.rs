@@ -93,6 +93,7 @@ impl SettingsDialog {
         ui.selectable_value(&mut self.category, 0, "General");
         ui.selectable_value(&mut self.category, 1, "File Types & Code Styles");
         ui.selectable_value(&mut self.category, 2, "AI Assistant (Ollama)");
+        ui.selectable_value(&mut self.category, 3, "Languages");
         ui.button("Plugins…").clicked()
     }
 
@@ -110,8 +111,10 @@ impl SettingsDialog {
                         Self::general(ui, config);
                     } else if self.category == 1 {
                         self.file_types(ui, config);
-                    } else {
+                    } else if self.category == 2 {
                         self.ai.show(ui, config);
+                    } else {
+                        Self::languages(ui, config);
                     }
                 });
             });
@@ -188,6 +191,36 @@ impl SettingsDialog {
             });
         ui.weak("Keymap: ~/.nozhik/keymap.json");
     }
+    fn languages(ui: &mut egui::Ui, config: &mut Config) {
+        ui.heading("Languages");
+        ui.separator();
+        for language in nozhik_config::languages::LANGUAGES {
+            let mut enabled = config.enabled_languages.contains(&language.id);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        language.available,
+                        egui::Checkbox::new(&mut enabled, language.label),
+                    )
+                    .changed()
+                {
+                    if enabled {
+                        config.enabled_languages.insert(language.id);
+                    } else {
+                        config.enabled_languages.remove(&language.id);
+                    }
+                }
+                ui.weak(format!(".{}", language.extensions.join(", .")));
+                if !language.available {
+                    ui.weak("Coming soon");
+                }
+            });
+        }
+        ui.add_space(8.0);
+        ui.label("Changes apply immediately.");
+        ui.weak("Disabled files remain editable as plain text and searchable by name.");
+        ui.weak("Disabling a language stops its indexing, diagnostics, syntax highlighting and completion. Its disk cache is retained for later use.");
+    }
     fn file_types(&mut self, ui: &mut egui::Ui, config: &mut Config) {
         ui.heading("File Types & Code Styles");
         let mut extensions = vec![
@@ -257,10 +290,19 @@ impl SettingsDialog {
                         );
                     }
                 });
-            let actual = self
-                .php_stubs
-                .as_ref()
-                .map_or("loading…", |s| s.version.as_str());
+            let actual = self.php_stubs.as_ref().map_or_else(
+                || {
+                    if nozhik_config::languages::enabled(
+                        &config.enabled_languages,
+                        nozhik_config::languages::LanguageId::Php,
+                    ) {
+                        "loading…"
+                    } else {
+                        "disabled"
+                    }
+                },
+                |s| s.version.as_str(),
+            );
             ui.weak(format!("Offline catalog: PHP {actual}"));
         }
         egui::ComboBox::from_label("Syntax Highlighting Theme")
@@ -308,12 +350,21 @@ impl SettingsDialog {
 }
 impl crate::NozhikUi {
     pub(crate) fn settings_tick(&mut self, ctx: &egui::Context) {
-        let needs_php = self.settings_open
-            || self.documents.iter().any(|document| {
-                document.open
-                    && !document.binary
-                    && nozhik_language_support::lsp::manager::is_php(&document.path)
-            });
+        let php_enabled = nozhik_config::languages::enabled(
+            &self.config.enabled_languages,
+            nozhik_config::languages::LanguageId::Php,
+        );
+        if !php_enabled {
+            self.settings_dialog.php_stubs = None;
+            self.settings_dialog.php_requested.clear();
+        }
+        let needs_php = php_enabled
+            && (self.settings_open
+                || self.documents.iter().any(|document| {
+                    document.open
+                        && !document.binary
+                        && nozhik_language_support::lsp::manager::is_php(&document.path)
+                }));
         if needs_php
             && self.settings_dialog.php_requested != self.config.php_language_level
             && self
@@ -332,7 +383,7 @@ impl crate::NozhikUi {
             match reply {
                 Reply::Catalog(Ok(styles)) => self.settings_dialog.styles = styles,
                 Reply::Php(version, result) => {
-                    if version == self.config.php_language_level {
+                    if php_enabled && version == self.config.php_language_level {
                         match result {
                             Ok(stubs) => {
                                 self.settings_dialog.php_stubs = Some(std::sync::Arc::new(stubs));
@@ -414,6 +465,159 @@ impl crate::NozhikUi {
 mod tests {
     use super::*;
 
+    fn language_settings_frame(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                shell.language_tick(ctx);
+                shell.settings_tick(ctx);
+                shell.settings_window(ctx);
+            },
+        )
+    }
+    fn click_php_setting(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        language_settings_frame(shell, ctx, vec![]);
+        let output = language_settings_frame(shell, ctx, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "PHP" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .ok_or("PHP toggle not visible")?;
+        for pressed in [true, false] {
+            language_settings_frame(
+                shell,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        Ok(())
+    }
+    fn wait_language_settings(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        php_enabled: bool,
+        path: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            language_settings_frame(shell, ctx, vec![]);
+            let ready = if php_enabled {
+                shell.language.indexer.is_some()
+                    && shell
+                        .language
+                        .views
+                        .get(path)
+                        .is_some_and(|v| v.project_index.is_some())
+            } else {
+                shell.language.indexer.is_none()
+                    && shell.language.views.is_empty()
+                    && shell.settings_dialog.php_stubs.is_none()
+            };
+            if ready && shell.settings_dialog.pending == 0 {
+                return Ok(());
+            }
+            if std::time::Instant::now() > until {
+                return Err(format!("language policy/save timeout: {}", shell.status).into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    #[test]
+    fn language_checkboxes_persist_and_stop_restart_services_with_open_buffers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let path = root.join("sample.php");
+        let source = "<?php class Sample { public function run() {} }";
+        std::fs::write(&path, source)?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings_path = root.join("settings.toml");
+        let settings = ConfigManager::from_path(settings_path.clone(), bus.clone())?;
+        let config = Config {
+            ai_enabled: false,
+            enabled_languages: std::collections::BTreeSet::new(),
+            ..Default::default()
+        };
+        settings.replace(config.clone())?;
+        settings.save()?;
+        let mut shell = crate::NozhikUi::new(bus, settings, config);
+        shell.project = Some(nozhik_fs_model::tree::ProjectTree::new(&root)?);
+        shell.documents.push(crate::Document {
+            path: path.clone(),
+            name: "sample.php".into(),
+            binary: false,
+            open: true,
+            buffer: nozhik_buffer::TextBuffer::load_from_str(nozhik_core::BufferId(1901), source),
+        });
+        shell.active = Some(0);
+        shell.settings_open = true;
+        shell.settings_dialog.category = 3;
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        wait_language_settings(&mut shell, &ctx, false, &path)?;
+        assert!(
+            !root.join(".nozhik/cache").exists(),
+            "disabled startup cannot scan/cache PHP"
+        );
+        click_php_setting(&mut shell, &ctx)?;
+        wait_language_settings(&mut shell, &ctx, true, &path)?;
+        assert!(
+            shell
+                .config
+                .enabled_languages
+                .contains(&nozhik_config::languages::LanguageId::Php)
+        );
+        let cache_path = root.join(".nozhik/cache/index_php.json");
+        let modified = cache_path.metadata()?.modified()?;
+        click_php_setting(&mut shell, &ctx)?;
+        wait_language_settings(&mut shell, &ctx, false, &path)?;
+        let loaded = ConfigManager::from_path(settings_path, nozhik_event_bus::EventBus::new(8)?)?
+            .snapshot()?;
+        assert!(loaded.enabled_languages.is_empty());
+        shell.reformat_code(&ctx);
+        assert!(shell.status.contains("disabled"));
+        assert_eq!(shell.documents[0].buffer.rope().to_string(), source);
+        assert!(
+            cache_path.exists(),
+            "disabled languages retain their disk cache"
+        );
+        click_php_setting(&mut shell, &ctx)?;
+        wait_language_settings(&mut shell, &ctx, true, &path)?;
+        assert_eq!(
+            cache_path.metadata()?.modified()?,
+            modified,
+            "re-enable reuses unchanged disk facts instead of rewriting cache"
+        );
+        Ok(())
+    }
+
     #[test]
     fn php_level_combo_changes_global_setting() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
@@ -491,7 +695,7 @@ mod tests {
             egui::vec2(800.0, 600.0),
             egui::vec2(420.0, 280.0),
         ] {
-            for category in [0, 1] {
+            for category in [0, 1, 3] {
                 let ctx = egui::Context::default();
                 crate::theme::apply(&ctx);
                 shell.settings_open = true;
@@ -509,10 +713,10 @@ mod tests {
                     );
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = &shape.shape {
-                            let label = if category == 0 {
-                                "Editor font"
-                            } else {
-                                "Formatting Standard"
+                            let label = match category {
+                                0 => "Editor font",
+                                1 => "Formatting Standard",
+                                _ => "PHP",
                             };
                             if text.galley.job.text == label {
                                 let rect = egui::Rect::from_min_size(text.pos, text.galley.size());

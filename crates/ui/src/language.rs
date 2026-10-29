@@ -29,6 +29,12 @@ pub struct EditorLanguage {
     pub triggers: nozhik_language_support::triggers::LanguageTriggerConfig,
     pub project_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     pub project_path: Option<PathBuf>,
+    // Presentation survives worker revision gates; navigation still uses project_index.
+    pub(crate) painted_symbols: Vec<nozhik_language_support::symbol_index::SymbolDeclaration>,
+    pub(crate) presentation_text: Option<ropey::Rope>,
+    pub(crate) completion_text: Option<ropey::Rope>,
+    pub(crate) completion_index:
+        Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     pub usages_byte: Option<usize>,
     pub usages_hover_byte: Option<usize>,
     pub local_completion_pending: Option<usize>,
@@ -219,10 +225,12 @@ impl crate::NozhikUi {
                 .views
                 .entry(document.path.clone())
                 .or_default();
+            view.rebase(&document.buffer);
             view.project_path = Some(document.path.clone());
             view.project_index = self.language.index.clone().filter(|_| {
                 self.language.indexed_revisions.get(&document.path) == Some(&snapshot.revision)
             });
+            view.capture_index();
             if self
                 .language
                 .root
@@ -259,14 +267,6 @@ impl crate::NozhikUi {
                 view.local_completion_pending = None;
             }
             view.documentation = view.stubs.clone().map(DocumentationSource::from);
-            if view.revision != snapshot.revision {
-                view.revision = snapshot.revision;
-                view.spans.clear();
-                view.diagnostics.clear();
-                view.syntax.clear();
-                view.completions.clear();
-                view.hover = None;
-            }
             if self.language.sent.get(&uri) != Some(&snapshot.revision)
                 && service.send(Command::Sync {
                     uri: uri.clone(),
@@ -565,24 +565,34 @@ impl EditorLanguage {
         byte: usize,
         absolute_byte: usize,
     ) -> Vec<CompletionItem> {
-        let mut items = self
+        let index = self
             .project_index
             .as_ref()
-            .zip(self.project_path.as_ref())
-            .map_or_else(Vec::new, |(index, path)| {
-                nozhik_language_support::type_inference::complete_fragment(
-                    index,
-                    path,
-                    source,
-                    byte,
-                    absolute_byte,
-                )
+            .or(self.completion_index.as_ref());
+        let absolute_byte = self
+            .completion_text
+            .as_ref()
+            .zip(self.presentation_text.as_ref())
+            .map_or(absolute_byte, |(old, new)| {
+                let (old_range, new_range) = changed_range(old, new);
+                map_byte(absolute_byte, &new_range, &old_range)
             });
+        let mut items =
+            index
+                .zip(self.project_path.as_ref())
+                .map_or_else(Vec::new, |(index, path)| {
+                    nozhik_language_support::type_inference::complete_fragment(
+                        index,
+                        path,
+                        source,
+                        byte,
+                        absolute_byte,
+                    )
+                });
         let access = self.triggers.access(&source[..byte]);
         let project_receiver = access
             .and_then(|(left, _, _)| {
-                self.project_index
-                    .as_ref()
+                index
                     .zip(self.project_path.as_ref())
                     .and_then(|(index, path)| {
                         nozhik_language_support::type_inference::receiver_type(
@@ -593,11 +603,7 @@ impl EditorLanguage {
                         )
                     })
             })
-            .filter(|name| {
-                self.project_index
-                    .as_ref()
-                    .is_some_and(|i| i.declaration(name).is_some())
-            });
+            .filter(|name| index.is_some_and(|i| i.declaration(name).is_some()));
         if project_receiver.is_none()
             && let Some(stubs) = &self.stubs
         {
@@ -715,6 +721,139 @@ impl crate::NozhikUi {
         }
     }
 }
+// Compare Rope iterators without allocating a full document String.
+fn changed_range(
+    old: &ropey::Rope,
+    new: &ropey::Rope,
+) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+    // Most Rope chunks are shared after an edit. Skip them by identity before
+    // comparing the small changed boundary chunks byte by byte.
+    let shared_prefix: usize = old
+        .chunks()
+        .zip(new.chunks())
+        .take_while(|(a, b)| a.len() == b.len() && (a.as_ptr() == b.as_ptr() || a == b))
+        .map(|(chunk, _)| chunk.len())
+        .sum();
+    let mut start = shared_prefix
+        + old
+            .bytes_at(shared_prefix)
+            .zip(new.bytes_at(shared_prefix))
+            .take_while(|(a, b)| a == b)
+            .count();
+    // byte_to_char accepts interior bytes: use the leading-byte test instead.
+    while start > 0
+        && (old.get_byte(start).is_some_and(|b| b & 0xc0 == 0x80)
+            || new.get_byte(start).is_some_and(|b| b & 0xc0 == 0x80))
+    {
+        start -= 1;
+    }
+    let limit = old.len_bytes().min(new.len_bytes()).saturating_sub(start);
+    let mut shared_suffix = 0;
+    for (a, b) in old
+        .chunks_at_byte(old.len_bytes())
+        .0
+        .reversed()
+        .zip(new.chunks_at_byte(new.len_bytes()).0.reversed())
+    {
+        if a.len() != b.len()
+            || shared_suffix + a.len() > limit
+            || (a.as_ptr() != b.as_ptr() && a != b)
+        {
+            break;
+        }
+        shared_suffix += a.len();
+    }
+    let mut suffix = shared_suffix
+        + old
+            .bytes_at(old.len_bytes() - shared_suffix)
+            .reversed()
+            .zip(new.bytes_at(new.len_bytes() - shared_suffix).reversed())
+            .take(limit - shared_suffix)
+            .take_while(|(a, b)| a == b)
+            .count();
+    while suffix > 0
+        && (old
+            .get_byte(old.len_bytes() - suffix)
+            .is_some_and(|b| b & 0xc0 == 0x80)
+            || new
+                .get_byte(new.len_bytes() - suffix)
+                .is_some_and(|b| b & 0xc0 == 0x80))
+    {
+        suffix -= 1;
+    }
+    (
+        start..old.len_bytes() - suffix,
+        start..new.len_bytes() - suffix,
+    )
+}
+const fn map_byte(
+    byte: usize,
+    old: &std::ops::Range<usize>,
+    new: &std::ops::Range<usize>,
+) -> usize {
+    if byte <= old.start {
+        byte
+    } else if byte >= old.end {
+        new.end + byte - old.end
+    } else {
+        new.start
+    }
+}
+impl EditorLanguage {
+    pub(crate) fn capture_index(&mut self) {
+        let Some(index) = &self.project_index else {
+            return;
+        };
+        if self
+            .completion_index
+            .as_ref()
+            .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, index))
+        {
+            return;
+        }
+        self.painted_symbols = self
+            .project_path
+            .as_ref()
+            .and_then(|path| index.declarations_by_file.get(path))
+            .cloned()
+            .unwrap_or_default();
+        self.completion_index = Some(index.clone());
+        self.completion_text = self.presentation_text.clone();
+    }
+    pub(crate) fn rebase(&mut self, buffer: &nozhik_buffer::TextBuffer) {
+        let snapshot = buffer.snapshot();
+        if self.revision != snapshot.revision {
+            if let Some(old) = &self.presentation_text {
+                let (removed, inserted) = changed_range(old, &snapshot.text);
+                for span in &mut self.spans {
+                    span.range = map_byte(span.range.start, &removed, &inserted)
+                        ..map_byte(span.range.end, &removed, &inserted);
+                }
+                self.spans.retain(|span| !span.range.is_empty());
+                for symbol in &mut self.painted_symbols {
+                    symbol.range = map_byte(symbol.range.start, &removed, &inserted)
+                        ..map_byte(symbol.range.end, &removed, &inserted);
+                    let line = snapshot.text.byte_to_line(symbol.range.start);
+                    symbol.line = u32::try_from(line).unwrap_or(u32::MAX);
+                    symbol.column =
+                        u32::try_from(symbol.range.start - snapshot.text.line_to_byte(line))
+                            .unwrap_or(u32::MAX);
+                }
+            }
+            self.revision = snapshot.revision;
+            self.diagnostics.clear();
+            self.syntax.clear();
+            self.completions.clear();
+            self.local_completion_pending = None;
+            self.token = 0;
+            self.request = None;
+            self.hover = None;
+            self.project_index = None;
+        }
+        self.presentation_text = Some(snapshot.text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     fn navigation_frame(
@@ -811,6 +950,27 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+    #[test]
+    fn presentation_diff_preserves_unicode_across_rope_chunks() {
+        let text = "<?php // я🦀\r\n".repeat(2000);
+        let old = ropey::Rope::from_str(&text);
+        for offset in [0, 1, 500, 10000, old.len_chars()] {
+            for removed in [0, 1, 20] {
+                let end = (offset + removed).min(old.len_chars());
+                let mut new = old.clone();
+                new.remove(offset..end);
+                new.insert(offset, "Ж🦀\n");
+                let (before, after) = super::changed_range(&old, &new);
+                assert!(text.is_char_boundary(before.start));
+                assert!(text.is_char_boundary(before.end));
+                let replacement = new.byte_slice(after).to_string();
+                let mut reconstructed = text.clone();
+                reconstructed.replace_range(before, &replacement);
+                assert_eq!(reconstructed, new.to_string());
+            }
+        }
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,

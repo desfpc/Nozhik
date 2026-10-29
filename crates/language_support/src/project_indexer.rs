@@ -197,7 +197,7 @@ impl Worker {
             Err(e) => return Err(e),
         };
         let cache: Cache = serde_json::from_reader(std::io::BufReader::new(file))?;
-        if cache.version != 3 {
+        if cache.version != 4 {
             return Ok(());
         }
         if cache.root != self.root || cache.index.language != LanguageId::Php {
@@ -216,7 +216,7 @@ impl Worker {
         serde_json::to_writer(
             std::io::BufWriter::new(file.as_file_mut()),
             &CacheRef {
-                version: 3,
+                version: 4,
                 root: &self.root,
                 stamps: &self.stamps,
                 index: &self.disk,
@@ -920,6 +920,71 @@ mod tests {
         assert!(!config.activates("$car."));
         Ok(())
     }
+    #[test]
+    fn this_completion_inherits_and_composes_traits() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{php_symbols::parse, type_inference::complete};
+        let path = PathBuf::from("child.php");
+        let source = "<?php namespace App; use Lib\\Features as Imported; class Child extends Middle { use Imported; private $own; private function local() {} public function work() { $this->; } }";
+        let ancestors = "<?php namespace App; class Root { protected $root; public function inherited() {} private function secret() {} public function replaced() {} } class Middle extends Root { protected function middle() {} }";
+        let traits = "<?php namespace Lib; trait Nested { protected $nested; private function internal() {} } trait Features { use Nested; public function feature() {} public function replaced() {} public static function staticOnly() {} }";
+        let mut index = SymbolIndex::new(LanguageId::Php);
+        for (file, text) in [
+            (path.clone(), source),
+            (PathBuf::from("base.php"), ancestors),
+            (PathBuf::from("traits.php"), traits),
+        ] {
+            index.replace(file.clone(), parse(&file, text)?);
+        }
+        let caret = source.find("$this->;").ok_or("caret")? + 7;
+        let items = complete(&index, &path, source, caret);
+        for name in [
+            "own",
+            "local",
+            "root",
+            "inherited",
+            "middle",
+            "nested",
+            "internal",
+            "feature",
+            "replaced",
+        ] {
+            assert!(
+                items.iter().any(|i| i.label == name),
+                "missing {name}: {items:?}"
+            );
+        }
+        assert!(
+            !items
+                .iter()
+                .any(|i| ["secret", "staticOnly"].contains(&i.label.as_str()))
+        );
+        assert_eq!(items.iter().filter(|i| i.label == "replaced").count(), 1);
+        assert_eq!(
+            index
+                .resolve("\\app\\child::replaced")
+                .map(|d| d.fqn.as_str()),
+            Some("\\lib\\features::replaced")
+        );
+        // A trait's private member belongs to its consuming class, not subclasses.
+        let grand = PathBuf::from("grand.php");
+        let grand_source =
+            "<?php namespace App; class Grand extends Child { function test() { $this->; } }";
+        index.replace(grand.clone(), parse(&grand, grand_source)?);
+        let items = complete(
+            &index,
+            &grand,
+            grand_source,
+            grand_source.find("$this->;").ok_or("caret")? + 7,
+        );
+        assert!(items.iter().any(|i| i.label == "feature"));
+        assert!(
+            !items
+                .iter()
+                .any(|i| ["internal", "local", "own"].contains(&i.label.as_str()))
+        );
+        Ok(())
+    }
+
     const FILES: &[(&str, &str)] = &[
         (
             "Contracts/Vehicle.php",

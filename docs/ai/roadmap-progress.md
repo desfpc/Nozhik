@@ -1740,3 +1740,33 @@ system-clipboard command paste/execution and visible mouse selection. Final test
 process was explicitly stopped; native menu/bulk actions are covered headlessly.
 Default update-binaries.py rebuilt macOS ARM64 executable/app archive; --check
 verified current source and payload hashes. Windows build/Clippy/GUI were not run.
+
+
+### PHP this/trait completion and stable typing presentation (2026-10-29)
+
+Added nested trait composition to member lookup/completion with class→traits→parents
+precedence, inherited visibility and private trait members in the consuming class.
+Schema 4 refreshes old caches. Retained completion context maps current caret positions
+back to its indexed Rope while the new overlay is pending, so typing `$this->` does
+not temporarily lose the class context. Existing trait-adaptation limitations remain.
+
+Editor presentation retains and rebases syntax colors, unused names and code-lens
+positions before painting changed text. Current-revision worker results replace them;
+navigation/diagnostics keep their revision gates. This removes the empty-color and
+missing-lens frames that made the document flash and jump. No synchronous parser or
+full-document String allocation was introduced. Completion popup uses measured width,
+24-point rows, up to nine visible suggestions and explicit Area bounds that grow and
+shrink across successive queries.
+
+Regressions cover multi-level inheritance, aliased/nested traits, overrides, private
+visibility, real multi-event `$this->` typing/Tab acceptance without a worker reply,
+retained colors/lens geometry, Unicode edits/Undo and repeated short/long popup sizing.
+
+Validation: native workspace/all-features tests passed with system access; targeted
+UI reruns and a multi-chunk Unicode replacement regression passed after the final
+presentation changes. Native workspace Clippy all-targets/all-features with
+-D warnings, rustfmt, diff whitespace checks and workspace release build passed.
+Popup geometry and typing behavior were verified headlessly; no manual native GUI
+smoke or Windows build/Clippy/GUI was run. Default update-binaries.py rebuilt the
+macOS ARM64 executable and signed app archive; --check verified the source fingerprint
+and both payload checksums. No Windows target cache was created.

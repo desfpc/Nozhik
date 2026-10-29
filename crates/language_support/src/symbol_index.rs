@@ -61,6 +61,9 @@ pub struct SymbolDeclaration {
     /// Direct parent classes/interfaces, in PHP lookup order (class declarations only).
     #[serde(default)]
     pub base_types: Vec<String>,
+    /// Directly composed PHP traits, before inherited members in lookup order.
+    #[serde(default)]
+    pub trait_types: Vec<String>,
     /// Lexical scope bytes.
     pub scope: Range<usize>,
     /// PHP access modifier.
@@ -240,6 +243,23 @@ impl SymbolIndex {
             }
             if let Some(declaration) = self.declaration(&name) {
                 pending.extend(declaration.base_types.iter().rev().cloned());
+                pending.extend(declaration.trait_types.iter().rev().cloned());
+            }
+            result.push(name);
+        }
+        result
+    }
+    /// Class and recursively composed traits, excluding parent classes.
+    #[must_use]
+    pub fn trait_lineage(&self, class: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut pending = vec![class.to_string()];
+        while let Some(name) = pending.pop() {
+            if result.contains(&name) {
+                continue;
+            }
+            if let Some(d) = self.declaration(&name) {
+                pending.extend(d.trait_types.iter().rev().cloned());
             }
             result.push(name);
         }
@@ -252,12 +272,13 @@ impl SymbolIndex {
             return Some(declaration);
         }
         let (owner, member) = fqn.rsplit_once("::")?;
+        let composed = self.trait_lineage(owner);
         self.class_lineage(owner)
             .into_iter()
             .skip(1)
             .find_map(|parent| {
                 self.declaration(&format!("{parent}::{member}"))
-                    .filter(|d| d.visibility != Visibility::Private)
+                    .filter(|d| d.visibility != Visibility::Private || composed.contains(&parent))
             })
     }
     fn reference_dependencies(&self, candidates: &[String]) -> HashSet<String> {

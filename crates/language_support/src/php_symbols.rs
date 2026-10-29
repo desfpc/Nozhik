@@ -264,6 +264,18 @@ fn declaration(
         } else {
             Vec::new()
         },
+        trait_types: if kind == SymbolKind::Class {
+            node.child_by_field_name("body")
+                .map_or_else(Vec::new, children)
+                .into_iter()
+                .filter(|n| n.kind() == "use_declaration")
+                .flat_map(children)
+                .filter(|n| matches!(n.kind(), "name" | "qualified_name" | "relative_name"))
+                .map(|n| context.qualify(text(n, source)).to_lowercase())
+                .collect()
+        } else {
+            Vec::new()
+        },
         scope: if class_kind(node.kind()) {
             node.byte_range()
         } else {

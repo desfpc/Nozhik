@@ -956,3 +956,22 @@ Existing stored proportions remain respected. User resizing may use the availabl
 window height; seed and persistence retain the release-frame geometry so hiding
 and reopening restores the selected height. Layout validation accepts the enlarged
 bottom range while retaining the previous side-dock limits.
+
+
+### PHP member completion and stable edit presentation (2026-10-29)
+
+Class facts now retain direct trait_types separately from base_types. Lookup visits
+class declarations, recursively composed traits, then ancestors, with cycle guards;
+private trait members are accessible only from their consuming class. Completion
+uses that same resolution order to suppress overridden duplicates. Cache schema 4
+rebuilds older facts once. Trait adaptations remain outside this bounded resolver.
+
+EditorLanguage keeps Rope snapshots and a presentation copy of per-file symbols.
+Before painting an edited revision, UTF-8-safe Rope differences move highlight ranges,
+unused-name ranges and lens lines together. Worker results replace the presentation
+without first erasing it. Diagnostics and navigation still require current revisions;
+presentation facts never authorize a stale jump. Local member completion may use the
+last index with caret coordinates mapped back to that snapshot until the new overlay
+arrives. No parser, file I/O or full-buffer String is added to the paint/input path.
+The completion Area explicitly resets both inner bounds, sizes to up to nine 24-point
+rows and measured labels (440-point width/45% screen height caps), and scrolls longer lists.

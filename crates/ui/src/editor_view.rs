@@ -54,6 +54,10 @@ impl TextEditorView {
         enabled: bool,
         mut language: Option<&mut crate::language::EditorLanguage>,
     ) -> Result<(), BufferError> {
+        if let Some(state) = language.as_deref_mut() {
+            state.rebase(buffer);
+            state.capture_index();
+        }
         let id = ui.id().with(("editor", buffer.snapshot().buffer_id));
         let response = ui.interact(ui.available_rect_before_wrap(), id, Sense::click_and_drag());
         if enabled && self.focus_buffer == Some(buffer.snapshot().buffer_id) {
@@ -217,6 +221,7 @@ impl TextEditorView {
                     Self::input(buffer, event, tab_width)?;
                 }
                 if let Some(state) = language.as_deref_mut() {
+                    state.rebase(buffer);
                     state.completions.clear();
                     state.request = None;
                     state.local_completion_pending = None;
@@ -239,16 +244,8 @@ impl TextEditorView {
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut hit_rows = Vec::new();
         let cursors = buffer.cursors().as_slice().to_vec();
-        let revision = buffer.snapshot().revision;
-        if let Some(state) = language.as_deref_mut()
-            && state.revision != revision
-        {
-            state.revision = revision;
-            state.spans.clear();
-            state.diagnostics.clear();
-            state.syntax.clear();
-            state.hover = None;
-            state.project_index = None;
+        if let Some(state) = language.as_deref_mut() {
+            state.rebase(buffer);
         }
         let reveal = self.reveal_line.take();
         let mut popup_origin = None;
@@ -258,10 +255,8 @@ impl TextEditorView {
         let inspect = enabled && ui.input(|i| primary_modifier(i.modifiers));
         let mut lenses: Vec<_> = language
             .as_ref()
-            .and_then(|s| s.project_index.as_ref().zip(s.project_path.as_ref()))
-            .and_then(|(index, path)| index.declarations_by_file.get(path))
             .into_iter()
-            .flatten()
+            .flat_map(|s| &s.painted_symbols)
             .filter(|d| {
                 matches!(
                     d.kind,
@@ -361,10 +356,8 @@ impl TextEditorView {
                     }
                     let unused: Vec<_> = language
                         .as_ref()
-                        .and_then(|s| s.project_index.as_ref().zip(s.project_path.as_ref()))
-                        .and_then(|(index, path)| index.declarations_by_file.get(path))
                         .into_iter()
-                        .flatten()
+                        .flat_map(|s| &s.painted_symbols)
                         .filter(|d| {
                             d.is_unused()
                                 && d.range.start >= start
@@ -912,6 +905,8 @@ impl TextEditorView {
         state: &mut crate::language::EditorLanguage,
         explicit: bool,
     ) {
+        state.rebase(buffer);
+        state.capture_index();
         let head = buffer.cursors().as_slice()[0].head;
         let line = buffer.rope().line(head.line as usize).to_string();
         let local = head.byte_offset - buffer.rope().line_to_byte(head.line as usize);
@@ -959,12 +954,25 @@ impl TextEditorView {
     ) -> bool {
         use nozhik_language_support::lsp_types::CompletionItemKind as Kind;
         let screen = ui.ctx().screen_rect();
-        let width = 500.0_f32.min((screen.width() - 16.0).max(0.0));
+        let width = state
+            .completions
+            .iter()
+            .map(|item| {
+                ui.painter()
+                    .layout_no_wrap(item.label.clone(), FontId::monospace(13.0), theme::TEXT)
+                    .size()
+                    .x
+                    + 120.0
+            })
+            .fold(220.0_f32, f32::max)
+            .min(440.0)
+            .min((screen.width() - 16.0).max(0.0));
         let height = state
             .completions
             .iter()
             .take(9)
-            .fold(12.0, |height, _| height + 28.0);
+            .fold(10.0_f32, |height, _| height + 24.0)
+            .min((screen.height() * 0.45).max(34.0));
         let origin = egui::pos2(
             origin
                 .x
@@ -988,16 +996,20 @@ impl TextEditorView {
                     .corner_radius(7)
                     .inner_margin(5)
                     .show(ui, |ui| {
+                        // Reset egui Area's remembered small bounds before the ScrollArea lays out.
+                        ui.set_min_size(egui::vec2((width - 10.0).max(0.0), height - 10.0));
+                        ui.set_max_size(egui::vec2((width - 10.0).max(0.0), height - 10.0));
                         ui.set_width((width - 10.0).max(0.0));
                         ui.spacing_mut().item_spacing.y = 0.0;
                         egui::ScrollArea::vertical()
                             .id_salt("completion_rows")
-                            .max_height((screen.height() - 36.0).clamp(28.0, 252.0))
+                            .min_scrolled_height(1.0)
+                            .max_height(height - 10.0)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
                                 for (i, item) in state.completions.iter().enumerate() {
                                     let (rect, row) = ui.allocate_exact_size(
-                                        egui::vec2(ui.available_width(), 28.0),
+                                        egui::vec2(ui.available_width(), 24.0),
                                         Sense::click(),
                                     );
                                     if row.hovered()
@@ -2542,6 +2554,167 @@ mod tests {
             assert_eq!(buffer.rope().to_string(), source);
         }
         Ok(())
+    }
+
+    #[test]
+    fn typing_keeps_php_colors_lenses_and_this_completion_until_worker_reply()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nozhik_language_support::project_indexer::{IndexEvent, ProjectIndexer};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("sample.php");
+        let source = "<?php\nclass Sample {\n    protected $value;\n    public function work() {\n        $this\n    }\n}\n";
+        std::fs::write(&path, source)?;
+        let indexer = ProjectIndexer::start(dir.path().into(), || {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let index = loop {
+            if let Some(index) = indexer.drain().find_map(|event| match event {
+                IndexEvent::Snapshot(index, _) if index.declaration("\\sample").is_some() => {
+                    Some(index)
+                }
+                _ => None,
+            }) {
+                break index;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut buffer = TextBuffer::load_from_str(BufferId(951), source);
+        let caret = source.find("$this").ok_or("caret")? + 5;
+        let head = buffer.position_at(caret)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut state = crate::language::EditorLanguage {
+            project_index: Some(index),
+            project_path: Some(path),
+            spans: nozhik_language_support::highlighter::Highlighter::php()?.highlight(source)?,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        let before = completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
+        let position = text_position(&before, "class Sample {", 0).ok_or("class not painted")?;
+        let span_count = state.spans.len();
+        let after = completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text("-".into()), Event::Text(">".into())],
+            1.0,
+        )?;
+        assert!(
+            state.project_index.is_none(),
+            "navigation must await current revision"
+        );
+        assert_eq!(state.spans.len(), span_count);
+        assert_eq!(text_position(&after, "class Sample {", 0), Some(position));
+        assert!(state.painted_symbols.iter().any(|d| d.name == "work"));
+        assert!(state.completions.iter().any(|i| i.label == "value"));
+        state.selected = state
+            .completions
+            .iter()
+            .position(|i| i.label == "value")
+            .ok_or("property")?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![completion_key(Key::Tab, false)],
+            2.0,
+        )?;
+        assert!(buffer.rope().to_string().contains("$this->value"));
+        // A Unicode edit before every declaration shifts styling and lens coordinates together.
+        let old_line = state
+            .painted_symbols
+            .iter()
+            .find(|d| d.name == "work")
+            .ok_or("work")?
+            .line;
+        buffer.insert(0, "// я\n")?;
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 3.0)?;
+        assert_eq!(
+            state
+                .painted_symbols
+                .iter()
+                .find(|d| d.name == "work")
+                .ok_or("work")?
+                .line,
+            old_line + 1
+        );
+        for span in &state.spans {
+            assert!(buffer.rope().to_string().is_char_boundary(span.range.start));
+            assert!(buffer.rope().to_string().is_char_boundary(span.range.end));
+        }
+        buffer.undo()?;
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 4.0)?;
+        assert_eq!(
+            state
+                .painted_symbols
+                .iter()
+                .find(|d| d.name == "work")
+                .ok_or("work")?
+                .line,
+            old_line
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completion_popup_grows_to_many_visible_rows_and_shrinks() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("popup-size-regression");
+        for count in [1, 30, 1, 30] {
+            let mut state = crate::language::EditorLanguage {
+                completions: (0..count)
+                    .map(|i| nozhik_language_support::lsp_types::CompletionItem {
+                        label: format!("suggestion{i:02}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            // Area sizing needs its initial measurement pass, as in the application.
+            for pass in 0..2 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            TextEditorView::completion_popup(
+                                ui,
+                                id,
+                                egui::pos2(100.0, 200.0),
+                                &mut state,
+                            );
+                        });
+                    },
+                );
+                let visible = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => {
+                            text.galley.job.text.starts_with("suggestion")
+                                && shape.clip_rect.contains(text.pos + egui::vec2(0.0, 12.0))
+                        }
+                        _ => false,
+                    })
+                    .count();
+                if pass == 1 {
+                    assert!(
+                        visible >= count.min(8),
+                        "only {visible} rows for {count} suggestions"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

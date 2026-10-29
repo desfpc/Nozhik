@@ -100,6 +100,9 @@ pub fn complete_fragment(
     let current_lineage = current
         .as_ref()
         .map_or_else(Vec::new, |name| index.class_lineage(name));
+    let composed = current
+        .as_ref()
+        .map_or_else(Vec::new, |name| index.trait_lineage(name));
     let prefix = access.map_or_else(
         || &source[crate::completion::prefix(source, byte)],
         |(_, prefix, _)| prefix,
@@ -112,7 +115,9 @@ pub fn complete_fragment(
                     .as_ref()
                     .is_some_and(|owner| target_lineage.contains(owner))
                     && (d.visibility == Visibility::Public
-                        || d.owner == current
+                        || d.owner
+                            .as_ref()
+                            .is_some_and(|owner| composed.contains(owner))
                         || (d.visibility == Visibility::Protected
                             && d.owner
                                 .as_ref()

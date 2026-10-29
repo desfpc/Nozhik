@@ -1042,3 +1042,44 @@ file drops its receiver so stale replies cannot install colors. Config's shared
 language registry, enabled_languages and file_types syntax palette govern parsing
 and painting. egui lays out only visible colored rows; selection/copy and both
 scroll axes remain available. No new crate dependency or source file mutation.
+
+
+### Git History actions and synchronization (2026-10-29)
+
+`vcs::history_actions` handles owned `HistoryRequest` commands on the serial worker.
+Each dialog captures expected HEAD and branch; both are rechecked before execution.
+Single actions implement staged-only amend (retaining author/unstaged contents),
+soft/mixed/hard reset, safe detached checkout, first-parent revert, branch/tag creation
+without switching, tag copying and validated github.com origin commit URLs.
+History snapshots walk first parents and decorate commits with their parent count/tags;
+non-commit tags do not break history. UI keeps a stable SHA selection anchor, supports
+Shift ranges/Cmd-Ctrl toggles, and right-click preserves an existing group.
+`SelectionDetails` returns one owned `HistorySelection`: selected commit metadata
+and a sorted union of `HistoryFile` entries. Each entry retains newest-first
+contributing commit IDs, newest delta, current worktree availability and an optional
+encoded historical GitHub URL. The UI deduplicates paths and shows each file's
+newest selected commit diff, preserving the existing full-context/syntax path.
+Badges/tooltips describe other selected contributors, with no composition across
+skipped commits. Selection changes, empty selections and pruned history invalidate
+outstanding details/diffs using the existing request and generation gates.
+`vcs_panel::history_files` supplies a read-only context menu: local open/reveal use
+the current worktree, clipboard uses native absolute/relative paths, GitHub links
+use immutable commit IDs (first parent for deleted files). Missing working copies
+and unsupported origins disable the corresponding actions; historical inspection
+never restores files or mutates refs/index.
+
+Cherry-pick, contiguous squash and reorder preflight patches in temporary in-memory
+indexes; conflicts leave refs, worktree and the disk index unchanged. Unattached Git
+objects may be written during preflight. Reorder publishes a complete first-parent
+suffix through HEAD; the UI extends that suffix when moving down. Merge patches use
+mainline 1 and replay flattens merges; root replay/revert/squash are rejected. Rewrites
+and replay/revert require clean saved state; existing editor buffers stay retained.
+There is no force-push, hook/GPG or interactive conflict continuation for replay.
+Dialogs retain worker errors and block global shortcuts through the existing modal gate.
+
+The origin header chooses Fetch/Publish/Pull/Push/Pull & Push from upstream state,
+with separate down/up count badges. Counts use the fetched tracking refs; local status
+polling does not fetch automatically. `PullPush` requires a clean origin-tracking
+branch, fetches, fast-forwards or merges divergence, then pushes without force. A merge
+conflict opens the existing resolution dialog and leaves push for an explicit action
+after Continue. Worker errors also keep merge state available to the existing banner.

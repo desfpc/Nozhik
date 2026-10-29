@@ -3,9 +3,11 @@ use crate::{diff_view::DiffView, theme};
 use egui::{Color32, Context};
 use nozhik_vcs::{
     Outcome, Task, Vcs,
-    model::{ChangeStatus, CommitInfo, DiffTarget, FileChange, GitRepoStatus},
+    model::{ChangeStatus, CommitInfo, DiffTarget, FileChange, GitRepoStatus, HistorySelection},
 };
 mod controls;
+mod history_actions;
+mod history_files;
 
 use std::{
     collections::HashSet,
@@ -46,7 +48,10 @@ pub struct VcsPanel {
     history_limit: usize,
     selected: Option<PathBuf>,
     history_sha: Option<String>,
-    details: Option<(CommitInfo, Vec<FileChange>)>,
+    history_selection: Vec<String>,
+    history_anchor: Option<String>,
+    history_dialog: Option<history_actions::ActionDialog>,
+    details: Option<HistorySelection>,
     details_request: u64,
     diff_target: Option<DiffTarget>,
     diff_request: u64,
@@ -90,6 +95,9 @@ impl Default for VcsPanel {
             history_limit: 100,
             selected: None,
             history_sha: None,
+            history_selection: Vec::new(),
+            history_anchor: None,
+            history_dialog: None,
             details: None,
             details_request: 0,
             diff_target: None,
@@ -125,6 +133,9 @@ impl VcsPanel {
         self.fetch_request = 0;
         self.open_paths.clear();
         self.history.clear();
+        self.history_selection.clear();
+        self.history_anchor = None;
+        self.history_dialog = None;
         self.details = None;
         self.selected = None;
         self.history_sha = None;
@@ -153,9 +164,10 @@ impl VcsPanel {
                 | Task::Diff(_)
                 | Task::History(_)
                 | Task::Details(_)
+                | Task::SelectionDetails(_)
                 | Task::PreviewMerge(_)
         );
-        if matches!(&task, Task::Fetch | Task::Pull) {
+        if matches!(&task, Task::Fetch | Task::Pull | Task::PullPush) {
             self.fetch_request = id;
         }
         if self.worker.send(self.generation, id, task) {
@@ -175,6 +187,9 @@ impl VcsPanel {
         std::mem::take(&mut self.open_paths)
     }
     pub(crate) const fn modal_open(&self) -> bool {
+        if self.history_dialog.is_some() {
+            return true;
+        }
         !matches!(self.dialog, controls::Dialog::None)
             || self.discard.is_some()
             || self.open_branches
@@ -233,6 +248,7 @@ impl VcsPanel {
         }
         self.confirm_discard(ctx);
         self.dialogs(ctx);
+        self.history_action_dialog(ctx);
     }
     fn accept(&mut self, id: u64, outcome: Outcome, ctx: &Context) {
         match outcome {
@@ -268,19 +284,22 @@ impl VcsPanel {
                 }
                 self.diff.set(diff);
             }
-            Outcome::History(history) => {
-                self.history = history;
-            }
-            Outcome::Details { commit, files }
+            Outcome::Clipboard(text) => ctx.copy_text(text),
+            Outcome::CommitUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            Outcome::History(history) => self.update_history(history),
+            Outcome::SelectionDetails(details)
                 if self.mode == Mode::History && id == self.details_request =>
             {
-                let first = files.first().map(|f| f.path.clone());
-                let sha = commit.sha.clone();
-                self.details = Some((commit, files));
-                if let Some(path) = first {
-                    self.request_diff(DiffTarget::Commit { sha, path });
+                let first = details
+                    .files
+                    .first()
+                    .and_then(nozhik_vcs::model::HistoryFile::diff_target);
+                self.details = Some(details);
+                if let Some(target) = first {
+                    self.request_diff(target);
                 } else {
                     self.diff.clear();
+                    self.diff_target = None;
                 }
             }
             Outcome::Committed(commit) => {
@@ -295,9 +314,12 @@ impl VcsPanel {
                 if id == self.fetch_request {
                     self.last_fetch = Some(Instant::now());
                 }
-                if message.starts_with("Merge updated") && self.merge_preview.unwrap_or(0) > 0 {
+                if message.starts_with("Merge updated")
+                    && (self.merge_preview.unwrap_or(0) > 0 || message.contains("then push"))
+                {
                     self.dialog = controls::Dialog::Conflicts;
                 }
+                self.submit(Task::History(self.history_limit));
                 self.notice = message;
                 self.submit(Task::Refresh);
             }
@@ -388,7 +410,7 @@ impl VcsPanel {
                         .clone()
                         .or_else(|| self.history.first().map(|c| c.sha.clone()))
                     {
-                        self.select_commit(sha);
+                        self.history_click(&sha, egui::Modifiers::NONE);
                     }
                 }
             }
@@ -524,10 +546,18 @@ impl VcsPanel {
         self.details = None;
         self.diff_target = None;
         self.diff_request = 0;
-        self.details_request = self.submit(Task::Details(sha));
+        let mut shas: Vec<_> = self
+            .history
+            .iter()
+            .filter(|c| self.history_selection.contains(&c.sha))
+            .map(|c| c.sha.clone())
+            .collect();
+        if shas.is_empty() {
+            shas.push(sha);
+        }
+        self.details_request = self.submit(Task::SelectionDetails(shas));
     }
     fn history_list(&mut self, ui: &mut egui::Ui) {
-        let mut select = None;
         if self.history.is_empty() {
             ui.weak("No commits yet");
         }
@@ -540,17 +570,23 @@ impl VcsPanel {
             .show_rows(ui, 56.0, self.history.len(), |ui, rows| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for index in rows {
-                    let commit = &self.history[index];
-                    let selected = self.history_sha.as_ref() == Some(&commit.sha);
+                    let commit = self.history[index].clone();
+                    let selected = self.history_selection.contains(&commit.sha);
                     let response = history_row(
                         ui,
                         selected,
                         &commit.summary,
                         Some(&format!("{} · {}", commit.author, commit.relative_time)),
+                        commit.tags.first().map(String::as_str),
                     );
                     if response.clicked() {
-                        select = Some(commit.sha.clone());
+                        self.history_click(&commit.sha, ui.input(|i| i.modifiers));
                     }
+                    if response.secondary_clicked() && !self.history_selection.contains(&commit.sha)
+                    {
+                        self.history_click(&commit.sha, egui::Modifiers::NONE);
+                    }
+                    response.context_menu(|ui| self.history_menu(ui));
                 }
             });
         if self.history.len() >= self.history_limit
@@ -565,9 +601,6 @@ impl VcsPanel {
             self.history_limit = (self.history_limit + 100).min(10_000);
             self.submit(Task::History(self.history_limit));
         }
-        if let Some(sha) = select {
-            self.select_commit(sha);
-        }
     }
     pub(crate) fn center(&mut self, ui: &mut egui::Ui, font_size: f32) {
         Self::git_style(ui);
@@ -578,30 +611,31 @@ impl VcsPanel {
         }
     }
     fn history_center(&mut self, ui: &mut egui::Ui, font_size: f32) {
-        let Some((commit, files)) = self.details.clone() else {
-            ui.weak("Select a commit in History");
+        let Some(details) = self.details.clone() else {
+            ui.weak(if self.history_selection.is_empty() {
+                "Select a commit in History"
+            } else {
+                "Loading selected commits…"
+            });
+            return;
+        };
+        let Some(commit) = details.commits.first() else {
             return;
         };
         egui::Frame::new().inner_margin(10).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(egui::RichText::new(&commit.summary).strong()).truncate());
-            ui.horizontal(|ui| {
-                ui.label(format!("{} · {}", commit.author, commit.relative_time));
-                if ui
-                    .small_button(commit.sha.get(..7).unwrap_or(&commit.sha))
-                    .on_hover_text("Copy SHA")
-                    .clicked()
-                {
-                    ui.ctx().copy_text(commit.sha.clone());
+            if details.commits.len() > 1 {
+                ui.strong(format!("Showing changes from {} commits", details.commits.len()));
+                ui.weak("Each file shows its newest selected commit. Badges mark files changed in multiple selected commits.");
+            } else {
+                ui.add(egui::Label::new(egui::RichText::new(&commit.summary).strong()).truncate());
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} · {}", commit.author, commit.relative_time));
+                    if ui.small_button(commit.sha.get(..7).unwrap_or(&commit.sha)).on_hover_text("Copy SHA").clicked() { ui.ctx().copy_text(commit.sha.clone()); }
+                });
+                if !commit.body.is_empty() {
+                    egui::ScrollArea::vertical().id_salt("commit_body").max_height(80.0).show(ui, |ui| { ui.label(&commit.body); });
                 }
-            });
-            if !commit.body.is_empty() {
-                egui::ScrollArea::vertical()
-                    .id_salt("commit_body")
-                    .max_height(80.0)
-                    .show(ui, |ui| {
-                        ui.label(&commit.body);
-                    });
             }
         });
         ui.separator();
@@ -613,28 +647,38 @@ impl VcsPanel {
             .frame(egui::Frame::new().fill(controls::SURFACE))
             .show_inside(ui, |ui| {
                 egui::Frame::new().inner_margin(10).show(ui, |ui| {
-                    ui.label(format!("{} changed files", files.len()));
+                    ui.label(format!("{} changed files", details.files.len()));
                 });
                 egui::ScrollArea::vertical()
-                    .id_salt(("commit_files", &commit.sha))
+                    .id_salt("commit_files")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        for file in &files {
-                            let diff_target = DiffTarget::Commit {
-                                sha: commit.sha.clone(),
-                                path: file.path.clone(),
+                        for file in &details.files {
+                            let Some(diff_target) = file.diff_target() else {
+                                continue;
                             };
+                            let badge = (file.commits.len() > 1)
+                                .then(|| format!("{} commits", file.commits.len()));
                             let response = history_row(
                                 ui,
                                 self.diff_target.as_ref() == Some(&diff_target),
-                                &file.path.to_string_lossy(),
+                                &file.change.path.to_string_lossy(),
                                 None,
+                                badge.as_deref(),
                             );
-                            controls::paint_file_status(ui, file, response.rect);
-                            if response.clicked() {
+                            controls::paint_file_status(ui, &file.change, response.rect);
+                            if file.commits.len() > 1 {
+                                response.clone().on_hover_text(format!(
+                                    "Changed in {} selected commits. Showing newest: {}",
+                                    file.commits.len(),
+                                    file.commits.first().map_or("", String::as_str)
+                                ));
+                            }
+                            if response.clicked() || response.secondary_clicked() {
                                 target = Some(diff_target);
                             }
+                            response.context_menu(|ui| self.history_file_menu(ui, file));
                         }
                     });
             });
@@ -718,6 +762,7 @@ fn history_row(
     selected: bool,
     title: &str,
     subtitle: Option<&str>,
+    badge: Option<&str>,
 ) -> egui::Response {
     let height = if subtitle.is_some() { 56.0 } else { 32.0 };
     let (rect, response) = ui.allocate_exact_size(
@@ -740,6 +785,28 @@ fn history_row(
     let mut text_rect = rect.shrink2(egui::vec2(12.0, 6.0));
     if subtitle.is_none() {
         text_rect.max.x -= 16.0;
+    }
+    if let Some(badge) = badge {
+        let label: String = badge.chars().take(16).collect();
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label, egui::FontId::proportional(12.0), controls::TEXT);
+        let size = galley.size() + egui::vec2(10.0, 4.0);
+        let badge_rect = egui::Rect::from_center_size(
+            egui::pos2(
+                size.x.mul_add(-0.5, rect.right()) - if subtitle.is_some() { 10.0 } else { 30.0 },
+                rect.center().y,
+            ),
+            size,
+        );
+        ui.painter()
+            .rect_filled(badge_rect, 6, egui::Color32::from_rgb(82, 93, 104));
+        ui.painter().galley(
+            badge_rect.min + egui::vec2(5.0, 2.0),
+            galley,
+            controls::TEXT,
+        );
+        text_rect.max.x = badge_rect.left() - 6.0;
     }
     let painter = ui
         .painter()
@@ -840,22 +907,13 @@ mod tests {
                 panel.center(ui, 14.0);
             });
         });
-        // An old Details response must not switch a Changes view to a historical diff.
-        let commit = panel.history[0].clone();
+        // An old selection response must not switch Changes to a historical diff.
+        let details = panel.details.clone().ok_or("missing selection details")?;
         panel.mode = Mode::Changes;
         panel.diff_request = 0;
         panel.accept(
             panel.details_request,
-            Outcome::Details {
-                commit,
-                files: vec![FileChange {
-                    path: "main.rs".into(),
-                    old_path: None,
-                    status: ChangeStatus::New,
-                    is_staged: false,
-                    has_unstaged: false,
-                }],
-            },
+            Outcome::SelectionDetails(details),
             &ctx,
         );
         assert_eq!(panel.diff_request, 0);

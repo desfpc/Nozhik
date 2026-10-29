@@ -1893,3 +1893,82 @@ snapshot isolation. No manual native GUI smoke or Windows build/Clippy/GUI was r
 Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
 --check verified current source fingerprint and both payload checksums. No Windows
 target cache was created.
+
+### Git History commit actions and origin badges (2026-10-29)
+
+Added stable SHA-based Shift range/Cmd-Ctrl toggle selection and right-click
+selection targeting. Single-commit menus implement Amend, soft/mixed/hard Reset,
+detached Checkout, Reorder, first-parent Revert, branch/tag creation, Cherry-pick,
+SHA/tag copying and validated View on GitHub. Multi-selection menus implement
+ordered Cherry-pick, contiguous Squash, Reorder and SHA copying. Concrete dialogs
+capture HEAD and branch, retain errors, accept summary/body or branch/tag names,
+filter local cherry-pick destinations, create new destinations and move selected
+commits with buttons/Up/Down (Enter confirms). History walks first parents,
+displays tag badges and explicitly labels the last-clicked details for groups.
+
+Worker preflights replay/revert patches in memory and refuses conflicts without
+changing refs, worktree or the disk index. Staged-only amend retains the original
+author and unstaged work. Merge replay uses mainline 1 and flattens the merge;
+root replay/revert/squash are currently unavailable. No forced push or interactive
+replay conflict continuation is introduced. Existing editor buffers remain retained.
+
+Origin now displays Fetch/Publish/Pull/Push/Pull & Push with independent down/up
+count badges. Combined sync fetches then fast-forwards or merges divergence and
+pushes without force. Conflicts enter the existing merge resolution UI and leave
+push explicit after Continue. Counts reflect fetched tracking refs, not an
+implicit periodic network request. Badge/button arrows are vector geometry: native
+smoke caught missing Unicode arrow glyphs and the final build fixes them.
+
+Validation: full native workspace/all-features tests with system access passed —
+201 passed, 0 failed, 5 existing system/live tests ignored. The sandbox attempt
+failed on existing local TCP mock permissions. Final Git UI rerun passed after
+the vector-arrow change; native workspace/all-targets/all-features Clippy with
+-D warnings, rustfmt, workspace release build and diff whitespace checks passed.
+Temporary repository tests cover actual pointer selection/menu targeting, dialog
+cancel/revert/cherry-pick/squash/reorder, all reset modes, stale HEAD/same-SHA branch
+gates, author/index retention, non-commit tags, first-parent merge replay, conflict
+preflight and local-bare-origin combined sync/conflict-without-push.
+
+Native macOS smoke on a separate temporary project/settings (AI/languages off)
+verified full-width selected rows, Shift group highlighting, group context menu,
+Squash summary/body/button layout and cancellation. A final packaged app launch
+verified Pull & Push with two correctly drawn directional/count badges. Test
+processes were stopped. No real project branch/commit/push was performed.
+Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
+--check verified source fingerprint and payload checksums. Windows build/Clippy/GUI
+were not run and no Windows target cache was created.
+
+### Git History selected-file union and read-only file menu (2026-10-29)
+
+SelectionDetails now returns owned metadata and a sorted union of files from all
+selected commits. Each path appears once and retains its selected contributor IDs.
+Per clarified user behavior, each file opens the ordinary diff from its newest
+selected contributing commit; skipped/intermediate commits are not composed.
+A count badge and tooltip explain repeated contributors. This preserves existing
+PHP syntax, expandable context, immutable SHA diff caching and text selection.
+Changing/toggling/pruning the selection invalidates stale requests; deselecting all
+clears details/diff. Union includes selected additions later deleted or renamed.
+
+History file menus offer Reveal in File Manager, Open in Nozhik, Open with Default
+Program, Copy File Path, Copy Relative File Path and View on GitHub. Local actions
+use the current saved worktree and are disabled when it is absent; copy remains
+available. Worker-produced GitHub links encode path bytes and use immutable commit
+IDs, or the first parent for deleted paths. Unsupported origins disable browser
+actions. Historical inspection never stages, discards, restores files or moves refs.
+
+Validation: 206 native workspace/all-features tests passed with system access,
+0 failed, 5 existing system/live tests ignored. Native workspace/all-targets/
+all-features Clippy with -D warnings, rustfmt, workspace release build and diff
+whitespace checks passed. New disposable-repository regressions cover nonadjacent
+selection, duplicate paths, newest-selected patches, skipped-only files, unchanged
+index/worktree/HEAD, root/deletion/rename metadata and encoded historical links.
+Actual headless egui clicks verify file-menu contents, right-click targeting,
+clipboard output, editor-open requests, browser URLs, disabled missing-file/origin
+actions, count badges, selection toggles and obsolete response rejection.
+
+The final packaged native macOS app launched with isolated temporary project and
+settings; CUA returned noWindowsAvailable for click actions, so no manual native
+menu interaction is claimed for this iteration. The test process was stopped.
+Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
+--check verified current source fingerprint and both payload checksums. No real
+repository branch/commit/push or Windows build/Clippy/GUI was performed.

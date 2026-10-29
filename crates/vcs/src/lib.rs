@@ -1,5 +1,7 @@
 //! Git engine with one serial worker. All repository and network I/O stays there.
 mod git_worker;
+mod history_actions;
+mod history_selection;
 mod merge;
 pub mod model;
 pub mod project_paths;
@@ -44,6 +46,8 @@ pub enum Task {
     History(usize),
     /// Read commit metadata and affected files.
     Details(String),
+    /// Read metadata and the union of changed paths for distinct commits, newest first.
+    SelectionDetails(Vec<String>),
     /// Commit the current index with the configured Git identity.
     Commit {
         /// Required single-line title.
@@ -51,6 +55,10 @@ pub enum Task {
         /// Optional body.
         body: String,
     },
+    /// Apply a confirmed history action against the expected HEAD.
+    HistoryAction(model::HistoryRequest),
+    /// Fetch, merge the tracked branch if necessary, then push without force.
+    PullPush,
     /// Fetch origin, preserving local working files.
     Fetch,
     /// Non-forced push to origin; establishes tracking for an untracked branch.
@@ -109,6 +117,8 @@ pub enum Outcome {
         /// Changed files.
         files: Vec<FileChange>,
     },
+    /// Owned metadata, union of files and historical links for a commit selection.
+    SelectionDetails(model::HistorySelection),
     /// Commit succeeded. Status/history must be refreshed from the repository.
     Committed(CommitInfo),
     /// Conflict count from a read-only merge simulation.
@@ -118,6 +128,10 @@ pub enum Outcome {
         /// Number of conflicting paths.
         conflicts: usize,
     },
+    /// Text to copy to the system clipboard.
+    Clipboard(String),
+    /// Validated HTTPS commit URL to open.
+    CommitUrl(String),
     /// Mutation completed; refresh status/history afterwards.
     Done(String),
 }

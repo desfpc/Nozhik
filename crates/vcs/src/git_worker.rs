@@ -49,6 +49,11 @@ impl GitWorker {
             }
             Task::Diff(target) => return Ok(Outcome::Diff(file_diff(repo, &target)?)),
             Task::History(limit) => return Ok(Outcome::History(history(repo, limit)?)),
+            Task::SelectionDetails(shas) => {
+                return Ok(Outcome::SelectionDetails(
+                    crate::history_selection::details(repo, &shas)?,
+                ));
+            }
             Task::Details(sha) => {
                 let commit = repo.find_commit(git2::Oid::from_str(&sha)?)?;
                 let tree = commit.tree()?;
@@ -66,6 +71,40 @@ impl GitWorker {
             }
             Task::Commit { summary, body } => {
                 return Ok(Outcome::Committed(commit(repo, &summary, &body)?));
+            }
+            Task::HistoryAction(request) => return crate::history_actions::execute(repo, request),
+            Task::PullPush => {
+                require_clean(repo)?;
+                fetch(repo)?;
+                let name = repo.head()?.shorthand()?.to_owned();
+                let upstream = repo.find_branch(&name, BranchType::Local)?.upstream()?;
+                if !upstream
+                    .name()?
+                    .is_some_and(|name| name.starts_with("origin/"))
+                {
+                    return Err(invalid("Pull & Push supports origin upstreams only"));
+                }
+                let target = upstream.get().peel_to_commit()?;
+                let head = repo.head()?.peel_to_commit()?;
+                let (ahead, behind) = repo.graph_ahead_behind(head.id(), target.id())?;
+                if behind > 0 {
+                    if ahead == 0 {
+                        pull(repo)?;
+                    } else {
+                        let upstream_name = upstream
+                            .name()?
+                            .ok_or_else(|| invalid("Missing upstream name"))?
+                            .to_owned();
+                        crate::merge::begin(repo, &upstream_name)?;
+                        if repo.state() != git2::RepositoryState::Clean {
+                            return Ok(Outcome::Done(
+                                "Merge updated; resolve conflicts, then push".into(),
+                            ));
+                        }
+                    }
+                }
+                push(repo)?;
+                "Pulled and pushed origin"
             }
             Task::Fetch => {
                 fetch(repo)?;
@@ -177,7 +216,7 @@ pub fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>> {
         Err(error) => Err(error.into()),
     }
 }
-fn parent_tree<'repo>(commit: &git2::Commit<'repo>) -> Result<Option<git2::Tree<'repo>>> {
+pub fn parent_tree<'repo>(commit: &git2::Commit<'repo>) -> Result<Option<git2::Tree<'repo>>> {
     if commit.parent_count() == 0 {
         return Ok(None);
     }
@@ -326,7 +365,7 @@ fn status_changes(repo: &Repository) -> Result<Vec<FileChange>> {
     changes.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(changes)
 }
-fn change_from_delta(delta: &git2::DiffDelta<'_>) -> Option<FileChange> {
+pub fn change_from_delta(delta: &git2::DiffDelta<'_>) -> Option<FileChange> {
     let path = delta
         .new_file()
         .path()
@@ -516,6 +555,8 @@ pub fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
     };
     CommitInfo {
         sha: commit.id().to_string(),
+        parent_count: commit.parent_count(),
+        tags: Vec::new(),
         summary: String::from_utf8_lossy(commit.summary_bytes().unwrap_or(b"(no summary)"))
             .into_owned(),
         body: String::from_utf8_lossy(commit.body_bytes().unwrap_or_default())
@@ -537,9 +578,26 @@ fn history(repo: &Repository, limit: usize) -> Result<Vec<CommitInfo>> {
     let mut walk = repo.revwalk()?;
     walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
     walk.push_head()?;
-    walk.take(limit.min(10_000))
+    walk.simplify_first_parent()?;
+    let mut entries: Vec<CommitInfo> = walk
+        .take(limit.min(10_000))
         .map(|id| Ok(commit_info(&repo.find_commit(id?)?)))
-        .collect()
+        .collect::<Result<_>>()?;
+    for tag in &repo.tag_names(None)? {
+        let Some(tag) = tag? else {
+            continue;
+        };
+        // Git tags may legally point to blobs or trees; those do not decorate history.
+        let object = repo.revparse_single(&format!("refs/tags/{tag}"))?;
+        let Ok(target) = object.peel_to_commit() else {
+            continue;
+        };
+        let id = target.id().to_string();
+        if let Some(commit) = entries.iter_mut().find(|c| c.sha == id) {
+            commit.tags.push(tag.to_owned());
+        }
+    }
+    Ok(entries)
 }
 fn file_diff(repo: &Repository, target: &DiffTarget) -> Result<FileDiff> {
     let mut patch = file_diff_context(repo, target, 3)?;

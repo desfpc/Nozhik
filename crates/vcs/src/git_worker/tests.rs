@@ -194,6 +194,32 @@ fn local_origin_fetch_push_ahead_behind_and_fast_forward()
     assert!(pull(&repo).is_err());
     assert!(push(&repo).is_err());
     assert_eq!(fs::read_to_string(dir.path().join("local.txt"))?, "local");
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().to_path_buf()))?;
+    worker.execute(Task::PullPush)?;
+    assert_eq!((status(&repo)?.ahead, status(&repo)?.behind), (0, 0));
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_count(), 2);
+    assert_eq!(
+        remote
+            .find_reference(&format!("refs/heads/{branch}"))?
+            .target(),
+        repo.head()?.target()
+    );
+    pull(&peer)?;
+    history_commit(&repo, "file.txt", "local conflict\n")?;
+    history_commit(&peer, "file.txt", "remote conflict\n")?;
+    push(&peer)?;
+    let remote_tip = peer.head()?.target();
+    let result = worker.execute(Task::PullPush)?;
+    assert!(matches!(result, Outcome::Done(message) if message.contains("then push")));
+    assert_eq!(repo.state(), git2::RepositoryState::Merge);
+    assert_eq!(
+        remote
+            .find_reference(&format!("refs/heads/{branch}"))?
+            .target(),
+        remote_tip
+    );
+    crate::merge::abort(&repo)?;
     Ok(())
 }
 
@@ -473,5 +499,425 @@ fn full_context_tracks_worktree_index_and_historical_versions()
     let full = display.full_hunks.ok_or("missing history context")?;
     assert!(full[0].lines.iter().any(|l| l.text.contains("staged")));
     assert!(!full[0].lines.iter().any(|l| l.text.contains("unrelated")));
+    Ok(())
+}
+
+fn history_action(
+    repo: &Repository,
+    ids: &[git2::Oid],
+    action: crate::model::HistoryAction,
+) -> Result<Outcome> {
+    crate::history_actions::execute(
+        repo,
+        crate::model::HistoryRequest {
+            expected_head: repo.head()?.peel_to_commit()?.id().to_string(),
+            expected_branch: status(repo)?.branch,
+            commits: ids.iter().map(ToString::to_string).collect(),
+            action,
+        },
+    )
+}
+fn history_commit(repo: &Repository, name: &str, text: &str) -> Result<git2::Oid> {
+    fs::write(workdir(repo)?.join(name), text)?;
+    stage(repo, &[name.into()], true)?;
+    Ok(git2::Oid::from_str(&commit(repo, name, "")?.sha)?)
+}
+#[test]
+fn history_reorder_squash_and_conflict_preflight()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::model::HistoryAction;
+    let (_dir, repo) = repository()?;
+    history_commit(&repo, "base", "base\n")?;
+    let first = history_commit(&repo, "first", "first\n")?;
+    let second = history_commit(&repo, "second", "second\n")?;
+    let third = history_commit(&repo, "third", "third\n")?;
+    let original_tree = repo.head()?.peel_to_tree()?.id();
+    history_action(&repo, &[second, third, first], HistoryAction::Reorder)?;
+    let entries = history(&repo, 10)?;
+    assert_eq!(
+        entries
+            .iter()
+            .map(|third| third.summary.as_str())
+            .collect::<Vec<_>>(),
+        vec!["second", "third", "first", "base"]
+    );
+    assert_eq!(repo.head()?.peel_to_tree()?.id(), original_tree);
+    let ids = entries
+        .iter()
+        .take(2)
+        .map(|third| git2::Oid::from_str(&third.sha))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    history_action(
+        &repo,
+        &ids,
+        HistoryAction::Squash("Combined\n\nBody".into()),
+    )?;
+    assert_eq!(history(&repo, 10)?.len(), 3);
+    assert_eq!(history(&repo, 1)?[0].summary, "Combined");
+    assert_eq!(repo.head()?.peel_to_tree()?.id(), original_tree);
+    let base = repo.head()?.peel_to_commit()?.id();
+    let earlier = history_commit(&repo, "base", "next\n")?;
+    let later = history_commit(&repo, "base", "last\n")?;
+    assert!(history_action(&repo, &[earlier, later], HistoryAction::Reorder).is_err());
+    assert_eq!(repo.head()?.target(), Some(later));
+    assert_eq!(fs::read_to_string(workdir(&repo)?.join("base"))?, "last\n");
+    assert_eq!(status(&repo)?.changes, Vec::<FileChange>::new());
+    assert!(
+        history_action(
+            &repo,
+            &[later, base],
+            HistoryAction::Squash("Invalid".into())
+        )
+        .is_err()
+    );
+    assert_eq!(repo.head()?.target(), Some(later));
+    Ok(())
+}
+#[test]
+fn history_amend_reset_revert_branch_tag_and_stale_dialog()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::model::{HistoryAction, HistoryRequest, ResetMode};
+    let (_dir, repo) = repository()?;
+    let base = history_commit(&repo, "base", "base\n")?;
+    let a = history_commit(&repo, "a", "a\n")?;
+    fs::write(workdir(&repo)?.join("staged"), "included\n")?;
+    stage(&repo, &["staged".into()], true)?;
+    fs::write(workdir(&repo)?.join("a"), "unstaged\n")?;
+    history_action(
+        &repo,
+        &[a],
+        HistoryAction::Amend("Amended\n\nDescription".into()),
+    )?;
+    let amended = repo.head()?.peel_to_commit()?.id();
+    assert_ne!(amended, a);
+    assert_eq!(repo.find_commit(amended)?.author().name()?, "Nozhik Test");
+    assert_eq!(fs::read_to_string(workdir(&repo)?.join("a"))?, "unstaged\n");
+    assert!(repo.head()?.peel_to_tree()?.get_name("staged").is_some());
+    discard(&repo, std::path::Path::new("a"))?;
+    history_action(&repo, &[base], HistoryAction::Branch("from-base".into()))?;
+    assert_eq!(
+        repo.find_branch("from-base", BranchType::Local)?
+            .get()
+            .target(),
+        Some(base)
+    );
+    history_action(&repo, &[amended], HistoryAction::Tag("v1".into()))?;
+    assert!(
+        matches!(history_action(&repo, &[amended], HistoryAction::CopyTags)?, Outcome::Clipboard(text) if text == "v1")
+    );
+    repo.remote("origin", "git@github.com:owner/project.git")?;
+    assert!(
+        matches!(history_action(&repo, &[amended], HistoryAction::View)?, Outcome::CommitUrl(url) if url == format!("https://github.com/owner/project/commit/{amended}"))
+    );
+    let stale = HistoryRequest {
+        expected_head: a.to_string(),
+        expected_branch: status(&repo)?.branch,
+        commits: vec![amended.to_string()],
+        action: HistoryAction::Reset(ResetMode::Hard),
+    };
+    assert!(crate::history_actions::execute(&repo, stale).is_err());
+    history_action(&repo, &[amended], HistoryAction::Revert)?;
+    assert_eq!(
+        repo.head()?.peel_to_tree()?.id(),
+        repo.find_commit(base)?.tree_id()
+    );
+    let reverted = repo.head()?.peel_to_commit()?.id();
+    history_action(&repo, &[base], HistoryAction::Reset(ResetMode::Soft))?;
+    assert_eq!(status(&repo)?.changes, Vec::<FileChange>::new()); // revert tree already equals base
+    history_action(&repo, &[base], HistoryAction::Checkout)?;
+    assert!(repo.head_detached()?);
+    assert!(repo.find_commit(reverted).is_ok()); // still recoverable via reflog/object
+    Ok(())
+}
+#[test]
+fn history_cherry_pick_is_ordered_and_refuses_conflicts_without_switching()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::model::HistoryAction;
+    let (_dir, repo) = repository()?;
+    let base = history_commit(&repo, "base", "base\n")?;
+    repo.branch("destination", &repo.find_commit(base)?, false)?;
+    let a = history_commit(&repo, "a", "a\n")?;
+    let b = history_commit(&repo, "b", "b\n")?;
+    history_action(
+        &repo,
+        &[b, a],
+        HistoryAction::CherryPick {
+            branch: "destination".into(),
+            create: false,
+        },
+    )?;
+    assert_eq!(status(&repo)?.branch, "destination");
+    assert_eq!(
+        history(&repo, 3)?
+            .iter()
+            .map(|c| c.summary.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b", "a", "base"]
+    );
+    history_action(
+        &repo,
+        &[a],
+        HistoryAction::CherryPick {
+            branch: "new-branch".into(),
+            create: true,
+        },
+    )?;
+    assert_eq!(status(&repo)?.branch, "new-branch");
+    let change = history_commit(&repo, "base", "change\n")?;
+    let incompatible = history_commit(&repo, "base", "incompatible\n")?;
+    let before = status(&repo)?;
+    assert!(
+        history_action(
+            &repo,
+            &[change],
+            HistoryAction::CherryPick {
+                branch: "new-branch".into(),
+                create: false
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(repo.head()?.target(), Some(incompatible));
+    assert_eq!(status(&repo)?.branch, before.branch);
+    assert_eq!(status(&repo)?.changes, Vec::<FileChange>::new());
+    Ok(())
+}
+
+#[test]
+fn history_reset_modes_and_same_sha_branch_gate()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::model::{HistoryAction, HistoryRequest, ResetMode};
+    for mode in [ResetMode::Soft, ResetMode::Mixed, ResetMode::Hard] {
+        let (_dir, repo) = repository()?;
+        let base = history_commit(&repo, "file", "base\n")?;
+        let tip = history_commit(&repo, "file", "committed\n")?;
+        fs::write(workdir(&repo)?.join("file"), "staged\n")?;
+        stage(&repo, &["file".into()], true)?;
+        fs::write(workdir(&repo)?.join("file"), "working\n")?;
+        fs::write(workdir(&repo)?.join("untracked"), "retain\n")?;
+        history_action(&repo, &[base], HistoryAction::Reset(mode))?;
+        assert_eq!(repo.head()?.target(), Some(base));
+        assert_eq!(
+            fs::read_to_string(workdir(&repo)?.join("untracked"))?,
+            "retain\n"
+        );
+        let index = repo.index()?;
+        let indexed = repo.find_blob(
+            index
+                .get_path(std::path::Path::new("file"), 0)
+                .ok_or("index entry")?
+                .id,
+        )?;
+        assert_eq!(
+            indexed.content(),
+            if mode == ResetMode::Soft {
+                b"staged\n".as_slice()
+            } else {
+                b"base\n".as_slice()
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(workdir(&repo)?.join("file"))?,
+            if mode == ResetMode::Hard {
+                "base\n"
+            } else {
+                "working\n"
+            }
+        );
+        assert!(repo.find_commit(tip).is_ok());
+    }
+    let (_dir, repo) = repository()?;
+    let head = history_commit(&repo, "file", "base\n")?;
+    let branch = status(&repo)?.branch;
+    repo.branch("other", &repo.find_commit(head)?, false)?;
+    repo.set_head("refs/heads/other")?;
+    let request = HistoryRequest {
+        expected_head: head.to_string(),
+        expected_branch: branch,
+        commits: vec![head.to_string()],
+        action: HistoryAction::Amend("wrong branch".into()),
+    };
+    assert!(crate::history_actions::execute(&repo, request).is_err());
+    assert_eq!(repo.head()?.target(), Some(head));
+    Ok(())
+}
+
+#[test]
+fn history_merge_commits_use_first_parent_and_tags_skip_noncommits()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::model::HistoryAction;
+    let (_dir, repo) = repository()?;
+    let base = history_commit(&repo, "base", "base\n")?;
+    let original = status(&repo)?.branch;
+    repo.branch("feature", &repo.find_commit(base)?, false)?;
+    repo.branch("destination", &repo.find_commit(base)?, false)?;
+    checkout(&repo, "feature", false)?;
+    history_commit(&repo, "feature-file", "feature\n")?;
+    checkout(&repo, &original, false)?;
+    let local = history_commit(&repo, "local-file", "local\n")?;
+    crate::merge::begin(&repo, "feature")?;
+    let merged = repo.head()?.peel_to_commit()?.id();
+    assert_eq!(repo.find_commit(merged)?.parent_count(), 2);
+    repo.tag_lightweight(
+        "blob-tag",
+        &repo.find_blob(repo.blob(b"tagged blob")?)?.into_object(),
+        false,
+    )?;
+    history_action(&repo, &[merged], HistoryAction::Tag("release".into()))?;
+    let entries = history(&repo, 10)?;
+    assert_eq!(entries.len(), 3); // first parent: merge, local, base
+    assert_eq!(entries[0].tags, vec!["release"]);
+    assert!(
+        matches!(history_action(&repo, &[merged], HistoryAction::CopyTags)?, Outcome::Clipboard(tags) if tags == "release")
+    );
+    history_action(
+        &repo,
+        &[merged],
+        HistoryAction::CherryPick {
+            branch: "destination".into(),
+            create: false,
+        },
+    )?;
+    let tree = repo.head()?.peel_to_tree()?;
+    assert!(tree.get_name("feature-file").is_some());
+    assert!(tree.get_name("local-file").is_none());
+    checkout(&repo, &original, false)?;
+    history_action(
+        &repo,
+        &[merged, local],
+        HistoryAction::Squash("Combined merge".into()),
+    )?;
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_count(), 1);
+    assert_eq!(
+        repo.head()?.peel_to_tree()?.id(),
+        repo.find_commit(merged)?.tree_id()
+    );
+    Ok(())
+}
+
+#[test]
+fn history_selected_files_union_uses_newest_selected_delta_and_not_skipped_commits()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    history_commit(&repo, "shared.txt", "base\n")?;
+    let old = history_commit(&repo, "shared.txt", "older selected\n")?;
+    let old_only = history_commit(&repo, "old-only.txt", "selected file\n")?;
+    history_commit(&repo, "skip-only.txt", "not selected\n")?;
+    history_commit(&repo, "shared.txt", "skipped edit\n")?;
+    let new = history_commit(&repo, "shared.txt", "newest selected\n")?;
+    fs::write(dir.path().join("shared.txt"), "unsaved working edit\n")?;
+    let index_before = fs::read(repo.path().join("index"))?;
+    let ids = vec![new.to_string(), old_only.to_string(), old.to_string()];
+    let selection = crate::history_selection::details(&repo, &ids)?;
+    assert_eq!(selection.commits.len(), 3);
+    assert_eq!(
+        selection
+            .files
+            .iter()
+            .map(|f| f.change.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new("old-only.txt"), Path::new("shared.txt")]
+    );
+    let shared = selection
+        .files
+        .iter()
+        .find(|f| f.change.path == Path::new("shared.txt"))
+        .ok_or("shared file")?;
+    assert_eq!(shared.commits, vec![new.to_string(), old.to_string()]);
+    assert!(shared.worktree_exists);
+    assert!(shared.github_url.is_none());
+    let target = shared.diff_target().ok_or("diff target")?;
+    assert_eq!(
+        target,
+        DiffTarget::Commit {
+            sha: new.to_string(),
+            path: "shared.txt".into()
+        }
+    );
+    let patch = file_diff(&repo, &target)?;
+    let lines = patch
+        .hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(lines, vec!["skipped edit\n", "newest selected\n"]);
+    assert_eq!(repo.head()?.target(), Some(new));
+    assert_eq!(fs::read(repo.path().join("index"))?, index_before);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("shared.txt"))?,
+        "unsaved working edit\n"
+    );
+    assert!(crate::history_selection::details(&repo, &[]).is_err());
+    assert!(crate::history_selection::details(&repo, &[new.to_string(), new.to_string()]).is_err());
+    Ok(())
+}
+
+#[test]
+fn history_selected_files_keep_deletions_renames_and_encoded_historical_links()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    let root = history_commit(&repo, "base", "base\n")?;
+    let name = "a # ü.txt";
+    let created = history_commit(&repo, name, "version\n")?;
+    repo.remote("origin", "git@github.com:owner/project.git")?;
+    fs::remove_file(dir.path().join(name))?;
+    stage(&repo, &[name.into()], true)?;
+    let deleted = git2::Oid::from_str(&commit(&repo, "Delete file", "")?.sha)?;
+    let selection = crate::history_selection::details(
+        &repo,
+        &[deleted.to_string(), created.to_string(), root.to_string()],
+    )?;
+    let file = selection
+        .files
+        .iter()
+        .find(|f| f.change.path == Path::new(name))
+        .ok_or("deleted file")?;
+    assert_eq!(file.change.status, ChangeStatus::Deleted);
+    assert_eq!(file.commits, vec![deleted.to_string(), created.to_string()]);
+    assert!(!file.worktree_exists);
+    assert_eq!(
+        file.github_url.as_deref(),
+        Some(
+            format!("https://github.com/owner/project/blob/{created}/a%20%23%20%C3%BC.txt")
+                .as_str()
+        )
+    );
+    let old = history_commit(&repo, "old.txt", "rename contents\n")?;
+    fs::rename(dir.path().join("old.txt"), dir.path().join("renamed.txt"))?;
+    let paths = status(&repo)?
+        .changes
+        .into_iter()
+        .map(|c| c.path)
+        .collect::<Vec<_>>();
+    stage(&repo, &paths, true)?;
+    let renamed = commit(&repo, "Rename file", "")?;
+    let selection =
+        crate::history_selection::details(&repo, &[renamed.sha.clone(), old.to_string()])?;
+    assert_eq!(selection.files.len(), 2);
+    let file = selection
+        .files
+        .iter()
+        .find(|f| f.change.path == Path::new("renamed.txt"))
+        .ok_or("renamed file")?;
+    assert_eq!(file.change.status, ChangeStatus::Renamed);
+    assert_eq!(file.change.old_path.as_deref(), Some(Path::new("old.txt")));
+    assert_eq!(
+        file.github_url.as_deref(),
+        Some(
+            format!(
+                "https://github.com/owner/project/blob/{}/renamed.txt",
+                renamed.sha
+            )
+            .as_str()
+        )
+    );
+    repo.remote_set_url("origin", "https://example.invalid/repo.git")?;
+    assert!(
+        crate::history_selection::details(&repo, &[renamed.sha])?
+            .files
+            .iter()
+            .all(|f| f.github_url.is_none())
+    );
     Ok(())
 }

@@ -205,6 +205,8 @@ impl VcsPanel {
                     ("Fetch origin", Task::Fetch)
                 } else if !r.has_upstream && !r.detached && r.head_sha.is_some() {
                     ("Publish branch", Task::Push)
+                } else if r.ahead > 0 && r.behind > 0 {
+                    ("Pull & Push origin", Task::PullPush)
                 } else if r.ahead > 0 {
                     ("Push origin", Task::Push)
                 } else if r.behind > 0 {
@@ -230,12 +232,53 @@ impl VcsPanel {
         };
         let remote = ui
             .add_enabled_ui(network, |ui| {
-                chrome_button(ui, width.min(230.0), title, &age, false)
+                chrome_button(
+                    ui,
+                    width.min(230.0),
+                    title,
+                    if self
+                        .repo
+                        .as_ref()
+                        .is_some_and(|r| r.ahead > 0 || r.behind > 0)
+                    {
+                        ""
+                    } else {
+                        &age
+                    },
+                    false,
+                )
             })
             .inner;
+        if let Some(repo) = &self.repo {
+            let counts = [(true, repo.behind), (false, repo.ahead)]
+                .into_iter()
+                .filter(|(_, n)| *n > 0);
+            let mut left = remote.rect.left() + 36.0;
+            for (down, count) in counts {
+                let text = count.to_string();
+                let font = FontId::proportional(12.0);
+                let galley = ui.painter().layout_no_wrap(text, font, TEXT);
+                let size = galley.size() + vec2(24.0, 4.0);
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(left, remote.rect.bottom() - size.y - 3.0),
+                    size,
+                );
+                ui.painter().rect_filled(rect, 8, BLUE);
+                paint_vertical_arrow(
+                    ui.painter(),
+                    rect.left_center() + vec2(8.0, 0.0),
+                    down,
+                    TEXT,
+                );
+                ui.painter()
+                    .galley(rect.min + vec2(19.0, 2.0), galley, TEXT);
+                left = rect.right() + 5.0;
+            }
+        }
         if remote.clicked() {
             self.submit(task);
         }
+        let remote = remote.on_hover_text(age);
         remote.context_menu(|ui| self.network_menu(ui, network));
         let menu = ui.menu_button("    ", |ui| {
             self.network_menu(ui, network);
@@ -247,6 +290,7 @@ impl VcsPanel {
             ("Fetch origin", Task::Fetch),
             ("Pull origin (fast-forward)", Task::Pull),
             ("Push origin", Task::Push),
+            ("Pull & Push origin", Task::PullPush),
         ] {
             if ui.add_enabled(network, egui::Button::new(name)).clicked() {
                 self.submit(task);
@@ -993,4 +1037,19 @@ fn paint_branch_icon(ui: &egui::Ui, rect: egui::Rect, current: bool) {
             TEXT,
         );
     }
+}
+
+/// Draw directions without depending on the bundled font's Unicode coverage.
+pub(super) fn paint_vertical_arrow(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    down: bool,
+    color: Color32,
+) {
+    let direction = if down { 1.0 } else { -1.0 };
+    let tip = center + vec2(0.0, direction * 4.0);
+    let stroke = Stroke::new(1.3_f32, color);
+    painter.line_segment([center - vec2(0.0, direction * 4.0), tip], stroke);
+    painter.line_segment([tip + vec2(-3.0, -direction * 3.0), tip], stroke);
+    painter.line_segment([tip + vec2(3.0, -direction * 3.0), tip], stroke);
 }

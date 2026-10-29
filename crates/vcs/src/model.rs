@@ -132,6 +132,40 @@ pub struct CommitInfo {
     pub timestamp: i64,
     /// Relative time computed on the worker, e.g. `2 minutes ago`.
     pub relative_time: String,
+    /// Number of parents (zero for a root commit).
+    pub parent_count: usize,
+    /// Tags pointing to this commit, populated in history snapshots.
+    pub tags: Vec<String>,
+}
+/// Unique changed path across the selected commits, including intermediate changes.
+#[derive(Debug, Clone)]
+pub struct HistoryFile {
+    /// Newest selected delta for this path; index flags are always false.
+    pub change: FileChange,
+    /// Contributing selected commits, newest first (one ID per commit).
+    pub commits: Vec<String>,
+    /// Current worktree contains a regular file at a safely resolved path.
+    pub worktree_exists: bool,
+    /// Historical GitHub file URL; deletions link to their first parent.
+    pub github_url: Option<String>,
+}
+impl HistoryFile {
+    /// Show this file's newest selected commit; older contributions remain metadata.
+    #[must_use]
+    pub fn diff_target(&self) -> Option<DiffTarget> {
+        self.commits.first().map(|sha| DiffTarget::Commit {
+            sha: sha.clone(),
+            path: self.change.path.clone(),
+        })
+    }
+}
+/// Owned details for exactly one requested commit selection.
+#[derive(Debug, Clone)]
+pub struct HistorySelection {
+    /// Selected commit metadata, newest first.
+    pub commits: Vec<CommitInfo>,
+    /// Sorted union of paths, including canceled or later renamed/deleted changes.
+    pub files: Vec<HistoryFile>,
 }
 /// Identifies a patch without retaining any Git object.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -171,4 +205,58 @@ pub struct MergeConflict {
     pub path: PathBuf,
     /// Remaining conflict regions (at least one for binary/missing files).
     pub remaining: usize,
+}
+
+/// Confirmed operation on history. Commit lists use newest-first display order.
+#[derive(Debug, Clone)]
+pub struct HistoryRequest {
+    /// HEAD when the dialog opened; stale dialogs cannot mutate a newer checkout.
+    pub expected_head: String,
+    /// Checked-out branch name (or detached description) when the dialog opened.
+    pub expected_branch: String,
+    /// Selected full commit IDs, newest first (reorder uses the desired full order).
+    pub commits: Vec<String>,
+    /// Concrete action and its validated user input.
+    pub action: HistoryAction,
+}
+/// History mutations and read-only metadata commands.
+#[derive(Debug, Clone)]
+pub enum HistoryAction {
+    /// Replace HEAD's message and include its current staged changes.
+    Amend(String),
+    /// Move HEAD; soft retains index/worktree, mixed resets index, hard resets both.
+    Reset(ResetMode),
+    /// Safely enter detached HEAD.
+    Checkout,
+    /// Apply the inverse patch and commit it.
+    Revert,
+    /// Create a branch at a historical commit without switching.
+    Branch(String),
+    /// Create a lightweight tag.
+    Tag(String),
+    /// Replay selected commits oldest first onto a local destination, optionally new.
+    CherryPick {
+        /// Local destination branch name.
+        branch: String,
+        /// Create the destination from current HEAD.
+        create: bool,
+    },
+    /// Combine a contiguous selection and replay its descendants.
+    Squash(String),
+    /// Replay a complete linear suffix in the supplied newest-first order.
+    Reorder,
+    /// Copy tags pointing at a commit.
+    CopyTags,
+    /// Open the commit on GitHub using origin.
+    View,
+}
+/// Which local state a confirmed reset replaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetMode {
+    /// Move the ref only.
+    Soft,
+    /// Also reset the index.
+    Mixed,
+    /// Also replace tracked working files.
+    Hard,
 }

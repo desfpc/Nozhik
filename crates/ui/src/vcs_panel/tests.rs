@@ -137,8 +137,21 @@ fn click(
     ctx: &Context,
     label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let _sizing = frame(panel, ctx, vec![]);
     let output = frame(panel, ctx, vec![]);
-    let point = text_point(&output, label)?;
+    let point = text_point(&output, label).map_err(|error| {
+        format!(
+            "{error}: {:?}",
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        )
+    })?;
     click_at(
         panel,
         ctx,
@@ -428,5 +441,463 @@ fn history_full_width_rows_select_commits_and_files_in_separate_columns()
         diff_header.x > 600.0,
         "diff is to the right of the files: {diff_header:?}"
     );
+    Ok(())
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Pointer-driven flow verifies selection, menu targeting and confirmed mutation together"
+)]
+fn history_pointer_multiselection_menus_and_confirmed_revert()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo, mut panel, ctx) = fixture()?;
+    commit_file(&repo, "second.txt", "second\n", "Second history change")?;
+    commit_file(&repo, "third.txt", "third\n", "Third history change")?;
+    panel.submit(Task::Refresh);
+    settle(&mut panel, &ctx)?;
+    click(&mut panel, &ctx, "History")?;
+    settle(&mut panel, &ctx)?;
+    let labels = [
+        "Third history change",
+        "Second history change",
+        "Ours",
+        "Base",
+    ];
+    let output = frame(&mut panel, &ctx, vec![]);
+    let points = labels
+        .iter()
+        .map(|label| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == *label && text.pos.x < 300.0 =>
+                    {
+                        Some(Pos2::new(280.0, text.pos.y + 24.0))
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| format!("Missing history row {label}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    click_at(
+        &mut panel,
+        &ctx,
+        points[0],
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    click_at(
+        &mut panel,
+        &ctx,
+        points[2],
+        egui::PointerButton::Primary,
+        egui::Modifiers::SHIFT,
+    );
+    assert_eq!(panel.history_selection.len(), 3);
+    click_at(
+        &mut panel,
+        &ctx,
+        points[1],
+        egui::PointerButton::Primary,
+        egui::Modifiers::COMMAND,
+    );
+    assert_eq!(panel.history_selection.len(), 2);
+    click_at(
+        &mut panel,
+        &ctx,
+        points[0],
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(panel.history_selection.len(), 2);
+    let output = frame(&mut panel, &ctx, vec![]);
+    assert!(
+        text_point(&output, "Cherry-pick 2 Commits…").is_ok(),
+        "{:?}",
+        output
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape {
+                Some(t.galley.text())
+            } else {
+                None
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(text_point(&output, "Squash 2 Commits…").is_ok());
+    click(&mut panel, &ctx, "Copy SHAs")?;
+    settle(&mut panel, &ctx)?;
+    // Right-click outside the selection replaces it before opening the single menu.
+    click_at(
+        &mut panel,
+        &ctx,
+        points[1],
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(panel.history_selection, vec![panel.history[1].sha.clone()]);
+    click(&mut panel, &ctx, "Create Tag…")?;
+    assert!(panel.modal_open());
+    click(&mut panel, &ctx, "Cancel")?;
+    settle(&mut panel, &ctx)?;
+    assert!(!panel.modal_open());
+    click_at(
+        &mut panel,
+        &ctx,
+        points[0],
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    click(&mut panel, &ctx, "Revert Changes in Commit…")?;
+    let before = repo.head()?.peel_to_commit()?.id();
+    assert!(panel.modal_open());
+    assert_eq!(repo.head()?.target(), Some(before));
+    click(&mut panel, &ctx, "Revert Commit")?;
+    settle(&mut panel, &ctx)?;
+    assert_ne!(repo.head()?.target(), Some(before));
+    assert_eq!(repo.head()?.peel_to_commit()?.parent_id(0)?, before);
+    assert!(!repo.workdir().ok_or("workdir")?.join("third.txt").exists());
+    assert!(!panel.modal_open());
+    assert!(panel.error.is_none(), "{:?}", panel.error);
+    Ok(())
+}
+
+#[test]
+fn remote_header_paints_pull_push_and_both_count_badges() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (_dir, _repo, mut panel, ctx) = fixture()?;
+    for (ahead, behind, title) in [
+        (0, 0, "Fetch origin"),
+        (3, 0, "Push origin"),
+        (0, 2, "Pull origin"),
+        (3, 2, "Pull & Push origin"),
+    ] {
+        let status = panel.repo.as_mut().ok_or("status")?;
+        status.has_origin = true;
+        status.has_upstream = true;
+        status.ahead = ahead;
+        status.behind = behind;
+        let output = frame(&mut panel, &ctx, vec![]);
+        assert!(text_point(&output, title).is_ok(), "missing {title}");
+        if ahead > 0 {
+            assert!(text_point(&output, "3").is_ok());
+        }
+        if behind > 0 {
+            assert!(text_point(&output, "2").is_ok());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn history_squash_cherry_pick_and_reorder_dialogs_apply_real_actions()
+-> Result<(), Box<dyn std::error::Error>> {
+    for operation in [
+        "Squash 2 Commits…",
+        "Cherry-pick 2 Commits…",
+        "Reorder Commit…",
+    ] {
+        let (_dir, repo, mut panel, ctx) = fixture()?;
+        commit_file(&repo, "second.txt", "second\n", "Second")?;
+        commit_file(&repo, "third.txt", "third\n", "Third")?;
+        let source = repo.head()?.name()?.to_owned();
+        let source_tip = repo.head()?.target();
+        panel.submit(Task::Refresh);
+        settle(&mut panel, &ctx)?;
+        click(&mut panel, &ctx, "History")?;
+        settle(&mut panel, &ctx)?;
+        let newest = panel.history[0].sha.clone();
+        panel.history_click(&newest, egui::Modifiers::NONE);
+        if !operation.starts_with("Reorder") {
+            let second = panel.history[1].sha.clone();
+            panel.history_click(&second, egui::Modifiers::COMMAND);
+        }
+        let output = frame(&mut panel, &ctx, vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Third" && text.pos.x < 300.0 => {
+                    Some(Pos2::new(280.0, text.pos.y + 24.0))
+                }
+                _ => None,
+            })
+            .ok_or("history row")?;
+        click_at(
+            &mut panel,
+            &ctx,
+            point,
+            egui::PointerButton::Secondary,
+            egui::Modifiers::NONE,
+        );
+        click(&mut panel, &ctx, operation)?;
+        settle(&mut panel, &ctx)?;
+        if operation.starts_with("Cherry") {
+            let branch = panel
+                .repo
+                .as_ref()
+                .ok_or("status")?
+                .branch_info
+                .iter()
+                .find(|b| b.name == "feature")
+                .ok_or("branch")?;
+            let label = format!("{}    {}", branch.name, branch.relative_time);
+            click(&mut panel, &ctx, &label)?;
+        } else if operation.starts_with("Reorder") {
+            click(&mut panel, &ctx, "Move down")?;
+        }
+        let confirm = if operation.starts_with("Cherry") {
+            "Cherry-pick 2 Commits to feature"
+        } else if operation.starts_with("Squash") {
+            "Squash 2 Commits"
+        } else {
+            "Reorder Commits"
+        };
+        click(&mut panel, &ctx, confirm)?;
+        settle(&mut panel, &ctx)?;
+        assert!(panel.error.is_none(), "{operation}: {:?}", panel.error);
+        assert!(!panel.modal_open());
+        assert!(
+            repo.workdir()
+                .ok_or("workdir")?
+                .join("second.txt")
+                .is_file()
+        );
+        assert!(repo.workdir().ok_or("workdir")?.join("third.txt").is_file());
+        if operation.starts_with("Squash") {
+            assert_eq!(panel.history.len(), 3);
+            assert_eq!(
+                repo.head()?.peel_to_commit()?.parent(0)?.summary()?,
+                Some("Ours")
+            );
+        } else if operation.starts_with("Cherry") {
+            assert_eq!(panel.branch(), "feature");
+            assert_eq!(repo.find_reference(&source)?.target(), source_tip);
+            assert_eq!(panel.history[0].summary, "Third");
+            assert_eq!(panel.history[1].summary, "Second");
+        } else {
+            assert_eq!(panel.history[0].summary, "Second");
+            assert_eq!(panel.history[1].summary, "Third");
+        }
+    }
+    Ok(())
+}
+
+fn open_history_file_menu(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+    path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    settle(panel, ctx)?;
+    let output = frame(panel, ctx, vec![]);
+    let point = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t)
+                if t.galley.text() == path && (300.0..550.0).contains(&t.pos.x) =>
+            {
+                Some(Pos2::new(530.0, t.pos.y + 7.0))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| format!("Missing history file {path}"))?;
+    click_at(
+        panel,
+        ctx,
+        point,
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    Ok(())
+}
+fn menu_action_output(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+    label: &str,
+) -> Result<egui::FullOutput, Box<dyn std::error::Error>> {
+    let _sizing = frame(panel, ctx, vec![]);
+    let output = frame(panel, ctx, vec![]);
+    let pos = text_point(&output, label)?;
+    let event = |pressed| {
+        vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let _press = frame(panel, ctx, event(true));
+    Ok(frame(panel, ctx, event(false)))
+}
+#[test]
+fn history_group_files_use_newest_selected_commit_badges_and_reject_stale_replies()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo, mut panel, ctx) = fixture()?;
+    commit_file(&repo, "shared.txt", "older selected\n", "Shared old")?;
+    let old = repo.head()?.peel_to_commit()?.id().to_string();
+    commit_file(&repo, "old-only.txt", "old only\n", "Only old")?;
+    let old_only = repo.head()?.peel_to_commit()?.id().to_string();
+    commit_file(&repo, "skip-only.txt", "skip\n", "Skip")?;
+    commit_file(&repo, "shared.txt", "skipped\n", "Skipped edit")?;
+    commit_file(&repo, "shared.txt", "newest selected\n", "Shared new")?;
+    let new = repo.head()?.peel_to_commit()?.id().to_string();
+    panel.submit(Task::Refresh);
+    settle(&mut panel, &ctx)?;
+    panel.mode = Mode::History;
+    panel.history_click(&old, egui::Modifiers::NONE);
+    panel.history_click(&old_only, egui::Modifiers::COMMAND);
+    panel.history_click(&new, egui::Modifiers::COMMAND);
+    settle(&mut panel, &ctx)?;
+    let details = panel.details.clone().ok_or("details")?;
+    assert_eq!(
+        details
+            .files
+            .iter()
+            .map(|f| f.change.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![
+            std::path::Path::new("old-only.txt"),
+            std::path::Path::new("shared.txt")
+        ]
+    );
+    let output = frame(&mut panel, &ctx, vec![]);
+    assert!(text_point(&output, "Showing changes from 3 commits").is_ok());
+    assert!(text_point(&output, "2 commits").is_ok());
+    open_history_file_menu(&mut panel, &ctx, "shared.txt")?;
+    assert_eq!(
+        panel.diff_target,
+        Some(DiffTarget::Commit {
+            sha: new.clone(),
+            path: "shared.txt".into()
+        })
+    );
+    // Dismiss the menu before changing the selected commits.
+    let _output = menu_action_output(&mut panel, &ctx, "Copy Relative File Path")?;
+    settle(&mut panel, &ctx)?;
+    let stale_id = panel.details_request;
+    panel.history_click(&new, egui::Modifiers::COMMAND);
+    panel.accept(stale_id, Outcome::SelectionDetails(details), &ctx);
+    assert!(panel.details.is_none());
+    settle(&mut panel, &ctx)?;
+    open_history_file_menu(&mut panel, &ctx, "shared.txt")?;
+    assert_eq!(
+        panel.diff_target,
+        Some(DiffTarget::Commit {
+            sha: old.clone(),
+            path: "shared.txt".into()
+        })
+    );
+    let _output = menu_action_output(&mut panel, &ctx, "Copy Relative File Path")?;
+    settle(&mut panel, &ctx)?;
+    panel.history_click(&old, egui::Modifiers::COMMAND);
+    panel.history_click(&old_only, egui::Modifiers::COMMAND);
+    settle(&mut panel, &ctx)?;
+    assert!(panel.details.is_none());
+    assert!(panel.diff_target.is_none());
+    Ok(())
+}
+#[test]
+fn history_file_context_menu_opens_current_file_copies_paths_and_links_to_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo, mut panel, ctx) = fixture()?;
+    repo.remote("origin", "https://github.com/owner/project.git")?;
+    commit_file(&repo, "a # ü.txt", "historical\n", "Historical file")?;
+    let sha = repo.head()?.peel_to_commit()?.id().to_string();
+    panel.submit(Task::Refresh);
+    settle(&mut panel, &ctx)?;
+    panel.mode = Mode::History;
+    panel.history_click(&sha, egui::Modifiers::NONE);
+    settle(&mut panel, &ctx)?;
+    open_history_file_menu(&mut panel, &ctx, "a # ü.txt")?;
+    let _sizing = frame(&mut panel, &ctx, vec![]);
+    let output = frame(&mut panel, &ctx, vec![]);
+    for label in [
+        "Reveal in File Manager",
+        "Open in Nozhik",
+        "Open with Default Program",
+        "Copy File Path",
+        "Copy Relative File Path",
+        "View on GitHub",
+    ] {
+        assert!(text_point(&output, label).is_ok(), "Missing {label}");
+    }
+    assert!(text_point(&output, "Include Selected Files").is_err());
+    assert!(text_point(&output, "Discard 1 Selected Changes…").is_err());
+    let output = menu_action_output(&mut panel, &ctx, "Copy File Path")?;
+    let root = panel.repo.as_ref().ok_or("repo")?.root.clone();
+    assert!(output.platform_output.commands.iter().any(|command| matches!(command,egui::OutputCommand::CopyText(text) if text == &root.join("a # ü.txt").display().to_string())));
+    open_history_file_menu(&mut panel, &ctx, "a # ü.txt")?;
+    let output = menu_action_output(&mut panel, &ctx, "Copy Relative File Path")?;
+    assert!(output.platform_output.commands.iter().any(
+        |command| matches!(command,egui::OutputCommand::CopyText(text) if text == "a # ü.txt")
+    ));
+    open_history_file_menu(&mut panel, &ctx, "a # ü.txt")?;
+    click(&mut panel, &ctx, "Open in Nozhik")?;
+    assert_eq!(panel.take_open_paths(), vec![root.join("a # ü.txt")]);
+    open_history_file_menu(&mut panel, &ctx, "a # ü.txt")?;
+    let output = menu_action_output(&mut panel, &ctx, "View on GitHub")?;
+    let expected = format!("https://github.com/owner/project/blob/{sha}/a%20%23%20%C3%BC.txt");
+    assert!(
+        output.platform_output.commands.iter().any(
+            |command| matches!(command,egui::OutputCommand::OpenUrl(url) if url.url == expected)
+        )
+    );
+    assert_eq!(repo.head()?.peel_to_commit()?.id().to_string(), sha);
+    Ok(())
+}
+
+#[test]
+fn history_missing_worktree_and_unsupported_origin_disable_only_unavailable_actions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo, mut panel, ctx) = fixture()?;
+    repo.remote("origin", "https://example.invalid/project.git")?;
+    let sha = panel.history[0].sha.clone();
+    std::fs::remove_file(dir.path().join("file.txt"))?;
+    panel.mode = Mode::History;
+    panel.history_click(&sha, egui::Modifiers::NONE);
+    settle(&mut panel, &ctx)?;
+    let file = panel
+        .details
+        .as_ref()
+        .and_then(|d| d.files.first())
+        .ok_or("file details")?;
+    assert!(!file.worktree_exists);
+    assert!(file.github_url.is_none());
+    open_history_file_menu(&mut panel, &ctx, "file.txt")?;
+    let output = menu_action_output(&mut panel, &ctx, "Open in Nozhik")?;
+    assert_eq!(panel.take_open_paths(), Vec::<PathBuf>::new());
+    assert!(
+        !output
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::OutputCommand::OpenUrl(_)))
+    );
+    open_history_file_menu(&mut panel, &ctx, "file.txt")?;
+    let output = menu_action_output(&mut panel, &ctx, "View on GitHub")?;
+    assert!(
+        !output
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::OutputCommand::OpenUrl(_)))
+    );
+    open_history_file_menu(&mut panel, &ctx, "file.txt")?;
+    let output = menu_action_output(&mut panel, &ctx, "Copy Relative File Path")?;
+    assert!(
+        output
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c,egui::OutputCommand::CopyText(text) if text == "file.txt"))
+    );
+    assert!(!dir.path().join("file.txt").exists());
     Ok(())
 }

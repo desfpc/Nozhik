@@ -2039,3 +2039,25 @@ were verified on disk. Quit was issued to the test app. No real GitHub account,
 private remote authentication, remote push or Windows build/Clippy/GUI was exercised.
 Final workspace release build and default update-binaries.py/--check refresh only
 macOS ARM64 executable and signed app archive; no Windows cache was created.
+
+
+### Обновление логотипа (v0.1.2, 2026-10-29)
+
+Иконка приложения и логотип стартового окна заменены на предоставленный
+`docs/img/logo.png`. `app/assets/source.png` сохраняет исходный PNG без изменений;
+мастер PNG, viewport PNG, Windows ICO и macOS ICNS получены с сохранением
+прозрачности и пропорций, без дополнительных полей. Общий ресурс стартового
+окна и viewport уже подключён; изменения Rust UI не потребовались.
+Версия workspace/Cargo.lock и bundle — 0.1.2, следующая доработка — 0.1.3.
+
+Проверена декодируемость PNG, всех семи ICO и всех ICNS представлений;
+визуально просмотрен логотип в размерах 160, 56 и 32 px на тёмном фоне.
+
+Проверки: cargo fmt, native workspace Clippy all-targets/all-features с
+-D warnings, workspace release build и git diff --check прошли. Полный
+workspace/all-features test вне sandbox: 211 passed, 0 failed,
+5 ignored. Первый sandbox-прогон блокировал существующие TCP mocks.
+update-binaries.py обновил только macOS ARM64 executable и подписанный app
+archive; --check подтвердил source fingerprint и SHA-256 payload. Проверены
+целостность ZIP, совпадение упакованной ICNS и версия bundle 0.1.2.
+Ручной запуск GUI и Windows build/Clippy не выполнялись.

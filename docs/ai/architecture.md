@@ -19,7 +19,9 @@
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus, ai_completion |
 
-`app/assets` хранит исходную WebP-иконку и готовые PNG/ICO/ICNS. Composition root
+`app/assets` хранит исходную PNG-иконку (`source.png`, копия `docs/img/logo.png`)
+и готовые PNG/ICO/ICNS. Стартовое окно использует тот же `window-icon.png`,
+что и viewport icon. Composition root
 декодирует встроенный PNG через eframe и задаёт viewport icon. Windows build.rs
 встраивает ICO через SDK rc.exe (MSVC) или MinGW windres (GNU); runtime-зависимостей
 не добавлено. scripts/update-binaries.py дополнительно упаковывает macOS

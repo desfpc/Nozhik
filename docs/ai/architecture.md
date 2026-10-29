@@ -1083,3 +1083,20 @@ polling does not fetch automatically. `PullPush` requires a clean origin-trackin
 branch, fetches, fast-forwards or merges divergence, then pushes without force. A merge
 conflict opens the existing resolution dialog and leaves push for an explicit action
 after Continue. Worker errors also keep merge state available to the existing banner.
+
+
+### Project tree header controls (2026-10-29)
+
+ui::project owns pending recursive expansion and file reveal alongside the existing
+expanded/selected paths. Directory rows now select their path as well as toggle.
+Select Opened File expands only the local active document's ancestors and scrolls
+its painted row into view after lazy loading. SQL/SFTP/outside-project documents
+are disabled targets. Expand Selected walks known child snapshots and schedules
+LoadDir through the existing serial FS worker, with at most 16 outstanding UI loads.
+It opens ancestors too, so a retained hidden selection becomes visible. No disk
+traversal or canonicalization runs on the UI thread; symlinks remain excluded by
+the existing tree loader. Collapse All clears expansion and pending reveal/recursive
+intent; late snapshots populate the cache without reopening rows. Project changes
+and worker errors clear pending intents. Hide uses the existing left-dock state,
+retaining documents, selection and tree cache. Four vector header icons have
+English tooltips and accessibility labels and remain outside the scroll viewport.

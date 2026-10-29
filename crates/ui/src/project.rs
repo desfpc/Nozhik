@@ -10,6 +10,16 @@ use nozhik_fs_model::{
 };
 use std::path::{Path, PathBuf};
 
+#[derive(Default)]
+pub struct ProjectControls {
+    recursive: Option<PathBuf>,
+    reveal: Option<PathBuf>,
+    #[cfg(test)]
+    buttons: Vec<egui::Rect>,
+    #[cfg(test)]
+    rows: std::collections::HashMap<PathBuf, egui::Rect>,
+}
+
 impl NozhikUi {
     /// Opens a project asynchronously; existing documents and unsaved text are retained.
     pub fn open_project(&mut self, path: PathBuf) {
@@ -88,7 +98,7 @@ impl NozhikUi {
         for reply in replies {
             match reply {
                 Reply::Refreshed(tree) => {
-                    self.project = Some(tree);
+                    self.accept_project_tree(tree);
                     let again = self.refresh == RefreshState::Again;
                     self.refresh = RefreshState::Idle;
                     self.search.invalidate();
@@ -132,6 +142,8 @@ impl NozhikUi {
                         self.integration.save_error = Some(error.clone());
                         self.integration.saving.clear();
                     }
+                    self.project_controls.recursive = None;
+                    self.project_controls.reveal = None;
                     for path in self.loading.drain() {
                         self.expanded.remove(&path);
                     }
@@ -158,6 +170,8 @@ impl NozhikUi {
             .as_ref()
             .is_none_or(|p| p.root_path != tree.root_path)
         {
+            self.project_controls = ProjectControls::default();
+            self.loading.clear();
             self.expanded.clear();
             self.selected_file = None;
             self.expanded.insert(tree.root_path.clone());
@@ -204,7 +218,128 @@ impl NozhikUi {
         self.search.note_file(path.clone());
         self.bus.publish(Event::FileOpened(path));
     }
+    fn active_project_file(&self) -> Option<PathBuf> {
+        let document = self.documents.get(self.active?)?;
+        let tree = self.project.as_ref()?;
+        (self.database.active.is_none()
+            && !self.remote.documents.contains_key(&document.path)
+            && document.path.starts_with(&tree.root_path))
+        .then(|| document.path.clone())
+    }
+
+    fn select_opened_file(&mut self) {
+        let Some(path) = self.active_project_file() else {
+            return;
+        };
+        let Some(tree) = &self.project else { return };
+        for parent in path.ancestors().skip(1) {
+            if !parent.starts_with(&tree.root_path) {
+                break;
+            }
+            self.expanded.insert(parent.to_path_buf());
+        }
+        self.selected_file = Some(path.clone());
+        self.project_controls.reveal = Some(path);
+    }
+
+    fn collapse_project(&mut self) {
+        self.project_controls.recursive = None;
+        self.project_controls.reveal = None;
+        self.expanded.clear();
+    }
+
+    fn project_header(&mut self, ui: &mut egui::Ui) {
+        let active = self.active_project_file().is_some();
+        let directory = self
+            .selected_file
+            .as_ref()
+            .filter(|path| {
+                self.project
+                    .as_ref()
+                    .is_some_and(|tree| tree.directories.contains_key(*path))
+            })
+            .cloned();
+        #[cfg(test)]
+        {
+            self.project_controls.buttons = vec![egui::Rect::NOTHING; 4];
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.label(egui::RichText::new("Project").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (icon, label, enabled) in [
+                    (3, "Hide", true),
+                    (2, "Collapse All", self.project.is_some()),
+                    (1, "Expand Selected", directory.is_some()),
+                    (0, "Select Opened File", active),
+                ] {
+                    let response = project_button(ui, icon, label, enabled);
+                    #[cfg(test)]
+                    {
+                        self.project_controls.buttons[icon] = response.rect;
+                    }
+                    if response.clicked() {
+                        match icon {
+                            0 => self.select_opened_file(),
+                            1 => {
+                                if let (Some(path), Some(tree)) = (&directory, &self.project) {
+                                    self.expanded.extend(
+                                        path.ancestors()
+                                            .take_while(|parent| {
+                                                parent.starts_with(&tree.root_path)
+                                            })
+                                            .map(Path::to_path_buf),
+                                    );
+                                }
+                                self.project_controls.recursive.clone_from(&directory);
+                            }
+                            2 => self.collapse_project(),
+                            _ => self.left = None,
+                        }
+                    }
+                }
+            });
+        });
+        ui.separator();
+    }
+
+    // Advance only through known children; all directory reads remain on the FS worker.
+    fn expand_project_subtree(&mut self) {
+        let (Some(root), Some(tree)) = (&self.project_controls.recursive, &self.project) else {
+            return;
+        };
+        let mut pending = vec![root.clone()];
+        let mut loads = Vec::new();
+        let mut complete = true;
+        while let Some(path) = pending.pop() {
+            let Some(directory) = tree.directories.get(&path) else {
+                continue;
+            };
+            self.expanded.insert(path.clone());
+            if let Some(children) = &directory.children {
+                pending.extend(children.iter().filter_map(|node| match node {
+                    Node::Dir(path) => Some(path.clone()),
+                    Node::File(_) => None,
+                }));
+            } else {
+                complete = false;
+                if self.loading.len() + loads.len() < 16 && !self.loading.contains(&path) {
+                    loads.push(path);
+                }
+            }
+        }
+        if complete {
+            self.project_controls.recursive = None;
+        }
+        for path in loads {
+            self.loading.insert(path.clone());
+            self.queue(Command::LoadDir(path));
+        }
+    }
+
     pub(crate) fn project_panel(&mut self, ui: &mut egui::Ui) {
+        self.project_header(ui);
+        self.expand_project_subtree();
         if self.project.is_none() {
             ui.horizontal(|ui| {
                 ui.add(
@@ -236,8 +371,9 @@ impl NozhikUi {
             ui.weak("Choose a folder or enter its path");
             return;
         };
-        let mut loads = Vec::new();
-        let mut open = None;
+        let mut actions = TreeActions::default();
+        #[cfg(test)]
+        self.project_controls.rows.clear();
         egui::ScrollArea::both().show(ui, |ui| {
             tree_row(
                 ui,
@@ -245,36 +381,58 @@ impl NozhikUi {
                 &tree.root_path,
                 &mut self.expanded,
                 &mut self.selected_file,
-                &mut loads,
-                &mut open,
+                &mut actions,
+                &mut self.project_controls,
             );
         });
-        for path in loads {
+        for path in actions.loads {
+            if self.loading.len() >= 16 {
+                break;
+            }
             if self.loading.insert(path.clone()) {
                 self.queue(Command::LoadDir(path));
             }
         }
-        if let Some(path) = open {
+        if let Some(path) = actions.open {
             self.open_file(path);
         }
     }
 }
+#[derive(Default)]
+struct TreeActions {
+    loads: Vec<PathBuf>,
+    open: Option<PathBuf>,
+}
+
 fn tree_row(
     ui: &mut egui::Ui,
     tree: &ProjectTree,
     path: &Path,
     expanded: &mut std::collections::HashSet<PathBuf>,
     selected: &mut Option<PathBuf>,
-    loads: &mut Vec<PathBuf>,
-    open: &mut Option<PathBuf>,
+    actions: &mut TreeActions,
+    controls: &mut ProjectControls,
 ) {
     let is_open = expanded.contains(path);
     let name = path
         .file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy();
-    let row = super::project_icons::row(ui, tree, path, &name, Some(is_open), false);
+    let row = super::project_icons::row(
+        ui,
+        tree,
+        path,
+        &name,
+        Some(is_open),
+        selected.as_deref() == Some(path),
+    );
+    #[cfg(test)]
+    controls.rows.insert(path.to_path_buf(), row.rect);
     if row.clicked() || (row.has_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+        *selected = Some(path.to_path_buf());
+        row.request_focus();
+        controls.recursive = None;
+        controls.reveal = None;
         if is_open {
             expanded.remove(path);
         } else {
@@ -286,14 +444,16 @@ fn tree_row(
     }
     let children = tree.directories.get(path).and_then(|d| d.children.as_ref());
     let Some(children) = children else {
-        loads.push(path.to_path_buf());
+        actions.loads.push(path.to_path_buf());
         ui.weak("Loading…");
         return;
     };
     ui.indent(path, |ui| {
         for child in children {
             match child {
-                Node::Dir(path) => tree_row(ui, tree, path, expanded, selected, loads, open),
+                Node::Dir(path) => {
+                    tree_row(ui, tree, path, expanded, selected, actions, controls);
+                }
                 Node::File(file) => {
                     let name = file.path.file_name().unwrap_or_default().to_string_lossy();
                     let row = super::project_icons::row(
@@ -304,19 +464,74 @@ fn tree_row(
                         None,
                         selected.as_ref() == Some(&file.path),
                     );
+                    #[cfg(test)]
+                    controls.rows.insert(file.path.clone(), row.rect);
+                    if controls.reveal.as_ref() == Some(&file.path) {
+                        row.scroll_to_me(Some(egui::Align::Center));
+                        controls.reveal = None;
+                    }
                     if row.clicked() {
+                        controls.reveal = None;
                         *selected = Some(file.path.clone());
                         row.request_focus();
                     }
                     if row.double_clicked()
                         || (row.has_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
                     {
-                        *open = Some(file.path.clone());
+                        actions.open = Some(file.path.clone());
                     }
                 }
             }
         }
     });
+}
+
+fn project_button(ui: &mut egui::Ui, icon: usize, label: &str, enabled: bool) -> egui::Response {
+    let response = ui
+        .add_enabled(
+            enabled,
+            egui::Button::new("").min_size(egui::vec2(24.0, 24.0)),
+        )
+        .on_hover_text(label);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let center = response.rect.center();
+    let stroke = egui::Stroke::new(1.3_f32, ui.style().interact(&response).fg_stroke.color);
+    let painter = ui.painter();
+    let line = |a: (f32, f32), b: (f32, f32)| {
+        painter.line_segment(
+            [center + egui::vec2(a.0, a.1), center + egui::vec2(b.0, b.1)],
+            stroke,
+        );
+    };
+    match icon {
+        0 => {
+            painter.circle_stroke(center, 6.0, stroke);
+            for (a, b) in [
+                ((-9.0, 0.0), (-3.0, 0.0)),
+                ((3.0, 0.0), (9.0, 0.0)),
+                ((0.0, -9.0), (0.0, -3.0)),
+                ((0.0, 3.0), (0.0, 9.0)),
+            ] {
+                line(a, b);
+            }
+        }
+        1 | 2 => {
+            let direction: f32 = if icon == 1 { -1.0 } else { 1.0 };
+            for sign in [-1.0, 1.0] {
+                let y = sign * 5.0;
+                line(
+                    (-4.0, (sign * direction).mul_add(2.0, y)),
+                    (0.0, (sign * direction).mul_add(-2.0, y)),
+                );
+                line(
+                    (0.0, (sign * direction).mul_add(-2.0, y)),
+                    (4.0, (sign * direction).mul_add(2.0, y)),
+                );
+            }
+        }
+        _ => line((-7.0, 0.0), (7.0, 0.0)),
+    }
+    response
 }
 
 #[cfg(test)]
@@ -328,7 +543,7 @@ mod tests {
 
     fn until(
         shell: &mut NozhikUi,
-        done: impl Fn(&NozhikUi) -> bool,
+        done: impl Fn(&mut NozhikUi) -> bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !done(shell) {
@@ -340,6 +555,144 @@ mod tests {
         }
         Ok(())
     }
+    fn frame(
+        shell: &mut NozhikUi,
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 180.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| shell.project_panel(ui));
+            },
+        )
+    }
+
+    fn click_control(shell: &mut NozhikUi, context: &egui::Context, index: usize) {
+        let _ = frame(shell, context, vec![]);
+        let position = shell.project_controls.buttons[index].center();
+        for pressed in [true, false] {
+            let _ = frame(
+                shell,
+                context,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn toolbar_reveals_expands_collapses_and_hides() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let branch = root.join("selected");
+        let nested = branch.join("deep/empty");
+        std::fs::create_dir_all(&nested)?;
+        std::fs::create_dir_all(root.join("untouched/child"))?;
+        for i in 0..30 {
+            std::fs::write(branch.join(format!("a{i:02}.txt")), "a")?;
+            std::fs::create_dir(branch.join(format!("a{i:02}")))?;
+        }
+        let file = branch.join("deep/z.php");
+        std::fs::write(&file, "<?php")?;
+        let bus = EventBus::new(128)?;
+        let settings = ConfigManager::from_path(root.join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let context = egui::Context::default();
+        context.style_mut(|style| {
+            style.animation_time = 0.0;
+            style.scroll_animation = egui::style::ScrollAnimation::none();
+        });
+        shell.open_project(root.clone());
+        until(&mut shell, |s| s.project.is_some())?;
+        shell.open_file(file.clone());
+        until(&mut shell, |s| s.active.is_some())?;
+        click_control(&mut shell, &context, 1); // Disabled without a selected directory.
+        assert!(shell.project_controls.recursive.is_none());
+        click_control(&mut shell, &context, 2);
+        assert!(shell.expanded.is_empty());
+        click_control(&mut shell, &context, 0);
+        assert_eq!(shell.selected_file.as_ref(), Some(&file));
+        until(&mut shell, |s| {
+            let _ = frame(s, &context, vec![]);
+            s.project_controls.reveal.is_none()
+        })?;
+        let _ = frame(&mut shell, &context, vec![]);
+        let _ = frame(&mut shell, &context, vec![]);
+        assert!((40.0..180.0).contains(&shell.project_controls.rows[&file].center().y));
+        assert!(shell.expanded.contains(&root));
+        assert!(shell.expanded.contains(&branch.join("deep")));
+        assert!(!shell.expanded.contains(&nested));
+        // Select a directory using its real tree-row hit area.
+        click_control(&mut shell, &context, 2);
+        let _ = frame(&mut shell, &context, vec![]);
+        let _ = frame(&mut shell, &context, vec![]);
+        let root_position =
+            shell.project_controls.rows[&root].left_center() + egui::vec2(50.0, 0.0);
+        for pressed in [true, false] {
+            let _ = frame(
+                &mut shell,
+                &context,
+                vec![
+                    egui::Event::PointerMoved(root_position),
+                    egui::Event::PointerButton {
+                        pos: root_position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(shell.selected_file.as_ref(), Some(&root));
+        // Keep the sibling lazy while expanding only this subtree.
+        shell.selected_file = Some(branch.clone());
+        click_control(&mut shell, &context, 1);
+        until(&mut shell, |s| {
+            let _ = frame(s, &context, vec![]);
+            s.project_controls.recursive.is_none()
+        })?;
+        assert!(shell.expanded.contains(&nested));
+        assert!(!shell.expanded.contains(&root.join("untouched")));
+        assert!(
+            shell
+                .project
+                .as_ref()
+                .is_some_and(|tree| tree.directories[&root.join("untouched")].children.is_none())
+        );
+        shell.project_controls.recursive = Some(root.clone());
+        click_control(&mut shell, &context, 2);
+        until(&mut shell, |s| s.loading.is_empty())?;
+        let _ = frame(&mut shell, &context, vec![]);
+        assert!(shell.expanded.is_empty());
+        assert!(shell.project_controls.recursive.is_none());
+        click_control(&mut shell, &context, 3);
+        assert!(shell.left.is_none());
+        assert_eq!(shell.documents.len(), 1);
+        shell.left = Some(crate::LeftTool::Project);
+        assert_eq!(shell.selected_file.as_ref(), Some(&branch));
+        // An active file outside this project cannot change the selection.
+        let outside = root.parent().ok_or("No parent")?.join("outside.php");
+        shell.loaded_file(outside, "", false);
+        click_control(&mut shell, &context, 0);
+        assert_eq!(shell.selected_file.as_ref(), Some(&branch));
+        Ok(())
+    }
+
     #[test]
     fn open_project_hides_start_actions_and_history() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;

@@ -409,7 +409,13 @@ impl NozhikUi {
             let panel = egui::SidePanel::left(dock_id)
                 .resizable(true)
                 .default_width(viewport.width() * proportion)
-                .width_range(150.0..=viewport.width() * 0.4)
+                .width_range(
+                    (if tool == LeftTool::Project {
+                        180.0
+                    } else {
+                        150.0
+                    })..=viewport.width() * 0.4,
+                )
                 .show_separator_line(false)
                 .frame(if tool == LeftTool::Commit {
                     egui::Frame::new()
@@ -419,7 +425,7 @@ impl NozhikUi {
                     theme::dock_frame(theme::PANEL)
                 })
                 .show(ctx, |ui| {
-                    if tool != LeftTool::Commit {
+                    if !matches!(tool, LeftTool::Commit | LeftTool::Project) {
                         ui.label(match tool {
                             LeftTool::Project => "Project v",
                             LeftTool::Commit => "Commit",

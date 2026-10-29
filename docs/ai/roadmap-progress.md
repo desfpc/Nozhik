@@ -1972,3 +1972,30 @@ menu interaction is claimed for this iteration. The test process was stopped.
 Default update-binaries.py rebuilt macOS ARM64 executable and signed app archive;
 --check verified current source fingerprint and both payload checksums. No real
 repository branch/commit/push or Windows build/Clippy/GUI was performed.
+
+
+### Project tree header actions (2026-10-29)
+
+Added Select Opened File, Expand Selected, Collapse All and Hide to the fixed
+Project header, using vector target/chevron/minus icons, English tooltips and
+accessibility labels. Directory rows now visibly select their paths. File reveal
+opens ancestors lazily and scrolls to the active local project's file; SQL, SFTP
+and outside-project documents disable the action. Recursive expansion uses the
+existing filesystem worker and at most 16 outstanding directory requests, leaves
+other branches lazy and includes empty/ignored directories under the existing
+symlink policy. Collapse cancels pending intents and late replies cannot reopen
+nodes. Hide/reopen retains selection, cached tree and open documents. The Project
+dock has enough minimum width for its header controls.
+
+Validation: native workspace/all-features tests passed with system access —
+207 passed, 0 failed, 5 existing system/live tests ignored. The sandbox attempt
+was blocked by existing local TCP mock permissions. Final UI/all-features rerun,
+native workspace/all-targets/all-features Clippy with -D warnings, rustfmt,
+workspace release build and git diff --check passed. New headless pointer tests
+cover actual toolbar clicks and directory selection, lazy ancestor loading,
+scrolling to an offscreen active file, recursive/empty subtree expansion,
+untouched lazy siblings, cancellation with outstanding replies, disabled actions
+and Hide/reopen retention. No manual native GUI smoke or Windows build/Clippy/GUI
+was run. Default update-binaries.py rebuilds the macOS ARM64 executable and signed
+app archive; --check verified the current source fingerprint and both payload
+checksums. No Windows target cache was created.

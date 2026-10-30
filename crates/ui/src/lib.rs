@@ -17,6 +17,7 @@ mod layout;
 mod menu_bar;
 mod plugins;
 mod project;
+mod project_badge;
 mod project_dialog;
 mod project_icons;
 mod recent_projects;

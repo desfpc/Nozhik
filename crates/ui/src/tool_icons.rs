@@ -5,6 +5,8 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, 
 #[derive(Clone, Copy)]
 pub enum Icon {
     Project,
+    Terminal,
+    Problems,
     Git,
     Remote,
     Database,
@@ -65,6 +67,21 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
         painter.circle_stroke(point(x, y), radius, stroke);
     };
     match icon {
+        Icon::Terminal => {
+            painter.rect_stroke(
+                Rect::from_min_max(point(2.0, 3.0), point(18.0, 17.0)),
+                2.0,
+                stroke,
+                StrokeKind::Inside,
+            );
+            line(&[(5.0, 7.0), (8.0, 10.0), (5.0, 13.0)]);
+            line(&[(10.0, 13.0), (15.0, 13.0)]);
+        }
+        Icon::Problems => {
+            circle(10.0, 10.0, 8.0);
+            line(&[(10.0, 5.0), (10.0, 11.0)]);
+            painter.circle_filled(point(10.0, 14.0), 0.8, color);
+        }
         Icon::Project => {
             line(&[
                 (2.0, 5.0),

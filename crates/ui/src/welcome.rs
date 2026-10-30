@@ -176,18 +176,7 @@ fn project_row(ui: &mut egui::Ui, path: &std::path::Path) -> egui::Response {
         rect.left_center() + egui::vec2(28.0, 0.0),
         egui::vec2(36.0, 36.0),
     );
-    painter.rect_filled(badge, 8.0, egui::Color32::from_rgb(71, 100, 170));
-    painter.text(
-        badge.center(),
-        egui::Align2::CENTER_CENTER,
-        name.chars()
-            .next()
-            .unwrap_or('N')
-            .to_uppercase()
-            .to_string(),
-        egui::FontId::proportional(20.0),
-        egui::Color32::WHITE,
-    );
+    crate::project_badge::paint(&painter, badge, &name);
     let origin = rect.left_top() + egui::vec2(60.0, 17.0);
     painter.text(
         origin,

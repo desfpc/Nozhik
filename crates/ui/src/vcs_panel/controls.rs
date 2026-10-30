@@ -56,7 +56,6 @@ fn chrome_button(
         &painter,
         rect.left_center() + vec2(17.0, 0.0),
         match title {
-            "Current Repository" => crate::tool_icons::Icon::Project,
             "Current Branch" => crate::tool_icons::Icon::Git,
             _ => crate::tool_icons::Icon::Remote,
         },
@@ -99,39 +98,16 @@ fn chevron(painter: &egui::Painter, center: egui::Pos2) {
     ));
 }
 impl VcsPanel {
-    pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui, repository_width: f32) {
+    pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
         Self::git_style(ui);
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let repository_width = repository_width.min(ui.available_width() * 0.45).max(150.0);
-        let width = (repository_width * 0.72).clamp(120.0, 300.0);
-        let repository = self
-            .repo
-            .as_ref()
-            .and_then(|r| r.root.file_name())
-            .map_or_else(
-                || "No repository".into(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-        let repository_button = chrome_button(
-            ui,
-            repository_width,
-            "Current Repository",
-            &repository,
-            true,
-        );
-        repository_button.context_menu(|ui| {
-            if let Some(repo) = &self.repo {
-                ui.label(repo.root.display().to_string());
-                if ui.button("Copy Repository Path").clicked() {
-                    ui.ctx().copy_text(repo.root.display().to_string());
-                    ui.close();
-                }
-            }
-            if ui.button("Refresh Git status").clicked() {
-                self.submit(Task::Refresh);
-                ui.close();
-            }
+        // Own the row layout so callers cannot stack fixed-height controls vertically.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            self.toolbar_controls(ui);
         });
+    }
+    fn toolbar_controls(&mut self, ui: &mut egui::Ui) {
+        let width = (ui.available_width() * 0.28).clamp(120.0, 230.0);
         let branch = self.branch().to_owned();
         let response = chrome_button(ui, width, "Current Branch", &branch, true);
         if response.clicked() {
@@ -215,6 +191,9 @@ impl VcsPanel {
                     ("Fetch origin", Task::Fetch)
                 }
             });
+        if title != "Fetch origin" {
+            self.fetch_button(ui, network);
+        }
         let age = if self.pending.contains(&self.fetch_request) {
             "Working…".into()
         } else {
@@ -284,6 +263,16 @@ impl VcsPanel {
             self.network_menu(ui, network);
         });
         chevron(ui.painter(), menu.response.rect.center());
+    }
+    fn fetch_button(&mut self, ui: &mut egui::Ui, network: bool) {
+        let fetch = ui
+            .add_enabled_ui(network, |ui| {
+                chrome_button(ui, 150.0, "Fetch origin", "Fetch remote changes", false)
+            })
+            .inner;
+        if fetch.clicked() {
+            self.submit(Task::Fetch);
+        }
     }
     fn network_menu(&mut self, ui: &mut egui::Ui, network: bool) {
         for (name, task) in [

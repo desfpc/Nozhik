@@ -70,7 +70,7 @@ fn frame(panel: &mut VcsPanel, ctx: &Context, events: Vec<Event>) -> egui::FullO
             egui::TopBottomPanel::top("git_test_toolbar")
                 .exact_height(54.0)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| panel.toolbar(ui, 300.0));
+                    panel.toolbar(ui);
                 });
             egui::SidePanel::left("git_test_sidebar")
                 .exact_width(300.0)
@@ -582,6 +582,8 @@ fn remote_header_paints_pull_push_and_both_count_badges() -> Result<(), Box<dyn 
         status.behind = behind;
         let output = frame(&mut panel, &ctx, vec![]);
         assert!(text_point(&output, title).is_ok(), "missing {title}");
+        assert!(text_point(&output, "Fetch origin").is_ok());
+        assert!(text_point(&output, "Current Repository").is_err());
         if ahead > 0 {
             assert!(text_point(&output, "3").is_ok());
         }

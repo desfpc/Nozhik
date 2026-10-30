@@ -407,7 +407,7 @@ impl NozhikUi {
         {
             painter.rect_filled(rect, 7.0, Color32::from_rgb(57, 59, 62));
         }
-        badge(
+        crate::project_badge::paint(
             painter,
             egui::Rect::from_min_size(rect.min + egui::vec2(8.0, 5.0), egui::vec2(20.0, 20.0)),
             &name,
@@ -508,15 +508,15 @@ impl NozhikUi {
         let mut rects = Vec::new();
         let mut viewport = egui::Rect::NOTHING;
         egui::TopBottomPanel::top("project_tabs")
-            .exact_height(32.0)
+            .exact_height(36.0)
             .frame(
                 egui::Frame::new()
                     .fill(Color32::from_rgb(37, 39, 41))
                     .inner_margin(egui::Margin {
                         left: 6,
                         right: 6,
-                        top: 2,
-                        bottom: 2,
+                        top: 4,
+                        bottom: 4,
                     }),
             )
             .show(ctx, |ui| {
@@ -550,7 +550,7 @@ impl NozhikUi {
                                 .animated(false)
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.x = 1.0;
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_top(|ui| {
                                         for (index, path) in entries.iter().enumerate() {
                                             let (rect, response) = ui.allocate_exact_size(
                                                 egui::vec2(width, 27.0),
@@ -792,32 +792,6 @@ fn project_menu_action(
     response
 }
 
-fn badge(painter: &egui::Painter, rect: egui::Rect, name: &str) {
-    const COLORS: [Color32; 6] = [
-        Color32::from_rgb(182, 137, 20),
-        Color32::from_rgb(84, 105, 221),
-        Color32::from_rgb(211, 124, 83),
-        Color32::from_rgb(41, 151, 165),
-        Color32::from_rgb(151, 81, 196),
-        Color32::from_rgb(71, 157, 117),
-    ];
-    let hash = name
-        .bytes()
-        .fold(0_usize, |hash, byte| hash.wrapping_add(usize::from(byte)));
-    painter.rect_filled(rect, 4.0, COLORS[hash % COLORS.len()]);
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        name.chars()
-            .next()
-            .unwrap_or('N')
-            .to_uppercase()
-            .to_string(),
-        egui::FontId::proportional(rect.height() * 0.72),
-        Color32::WHITE,
-    );
-}
-
 fn project_menu_row(ui: &mut egui::Ui, path: &Path) -> egui::Response {
     let name = project_name(path);
     let (rect, response) =
@@ -826,7 +800,7 @@ fn project_menu_row(ui: &mut egui::Ui, path: &Path) -> egui::Response {
     if response.hovered() {
         painter.rect_filled(rect, 5.0, Color32::from_rgb(48, 70, 113));
     }
-    badge(
+    crate::project_badge::paint(
         &painter,
         egui::Rect::from_min_size(rect.min + egui::vec2(8.0, 8.0), egui::vec2(23.0, 23.0)),
         &name,
@@ -1368,6 +1342,11 @@ mod tests {
             strip_frame(&mut shell, &ctx, Vec::new());
         }
         let viewport = shell.workspace.tab_viewport.ok_or("missing viewport")?;
+
+        for rect in &shell.workspace.tab_rects {
+            assert!(rect.top() >= viewport.top());
+            assert!(rect.bottom() <= viewport.bottom());
+        }
         assert_eq!(shell.workspace.tab_buttons.len(), 2);
         assert!((viewport.height() - 28.0).abs() < 0.5);
         assert!(

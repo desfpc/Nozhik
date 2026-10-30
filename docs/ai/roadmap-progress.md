@@ -2140,3 +2140,91 @@ native dragging in both directions, updated tab order and retained Beta selectio
 The test app was quit. Default update-binaries.py rebuilt only macOS ARM64 executable
 and signed app archive; --check verifies source and payload checksums. Windows
 build/Clippy/GUI, commit and push were not run.
+
+
+### Terminal / Problems в левой полосе (v0.1.5, 2026-10-30)
+
+Горизонтальная нижняя строка переключателей удалена. Внизу левой полосы
+добавлены квадратные 28 px кнопки с векторными иконками: Problems над Terminal.
+Project, Git, Remote, Database и Notifications остаются вверху. Полоса создаётся
+раньше нижнего dock: терминал и Problems расположены справа от неё, под деревом
+и редактором. Пустое содержимое Problems больше не уменьшает выбранную высоту
+dock при переключении. Существующие lazy PTY, terminal focus, hide/reopen и
+сохранение размера продолжают работать. Problems остаётся прежним placeholder.
+Версия workspace/lockfile/UI/bundle — 0.1.5; следующая в AGENTS.md — 0.1.6.
+
+Новая headless egui-регрессия использует реальные pointer events при размерах
+1000×800 и 800×600: открытие Terminal, переключение Problems, повторный клик
+для сворачивания, reopen, положение верхней кнопки Project, полная высота полосы
+и отсутствие перекрытия dock с полосой/деревом. Прежний resize/hide/reopen тест
+сохранён. Нативная macOS-проверка на изолированной временной app-копии с отдельным
+bundle ID и временным проектом подтвердила расположение и переключение кнопок,
+полную высоту левой полосы и терминал справа от неё; тестовое приложение закрыто.
+Реальные проекты и настройки не менялись.
+
+Верификация: полный native workspace/all-features test — 217 passed, 0 failed,
+5 existing system/live tests ignored; запуск с system access для локальных
+TCP mocks. Native Clippy workspace/all-targets/all-features с -D warnings,
+rustfmt, workspace release build и git diff --check прошли. Windows build,
+Clippy и GUI, commit и push не выполнялись.
+
+Локальный macOS ARM64 executable и подписанный app archive обновлены через
+`update-binaries.py`; `--check` подтвердил source fingerprint и SHA-256 payload.
+Финальная временная native app-копия повторно проверена и закрыта.
+
+
+### Исправление Git toolbar (v0.1.6, 2026-10-30)
+
+Убрана строка Current Repository с дублирующими именем проекта и иконкой папки.
+Git toolbar и merge banner перенесены после левой полосы инструментов: теперь
+Git располагается справа от неё и не сдвигает верхние кнопки вниз. Toolbar
+сам задаёт horizontal layout; раньше основной shell вызывал его в вертикальном
+Ui, из-за чего branch/remote controls выходили за 50 px и создавали пустую полосу.
+Выбор ветки и сетевые действия занимают один ряд над Changes/History. Fetch origin
+сохраняется видимым при Pull/Push/Publish; контекстное сетевое меню сохранено.
+Версия workspace/lockfile/UI/bundle — 0.1.6, следующая — 0.1.7.
+
+Новая shell egui-регрессия при 1000×800 и 800×600 проверяет общую верхнюю границу
+rail/toolbar, toolbar справа от rail, ровно 50 px высоты, dock сразу под toolbar,
+видимость branch/Fetch и отсутствие Current Repository. Pointer-driven Git
+регрессия дополнительно проверяет видимый Fetch для ahead/behind состояний.
+
+Проверки: полный native workspace/all-features test — 218 passed, 0 failed,
+5 existing system/live tests ignored; системный доступ использован для локальных
+TCP mocks. Все 11 Git interaction tests прошли также после финального refactor.
+Clippy workspace/all-targets/all-features с -D warnings, rustfmt, workspace
+release build и git diff --check прошли. Нативное окно проверено с отдельным
+bundle ID и временным Git-проектом: нет повторного заголовка/пустой полосы,
+rail не сдвигается, видны branch/Fetch/Publish, History работает. Клик Fetch
+в локальный временный bare origin завершился успешно (Last fetched just now).
+Тестовое приложение закрыто; реальные проекты/настройки не менялись.
+macOS ARM64 executable и подписанный app archive обновлены update-binaries.py;
+--check подтвердил source fingerprint и payload checksums. Windows build/Clippy/GUI,
+commit и push не выполнялись.
+
+
+### Единые цвета проектов и отступы вкладок (v0.1.7, 2026-10-30)
+
+Welcome, заголовок активного проекта и open/recent project menu используют
+единый painter `project_badge`. Цвет выбирается по первым трём символам имени
+без учёта регистра из 12 ярких оттенков, независимо от пути и порядка проектов.
+Примеры leadforms, nozhove.com, forms-analytics, mf-lf и antifraud получают
+различные оттенки. Под вкладками добавлен отступ, симметричный верхнему: 4 px
+с каждой стороны 28 px viewport, общая высота строки 36 px. Current File убран.
+Workspace/lockfile/UI/bundle — 0.1.7, следующая версия в AGENTS.md — 0.1.8.
+
+Внутренний ряд ScrollArea выровнен через horizontal_top: прежнее центрирование
+смещало вкладки на 5 px вниз и выталкивало нижний край за viewport. Существующая
+проверка overflow дополнена проверкой верхней/нижней границы каждой вкладки.
+
+Проверки: 218 passed, 0 failed, 5 existing system/live tests ignored в полном
+native workspace/all-features прогоне с system access для локальных TCP mocks.
+Clippy workspace/all-targets/all-features с -D warnings, rustfmt, workspace release
+build и git diff --check прошли. Нативная macOS-проверка на отдельной временной
+app-копии с временными проектами подтвердила одинаковые пять цветов в welcome,
+menu и header, отсутствие Current File и видимый нижний отступ вкладок после
+исправления выравнивания. Приложение закрыто, реальные настройки не менялись.
+Windows build/Clippy/GUI, commit и push не выполнялись.
+
+macOS ARM64 executable и подписанный app archive обновлены update-binaries.py;
+--check подтвердил source fingerprint и payload checksums.

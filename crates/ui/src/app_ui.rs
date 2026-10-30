@@ -209,9 +209,6 @@ impl NozhikUi {
                             .on_hover_text("Debug · planned");
                         ui.add_enabled(false, Icon::Run)
                             .on_hover_text("Run · planned");
-                        ui.menu_button("Current File v", |ui| {
-                            ui.weak("Run configurations are planned");
-                        });
                     });
                 });
             });
@@ -273,30 +270,18 @@ impl NozhikUi {
                     });
                 });
             });
-        egui::TopBottomPanel::bottom("bottom_strip")
-            .exact_height(30.0)
-            .frame(theme::rail_frame())
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    for label in [crate::terminal_panel::TERMINAL_LABEL, "! Problems"] {
-                        if ui
-                            .selectable_label(self.bottom == Some(label), label)
-                            .clicked()
-                        {
-                            self.bottom = if self.bottom == Some(label) {
-                                None
-                            } else {
-                                Some(label)
-                            };
-                            if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
-                                && let Some(panel) = &mut self.terminal
-                            {
-                                panel.focus = true;
-                            }
-                        }
-                    }
-                });
-            });
+        self.tool_rail(ctx);
+        if self.left == Some(LeftTool::Commit) {
+            egui::TopBottomPanel::top("git_toolbar")
+                .exact_height(50.0)
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38)))
+                .show(ctx, |ui| self.vcs.toolbar(ui));
+            if self.vcs.is_merging() {
+                egui::TopBottomPanel::top("git_merge_banner")
+                    .frame(theme::rail_frame())
+                    .show(ctx, |ui| self.vcs.merge_banner(ui));
+            }
+        }
         let viewport = ctx
             .input(|i| i.viewport().inner_rect)
             .unwrap_or_else(|| ctx.screen_rect());
@@ -314,6 +299,8 @@ impl NozhikUi {
                 .show_separator_line(false)
                 .frame(theme::dock_frame(theme::PANEL))
                 .show(ctx, |ui| {
+                    // Keep sparse tool contents anchored at the chosen dock height.
+                    ui.set_min_height(ui.available_height());
                     if label == crate::terminal_panel::TERMINAL_LABEL {
                         let panel = self
                             .terminal
@@ -355,7 +342,7 @@ impl NozhikUi {
         self.side_panels(ctx);
     }
 
-    fn side_panels(&mut self, ctx: &Context) {
+    fn tool_rail(&mut self, ctx: &Context) {
         egui::SidePanel::left("left_strip")
             .exact_width(36.0)
             .resizable(false)
@@ -377,7 +364,34 @@ impl NozhikUi {
                         };
                     }
                 }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    for (icon, label, title) in [
+                        (
+                            Icon::Terminal,
+                            crate::terminal_panel::TERMINAL_LABEL,
+                            "Terminal",
+                        ),
+                        (Icon::Problems, "! Problems", "Problems"),
+                    ] {
+                        if tool_icons::button(ui, icon, self.bottom == Some(label), title).clicked()
+                        {
+                            self.bottom = if self.bottom == Some(label) {
+                                None
+                            } else {
+                                Some(label)
+                            };
+                            if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
+                                && let Some(panel) = &mut self.terminal
+                            {
+                                panel.focus = true;
+                            }
+                        }
+                    }
+                });
             });
+    }
+
+    fn side_panels(&mut self, ctx: &Context) {
         let viewport = ctx
             .input(|i| i.viewport().inner_rect)
             .unwrap_or_else(|| ctx.screen_rect());
@@ -626,24 +640,6 @@ impl NozhikUi {
         self.menu_bar(ctx);
         self.top_bar(ctx);
         self.project_tabs(ctx);
-        if self.left == Some(LeftTool::Commit) {
-            egui::TopBottomPanel::top("git_toolbar")
-                .exact_height(50.0)
-                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38)))
-                .show(ctx, |ui| {
-                    self.vcs.toolbar(
-                        ui,
-                        ctx.screen_rect()
-                            .width()
-                            .mul_add(self.layout.value.git, 36.0),
-                    );
-                });
-        }
-        if self.left == Some(LeftTool::Commit) && self.vcs.is_merging() {
-            egui::TopBottomPanel::top("git_merge_banner")
-                .frame(theme::rail_frame())
-                .show(ctx, |ui| self.vcs.merge_banner(ui));
-        }
         self.panels(ctx);
         if self.active.is_none() || self.database.active.is_some() {
             self.editor.ai.cancel();
@@ -720,6 +716,154 @@ mod tests {
             );
         }
         assert!(shell.terminal.is_some());
+        if let Some(panel) = &mut shell.terminal {
+            panel.shutdown();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn git_toolbar_stays_right_of_rail_in_one_row() -> Result<(), Box<dyn std::error::Error>> {
+        use egui::{Pos2, Rect, vec2};
+        let bus = EventBus::new(32)?;
+        let dir = tempfile::tempdir()?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        shell.left = Some(LeftTool::Commit);
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        for size in [vec2(1000.0, 800.0), vec2(800.0, 600.0)] {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    shell.top_bar(ctx);
+                    shell.project_tabs(ctx);
+                    shell.panels(ctx);
+                    shell.editor_area(ctx);
+                },
+            );
+            let rect = |name| {
+                egui::containers::panel::PanelState::load(&ctx, egui::Id::new(name))
+                    .map(|state| state.rect)
+                    .ok_or("missing panel")
+            };
+            let rail = rect("left_strip")?;
+            let toolbar = rect("git_toolbar")?;
+            assert_eq!(rail.top(), toolbar.top());
+            assert_eq!(toolbar.left(), rail.right());
+            assert_eq!(toolbar.height(), 50.0);
+            assert_eq!(rect("git_dock")?.top(), toolbar.bottom());
+            for label in ["Current Branch", "Fetch origin"] {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                        _ => None,
+                    })
+                    .ok_or("missing Git control")?;
+                assert!(toolbar.contains_rect(Rect::from_min_size(text.pos, text.galley.size())));
+            }
+            assert!(!output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Current Repository")
+            }));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bottom_tools_stay_in_full_height_rail() -> Result<(), Box<dyn std::error::Error>> {
+        use egui::{Event as InputEvent, Pos2, Rect, vec2};
+        let bus = EventBus::new(32)?;
+        let dir = tempfile::tempdir()?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let frame = |shell: &mut NozhikUi, size, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    shell.panels(ctx);
+                    shell.editor_area(ctx);
+                },
+            )
+        };
+        let rect = |name| {
+            egui::containers::panel::PanelState::load(&ctx, egui::Id::new(name))
+                .map(|state| state.rect)
+                .ok_or("missing panel")
+        };
+        for size in [vec2(1000.0, 800.0), vec2(800.0, 600.0)] {
+            shell.bottom = None;
+            frame(&mut shell, size, vec![]);
+            let rail = rect("left_strip")?;
+            assert_eq!(rail.width(), 36.0);
+            assert_eq!(rail.bottom(), rect("status")?.top());
+            let terminal = rail.left_bottom() + vec2(18.0, -18.0);
+            let problems = terminal - vec2(0.0, 32.0);
+            // Actual pointer input exercises open, switch, collapse and reopen.
+            for (position, expected) in [
+                (terminal, Some(crate::terminal_panel::TERMINAL_LABEL)),
+                (problems, Some("! Problems")),
+                (problems, None),
+                (terminal, Some(crate::terminal_panel::TERMINAL_LABEL)),
+                (terminal, None),
+            ] {
+                let pointer = |pressed| InputEvent::PointerButton {
+                    pos: position,
+                    pressed,
+                    button: egui::PointerButton::Primary,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(
+                    &mut shell,
+                    size,
+                    vec![InputEvent::PointerMoved(position), pointer(true)],
+                );
+                frame(&mut shell, size, vec![pointer(false)]);
+                assert_eq!(shell.bottom, expected);
+                assert_eq!(rect("left_strip")?, rail);
+                assert!(rect("left_dock")?.left() >= rail.right());
+                if expected.is_some() {
+                    let dock = rect("bottom_dock")?;
+                    assert!(dock.left() >= rail.right());
+                    assert_eq!(dock.bottom(), rail.bottom());
+                    assert!(
+                        rect("left_dock")?.bottom() <= dock.top(),
+                        "left={:?}, bottom={dock:?}, size={size:?}",
+                        rect("left_dock")?
+                    );
+                }
+            }
+            // The top group retains its original position and click action.
+            let project = rail.left_top() + vec2(18.0, 18.0);
+            let before = shell.left;
+            for pressed in [true, false] {
+                frame(
+                    &mut shell,
+                    size,
+                    vec![
+                        InputEvent::PointerMoved(project),
+                        InputEvent::PointerButton {
+                            pos: project,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(shell.left != before);
+            shell.left = Some(LeftTool::Project);
+        }
         if let Some(panel) = &mut shell.terminal {
             panel.shutdown();
         }

@@ -1180,3 +1180,38 @@ midpoint queues a reorder while primary is held; paths retain gesture identity
 across changing indices. The active project stays selected and each reorder
 requests repaint. Close targets do not start drags and drag release does not
 activate the moved inactive project.
+
+
+## Нижние инструменты в левой полосе (v0.1.5)
+
+`app_ui::panels` выделяет status bar, затем полную по высоте `tool_rail`,
+затем нижний dock и боковые tool windows. Поэтому Terminal/Problems, дерево
+и редактор всегда находятся справа от 36 px полосы. Отдельной горизонтальной
+строки переключателей нет. Верхняя группа инструментов сохраняет прежний
+порядок; bottom-up layout закрепляет внизу квадратные 28 px векторные кнопки
+Terminal и Problems. Переключение сохраняет прежние bottom state, lazy PTY,
+фокус, сворачивание и persisted resize; Problems пока остаётся placeholder.
+
+
+## Git chrome справа от полосы инструментов (v0.1.6)
+
+`app_ui::panels` создаёт Git toolbar и merge banner после полной левой полосы,
+перед dock-панелями. Полоса больше не сдвигается Git-заголовками; все Git-окна
+начинаются справа от неё. `VcsPanel::toolbar` самостоятельно задаёт горизонтальный
+layout высотой 50 px: выбор ветки, Fetch и контекстные сетевые действия.
+Current Repository с повторным именем/иконкой удалён; имя проекта уже во вкладке.
+Fetch остаётся отдельной видимой кнопкой, если primary action — Pull, Push,
+Pull & Push или Publish. Сетевые операции сохраняют прежние background tasks
+и ограничения origin/operation/mutation; отрисовка не вызывает сеть.
+
+
+## Единые иконки проектов и верхняя строка (v0.1.7)
+
+`project_badge` рисует инициалы для welcome rows, project switcher и project menu.
+Один детерминированный hash первых трёх Unicode-символов имени без учёта регистра
+выбирает один из 12 ярких цветов; путь, порядок MRU и активность не влияют на цвет.
+Project tabs используют строку 36 logical px с симметричными отступами по 4 px
+вокруг прежнего 28 px viewport. Внутренняя строка вкладок выровнена по верху
+(horizontal_top), чтобы вертикальное центрирование не выталкивало вкладки
+за viewport; скрытая прокрутка и drag/reorder не меняются.
+Current File удалён из top toolbar, остальные кнопки сохранены.

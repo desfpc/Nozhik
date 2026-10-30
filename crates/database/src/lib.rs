@@ -1,7 +1,10 @@
 //! Relational database connections, typed results, metadata and background execution.
+pub mod catalog;
+pub mod changes;
 pub mod connection;
 pub mod driver;
 pub mod introspection;
+mod table_ops;
 pub mod worker;
 
 pub use connection::{Connection, ConnectionProfile, load_profiles, save_profiles};

@@ -1,6 +1,6 @@
 //! Catalog metadata using bound names and dialect-specific system catalogs.
 use crate::{
-    Connection, DbDriverType, Result,
+    Connection, Result,
     connection::{Pool, quote_identifier},
 };
 use sqlx::Row;
@@ -28,6 +28,10 @@ pub struct TableInfo {
     pub is_view: bool,
     /// Ordered column metadata.
     pub columns: Vec<SchemaColumn>,
+    /// Keys, references, indexes and catalog DDL.
+    pub objects: crate::catalog::TableObjects,
+    /// True after relation details were fetched; empty catalogs are otherwise placeholders.
+    pub details_loaded: bool,
 }
 /// Schema column, distinct from a query result column alias.
 #[derive(Clone, Debug)]
@@ -42,124 +46,127 @@ pub struct SchemaColumn {
     pub is_primary_key: bool,
 }
 impl Connection {
-    /// Read visible catalog metadata. SQLite includes attached namespaces.
+    /// Read namespace and relation names without querying columns, indexes or DDL.
     /// # Errors
-    /// Returns driver errors or malformed catalog values.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Three catalog dialects share the same metadata contract"
-    )]
-    pub async fn introspect(&self) -> Result<DatabaseSchemaTree> {
+    /// Returns catalog permission, transport or decoding errors.
+    pub async fn catalog(&self) -> Result<DatabaseSchemaTree> {
         let mut tree = DatabaseSchemaTree::default();
-        match &self.pool {
-            Pool::Sqlite(pool) => {
-                for row in sqlx::query("PRAGMA database_list").fetch_all(pool).await? {
-                    let name: String = row.try_get("name")?;
-                    let quoted = quote_identifier(DbDriverType::Sqlite, &name);
-                    let tables = sqlx::query(&format!("SELECT name, type FROM {quoted}.sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")).fetch_all(pool).await?;
-                    let mut schema = SchemaInfo {
+        let schemas:Vec<String>=match &self.pool {
+            Pool::Sqlite(p)=>sqlx::query("PRAGMA database_list").fetch_all(p).await?.iter().map(|r|r.try_get("name")).collect::<std::result::Result<_,_>>()?,
+            Pool::Postgres(p)=>sqlx::query_scalar("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name").fetch_all(p).await?,
+            Pool::Mysql(p)=>sqlx::query_scalar("SELECT CAST(SCHEMA_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY SCHEMA_NAME").fetch_all(p).await?,
+        };
+        for schema in schemas {
+            let relations:Vec<(String,String)>=match &self.pool {
+                Pool::Sqlite(p)=>sqlx::query_as(&format!("SELECT name,type FROM {}.sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",quote_identifier(self.driver,&schema))).fetch_all(p).await?,
+                Pool::Postgres(p)=>sqlx::query_as("SELECT table_name,table_type FROM information_schema.tables WHERE table_schema=$1 ORDER BY table_name").bind(&schema).fetch_all(p).await?,
+                Pool::Mysql(p)=>sqlx::query_as("SELECT CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4),CAST(TABLE_TYPE AS CHAR CHARACTER SET utf8mb4) FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME").bind(&schema).fetch_all(p).await?,
+            };
+            tree.schemas.push(SchemaInfo {
+                name: schema,
+                tables: relations
+                    .into_iter()
+                    .map(|(name, kind)| TableInfo {
                         name,
-                        tables: Vec::new(),
-                    };
-                    for table in tables {
-                        let name: String = table.try_get("name")?;
-                        let mut info = TableInfo {
-                            name: name.clone(),
-                            is_view: table.try_get::<String, _>("type")? == "view",
-                            columns: Vec::new(),
-                        };
-                        let columns = sqlx::query(&format!(
-                            "PRAGMA {quoted}.table_info({})",
-                            quote_identifier(DbDriverType::Sqlite, &name)
-                        ))
-                        .fetch_all(pool)
-                        .await?;
-                        let single_pk = columns
-                            .iter()
-                            .filter(|c| c.try_get::<i64, _>("pk").is_ok_and(|pk| pk > 0))
-                            .count()
-                            == 1;
-                        for c in columns {
-                            let pk = c.try_get::<i64, _>("pk")? > 0;
-                            let data_type: String = c.try_get("type")?;
-                            // Legacy rowid tables permit NULL in non-integer PKs.
-                            let rowid_pk =
-                                pk && single_pk && data_type.eq_ignore_ascii_case("INTEGER");
-                            info.columns.push(SchemaColumn {
-                                name: c.try_get("name")?,
-                                data_type,
-                                nullable: c.try_get::<i64, _>("notnull")? == 0 && !rowid_pk,
-                                is_primary_key: pk,
-                            });
-                        }
-                        schema.tables.push(info);
-                    }
-                    tree.schemas.push(schema);
-                }
+                        is_view: kind.eq_ignore_ascii_case("view"),
+                        columns: Vec::new(),
+                        objects: crate::catalog::TableObjects::default(),
+                        details_loaded: false,
+                    })
+                    .collect(),
+            });
+        }
+        Ok(tree)
+    }
+    /// Read one relation's columns, keys, indexes and DDL. Names remain quoted/bound.
+    /// # Errors
+    /// Returns catalog permission, missing relation or transport errors.
+    pub async fn describe_table(
+        &self,
+        schema: &str,
+        table: &str,
+        is_view: bool,
+    ) -> Result<TableInfo> {
+        let columns = match &self.pool {
+            Pool::Sqlite(p) => {
+                let rows = sqlx::query(&format!(
+                    "PRAGMA {}.table_info({})",
+                    quote_identifier(self.driver, schema),
+                    quote_identifier(self.driver, table)
+                ))
+                .fetch_all(p)
+                .await?;
+                let single_pk = rows
+                    .iter()
+                    .filter(|r| r.try_get::<i64, _>("pk").is_ok_and(|v| v > 0))
+                    .count()
+                    == 1;
+                rows.iter()
+                    .map(|r| {
+                        let pk = r.try_get::<i64, _>("pk")? > 0;
+                        let data_type: String = r.try_get("type")?;
+                        let rowid_pk = pk && single_pk && data_type.eq_ignore_ascii_case("INTEGER");
+                        Ok(SchemaColumn {
+                            name: r.try_get("name")?,
+                            data_type,
+                            nullable: r.try_get::<i64, _>("notnull")? == 0 && !rowid_pk,
+                            is_primary_key: pk,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?
             }
-            Pool::Postgres(pool) => {
-                let schemas = sqlx::query("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name").fetch_all(pool).await?;
-                for s in schemas {
-                    let name: String = s.try_get("schema_name")?;
-                    let tables = sqlx::query("SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name").bind(&name).fetch_all(pool).await?;
-                    let mut schema = SchemaInfo {
-                        name,
-                        tables: Vec::new(),
-                    };
-                    for t in tables {
-                        let name: String = t.try_get("table_name")?;
-                        let rows = sqlx::query("SELECT c.column_name, c.data_type, c.is_nullable, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k ON tc.constraint_catalog=k.constraint_catalog AND tc.constraint_schema=k.constraint_schema AND tc.constraint_name=k.constraint_name AND tc.table_name=k.table_name WHERE tc.constraint_type='PRIMARY KEY' AND k.table_schema=c.table_schema AND k.table_name=c.table_name AND k.column_name=c.column_name) AS pk FROM information_schema.columns c WHERE c.table_schema=$1 AND c.table_name=$2 ORDER BY c.ordinal_position").bind(&schema.name).bind(&name).fetch_all(pool).await?;
-                        let columns = rows
-                            .iter()
-                            .map(|c| {
-                                Ok(SchemaColumn {
-                                    name: c.try_get("column_name")?,
-                                    data_type: c.try_get("data_type")?,
-                                    nullable: c.try_get::<String, _>("is_nullable")? == "YES",
-                                    is_primary_key: c.try_get("pk")?,
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        schema.tables.push(TableInfo {
-                            name,
-                            is_view: t.try_get::<String, _>("table_type")? == "VIEW",
-                            columns,
-                        });
-                    }
-                    tree.schemas.push(schema);
-                }
+            Pool::Postgres(p) => {
+                let rows=sqlx::query("SELECT c.column_name, c.data_type, c.is_nullable, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k ON tc.constraint_catalog=k.constraint_catalog AND tc.constraint_schema=k.constraint_schema AND tc.constraint_name=k.constraint_name AND tc.table_name=k.table_name WHERE tc.constraint_type='PRIMARY KEY' AND k.table_schema=c.table_schema AND k.table_name=c.table_name AND k.column_name=c.column_name) AS pk FROM information_schema.columns c WHERE c.table_schema=$1 AND c.table_name=$2 ORDER BY c.ordinal_position").bind(schema).bind(table).fetch_all(p).await?;
+                rows.iter()
+                    .map(|r| {
+                        Ok(SchemaColumn {
+                            name: r.try_get("column_name")?,
+                            data_type: r.try_get("data_type")?,
+                            nullable: r.try_get::<String, _>("is_nullable")? == "YES",
+                            is_primary_key: r.try_get("pk")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?
             }
-            Pool::Mysql(pool) => {
-                let schemas = sqlx::query("SELECT CAST(SCHEMA_NAME AS CHAR CHARACTER SET utf8mb4) AS SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY SCHEMA_NAME").fetch_all(pool).await?;
-                for s in schemas {
-                    let name: String = s.try_get("SCHEMA_NAME")?;
-                    let tables = sqlx::query("SELECT CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4) AS TABLE_NAME, CAST(TABLE_TYPE AS CHAR CHARACTER SET utf8mb4) AS TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME").bind(&name).fetch_all(pool).await?;
-                    let mut schema = SchemaInfo {
-                        name,
-                        tables: Vec::new(),
-                    };
-                    for t in tables {
-                        let name: String = t.try_get("TABLE_NAME")?;
-                        let rows = sqlx::query("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4) AS COLUMN_NAME, CAST(COLUMN_TYPE AS CHAR CHARACTER SET utf8mb4) AS COLUMN_TYPE, CAST(IS_NULLABLE AS CHAR CHARACTER SET utf8mb4) AS IS_NULLABLE, CAST(COLUMN_KEY AS CHAR CHARACTER SET utf8mb4) AS COLUMN_KEY FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(&schema.name).bind(&name).fetch_all(pool).await?;
-                        let columns = rows
-                            .iter()
-                            .map(|c| {
-                                Ok(SchemaColumn {
-                                    name: c.try_get("COLUMN_NAME")?,
-                                    data_type: c.try_get("COLUMN_TYPE")?,
-                                    nullable: c.try_get::<String, _>("IS_NULLABLE")? == "YES",
-                                    is_primary_key: c.try_get::<String, _>("COLUMN_KEY")? == "PRI",
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        schema.tables.push(TableInfo {
-                            name,
-                            is_view: t.try_get::<String, _>("TABLE_TYPE")? == "VIEW",
-                            columns,
-                        });
-                    }
-                    tree.schemas.push(schema);
-                }
+            Pool::Mysql(p) => {
+                let rows=sqlx::query("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4) AS name, CAST(CONCAT(COLUMN_TYPE, IF(EXTRA='','',CONCAT(' ',EXTRA))) AS CHAR CHARACTER SET utf8mb4) AS kind, CAST(IS_NULLABLE AS CHAR CHARACTER SET utf8mb4) AS nullable, CAST(COLUMN_KEY AS CHAR CHARACTER SET utf8mb4) AS pk FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(schema).bind(table).fetch_all(p).await?;
+                rows.iter()
+                    .map(|r| {
+                        Ok(SchemaColumn {
+                            name: r.try_get("name")?,
+                            data_type: r.try_get("kind")?,
+                            nullable: r.try_get::<String, _>("nullable")? == "YES",
+                            is_primary_key: r.try_get::<String, _>("pk")? == "PRI",
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+        };
+        let objects = self
+            .table_objects(schema, table, is_view)
+            .await
+            .unwrap_or_else(|e| crate::catalog::TableObjects {
+                error: Some(e.to_string()),
+                ..Default::default()
+            });
+        Ok(TableInfo {
+            name: table.into(),
+            is_view,
+            columns,
+            objects,
+            details_loaded: true,
+        })
+    }
+    /// Read a complete metadata snapshot. Interactive clients should use `catalog` and `describe_table`.
+    /// # Errors
+    /// Returns catalog, permission or transport errors for any relation.
+    pub async fn introspect(&self) -> Result<DatabaseSchemaTree> {
+        let mut tree = self.catalog().await?;
+        for schema in &mut tree.schemas {
+            for table in &mut schema.tables {
+                *table = self
+                    .describe_table(&schema.name, &table.name, table.is_view)
+                    .await?;
             }
         }
         Ok(tree)

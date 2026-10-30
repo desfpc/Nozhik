@@ -428,12 +428,55 @@ VM без потери in-memory БД. Отмена не откатывает у
 Схема PG/MySQL устанавливается перед каждым запуском на той же pool connection;
 переход к Default schema сбрасывает состояние предыдущей вкладки.
 
-`DatabaseSchemaTree` → SchemaInfo → TableInfo { is_view, columns } → SchemaColumn
+`DatabaseSchemaTree` → SchemaInfo → TableInfo { is_view, columns, objects } → SchemaColumn
 { name, data_type, nullable, is_primary_key }. PostgreSQL использует information_schema
 с join полного constraint identity, MySQL/MariaDB — information_schema с явным
 UTF-8 CAST для бинарных catalog columns, SQLite — database_list/sqlite_master/
 table_info. Идентификаторы в preview/PRAGMA цитируются по диалекту, catalog filters
-используют bind parameters. Tree принадлежит UI как готовый snapshot.
+используют bind parameters. Tree принадлежит UI: начальный snapshot содержит только имена, затем обновляется
+по ответам Describe одной таблицы. `catalog()` не читает колонки/ключи/DDL;
+`describe_table()` загружает один relation, `introspect()` остаётся полным API для
+проверок/явных потребителей. TableInfo.details_loaded отличает пустые placeholders.
+Command::Describe запускается в bounded task с timeout 20s; Reply::Table сверяется
+с request ID и активным каталогом. Ошибка видна внутри узла с Retry; ошибка
+keys/DDL сохраняется в TableObjects.error и не блокирует колонки/данные.
+Connect имеет отдельные пределы 45s для транспорта и 30s для имён каталога;
+Test Connection проверяет только handshake/authentication. UI показывает
+Connecting… и устанавливает Database Connected только после готовности имён.
+SSH transport ready не считается готовностью БД.
+
+Command::Update несёт исходный и изменённый профиль: worker заменяет ровно
+ожидаемую запись, отклоняет дубликат имени/устаревшую форму, атомарно сохраняет
+JSON и только после успеха отменяет старое соединение. Новые сохранённые
+credentials требуют теста тех же полей/пароля; прежний credential можно сохранить
+для того же endpoint. При переименовании сохранённый credential копируется в
+новую identity в background blocking API, без сериализации секрета. Старые
+вкладки помечаются connection_invalid: правки остаются, execution/submit/reload
+запрещены даже после повторного подключения с тем же именем. Новые таблицы и
+DDL не дедуплицируются с invalid-вкладками.
+`TableObjects` содержит keys, foreign_keys, indexes и DDL: SQLite sqlite_master/
+PRAGMA, MySQL SHOW CREATE/information_schema, PostgreSQL pg_constraint/pg_indexes/
+pg_attribute. PostgreSQL DDL реконструируется из каталога (типы, defaults,
+identity/generated columns, constraints, indexes); это определение таблицы,
+не полный pg_dump привилегий, partition/storage settings и зависимостей.
+
+Открытие таблицы создаёт SqlConsole с TableEditor вместо SQL editor/results;
+connection/schema/relation определяют дедупликацию вкладки. TableChanges хранит
+baseline и EditedRow: original, values (None = DEFAULT новой строки), deleted.
+Двумерный viewport содержит редактируемые ячейки и номера для multi-selection.
+Локальные изменения не вызывают worker. Один генератор statements обслуживает
+preview и Command::Apply. Значения экранируются по диалекту, текст MySQL/SQLite
+передаётся hex-литералами, PostgreSQL использует E-strings. WHERE включает исходные
+значения для optimistic concurrency, включая старый PK и NULL predicates.
+Apply использует SQLx transaction на одном соединении и требует ровно одну
+затронутую строку на statement; ошибка/отмена до commit откатывает весь пакет.
+MySQL требует InnoDB; серверное соединение после Apply выводится из пула,
+SQLite progress handler прерывает VM по токену. После начала commit worker ждёт
+его результата. Applied коррелируется по request ID, затем запускается reload
+именно исходной вкладки. Ошибка оставляет локальные правки. Close gate учитывает
+pending table edits; Save All не коммитит данные. DDL открывается отдельной
+SQL-вкладкой с подсветкой и обычным сохранением файла.
+
 
 `database_panel` маршрутизирует профили/тесты/SSH, сохраняет форму при ошибках и
 сверяет тест с текущими полями. `sql_console` использует штатные TextBuffer и

@@ -81,7 +81,7 @@ impl NozhikUi {
             }
         }
     }
-    pub(crate) const fn global_modal(&self) -> bool {
+    pub(crate) fn global_modal(&self) -> bool {
         self.welcome.clone.open
             || self.language.usages.is_some()
             || self.language.invalidate_dialog
@@ -92,12 +92,17 @@ impl NozhikUi {
             || self.plugins_open
             || self.remote.modal_open()
             || self.database.modal_open()
+            || self.database.table_modal()
             || self.integration.about
             || self.vcs.modal_open()
     }
     pub(crate) fn active_buffer(&mut self) -> Option<&mut nozhik_buffer::TextBuffer> {
         if let Some(index) = self.database.active {
-            self.database.tabs.get_mut(index).map(|t| &mut t.buffer)
+            self.database
+                .tabs
+                .get_mut(index)
+                .filter(|t| t.table.is_none())
+                .map(|t| &mut t.buffer)
         } else {
             self.active
                 .and_then(|i| self.documents.get_mut(i))
@@ -109,7 +114,11 @@ impl NozhikUi {
         match target {
             CloseTarget::Window | CloseTarget::Project => {
                 self.documents.iter().any(|d| d.buffer.is_dirty())
-                    || self.database.tabs.iter().any(|t| t.buffer.is_dirty())
+                    || self
+                        .database
+                        .tabs
+                        .iter()
+                        .any(super::sql_console::SqlConsole::is_dirty)
             }
             CloseTarget::Files => self.documents.iter().any(|d| d.open && d.buffer.is_dirty()),
             CloseTarget::File(i) => self.documents.get(i).is_some_and(|d| d.buffer.is_dirty()),
@@ -117,7 +126,7 @@ impl NozhikUi {
                 .database
                 .tabs
                 .get(i)
-                .is_some_and(|t| t.buffer.is_dirty()),
+                .is_some_and(super::sql_console::SqlConsole::is_dirty),
         }
     }
     pub(crate) fn request_close(&mut self, target: CloseTarget, ctx: &egui::Context) {
@@ -187,7 +196,12 @@ impl NozhikUi {
             }
         }
         for i in 0..self.database.tabs.len() {
-            if self.database.tabs[i].buffer.is_dirty() {
+            if self.database.tabs[i].table.is_some() {
+                if self.database.tabs[i].is_dirty() {
+                    self.integration.save_error =
+                        Some("Submit or Revert pending table changes before closing".into());
+                }
+            } else if self.database.tabs[i].buffer.is_dirty() {
                 self.save_sql(i);
             }
         }
@@ -196,6 +210,9 @@ impl NozhikUi {
         let Some(tab) = self.database.tabs.get(index) else {
             return;
         };
+        if tab.table.is_some() {
+            return;
+        }
         let Some(path) = tab.path.clone() else {
             if self.integration.path_action.is_none() {
                 self.integration.path_action = Some(PathAction::SaveSql(index));
@@ -456,18 +473,31 @@ impl NozhikUi {
         if let Some(target) = self.integration.close
             && self.integration.path_action.is_none()
         {
+            let pending_table = match target {
+                CloseTarget::Sql(i) => self
+                    .database
+                    .tabs
+                    .get(i)
+                    .is_some_and(|t| t.table.is_some() && t.is_dirty()),
+                CloseTarget::Window | CloseTarget::Project => self
+                    .database
+                    .tabs
+                    .iter()
+                    .any(|t| t.table.is_some() && t.is_dirty()),
+                _ => false,
+            };
             let mut save = false;
             let mut discard = false;
             let mut cancel = false;
             egui::Modal::new(egui::Id::new("unsaved_close")).show(ctx, |ui| {
                 ui.heading("Unsaved changes");
-                ui.label("Save modified files before closing?");
+                ui.label(if pending_table { "Table changes are pending. Cancel to return and use Submit or Revert; Discard closes without submitting." } else { "Save modified files before closing?" });
                 if let Some(error) = &self.integration.save_error {
                     ui.colored_label(crate::theme::ERROR, error);
                 }
                 ui.horizontal(|ui| {
                     save = ui
-                        .add_enabled(!self.integration.waiting, egui::Button::new("Save All"))
+                        .add_enabled(!self.integration.waiting && !pending_table, egui::Button::new("Save All"))
                         .clicked();
                     discard = ui
                         .add_enabled(!self.integration.waiting, egui::Button::new("Discard"))

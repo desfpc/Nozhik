@@ -821,7 +821,7 @@ SQLite — attached namespaces. Для SQLite активную namespace зад�
 Worker queues 32/32, максимум 16 query tasks, retained results 10 000 rows / 16 MiB.
 UI коррелирует ответы по request ID, отменяет закрытую вкладку и не меняет её
 SQL-буфер при ответе. Data Grid сортирует только полученные строки, не БД.
-Нет editable cells, server-side pagination, SQL completion/LSP, persisted console
+В исходном Phase 8 не было editable cells (добавлены в v0.1.8), server-side pagination, SQL completion/LSP, persisted console
 sessions, отдельных транзакционных SQL-сессий на вкладку, connection edit/delete
 или настройки TLS в форме. SQL lexer не полноценный AST процедурных SQL-диалектов.
 Транзакции выполняются внутри одного запуска скрипта; отмена/лимит/ошибка не
@@ -927,8 +927,7 @@ non-Git проектом. AX подтвердил верхнее меню и ava
 и Windows/Linux измеряются по release checklist, универсальное CPU≤1% не заявляется.
 
 RC1 — полнота текущего заявленного набора функций, не отмена прежних ограничений:
-runner/debugger, marketplace, full accessibility, signed installers, SQL editing/
-pagination, многие vendor SQL types и persistent sessions остаются вне scope.
+runner/debugger, marketplace, full accessibility, signed installers, SQL pagination, многие vendor SQL types и persistent sessions остаются вне scope.
 Manual release matrix и неисполненные gates отмечены в verification-checklist.md.
 
 
@@ -2228,3 +2227,111 @@ Windows build/Clippy/GUI, commit и push не выполнялись.
 
 macOS ARM64 executable и подписанный app archive обновлены update-binaries.py;
 --check подтвердил source fingerprint и payload checksums.
+
+
+### Объекты таблиц и отложенное редактирование данных (v0.1.8, 2026-10-30)
+
+Database Explorer показывает columns, keys, foreign keys и indexes с количеством
+объектов, типами/PK, определениями ограничений и ссылками. Каталоги SQLite,
+PostgreSQL и MySQL/MariaDB получают нативные метаданные и DDL. Двойной клик и
+Open Table открывают отдельный TableEditor в общей полосе вкладок; повторное
+открытие сохраняет текущую сессию и правки. Go to DDL открывает SQL-вкладку
+с редактором, подсветкой и возможностью сохранения файла.
+
+Ячейки редактируются локально. Add Row использует DEFAULT для незаданных ячеек;
+контекстное меню позволяет задать NULL. Номера строк поддерживают обычный выбор,
+Cmd/Ctrl-toggle и Shift-range. Delete Rows только помечает выбранные строки.
+Revert сбрасывает пакет, Preview Pending Changes показывает BEGIN/DML/COMMIT,
+Submit выполняет те же statements в SQLx-транзакции и перечитывает исходную
+вкладку. Три действия активируются при наличии правок. Reload защищён от потери
+неотправленных изменений; Cancel Running Statements использует токен запроса.
+
+WHERE включает исходные значения, в том числе старый PK, и проверяет ровно одну
+затронутую строку. Конфликт, неоднозначность строк без PK или ошибка ограничения
+откатывает весь пакет и сохраняет локальные правки. SQLite VM отменяется через
+progress handler, серверное соединение выводится из пула после Submit. Начавшийся
+COMMIT дожидается результата. MySQL Submit требует InnoDB; views доступны для
+чтения. Save All не отправляет DML; закрытие с правками проходит Discard/Cancel.
+Версия workspace/Cargo.lock/UI/bundle — 0.1.8, следующая — 0.1.9.
+
+Новые SQLite-регрессии проверяют отсутствие записи до Submit, update/insert/delete,
+изменение PK, DEFAULT/NULL/binary/Unicode/кавычки/NUL, извлечение ключей/index/FK/DDL,
+Revert, откат целого пакета при ошибке/конкурентной правке/неоднозначной строке,
+редактирование уникальной строки без PK и отмену долгого триггера с откатом.
+Headless egui использует реальные pointer/key events: двойной клик по дереву,
+дедупликация таблицы, группы объектов, ввод в ячейку, Preview/Cancel/Revert,
+Submit обновления/вставки/удаления, dirty-close gate и отдельная DDL-вкладка.
+
+Верификация: полный native workspace/all-features test — 222 passed, 0 failed,
+5 existing system/live tests ignored. Native Clippy workspace/all-targets/all-features
+с -D warnings, rustfmt и git diff --check прошли. После нативной проверки убраны
+неподдерживаемые шрифтом символы Revert/Submit/PK, добавлены границы ячеек и
+подсветка выбранных строк; открытие preview и изменения dirty явно запрашивают
+repaint. Pointer-driven table regression повторно прошла после этих правок.
+
+Нативная macOS-проверка использовала отдельную временную app-копию с отдельным
+bundle ID, временным проектом/SQLite-файлом, отключёнными AI/языками. Проверены
+подключение, дерево, двойной клик, редактирование числовой ячейки, DML Preview
+и Submit с автоматическим перечитыванием; фактическое значение дополнительно
+проверено через SQLite на диске. Реальные проекты, подключения и настройки не
+менялись. PostgreSQL/MySQL/MariaDB live tests и Windows build/Clippy/GUI не
+запускались; Docker daemon в этой сессии недоступен. Commit/push не выполнялись.
+
+Повторная нативная проверка подтвердила видимую сетку/выделение строки, нормальные
+подписи Revert/Submit/PK, появление Preview по первому клику, возврат исходного
+значения через Revert и отдельную DDL-вкладку с подсветкой SQL. Тестовое окно
+закрыто. Workspace release build прошёл; update-binaries.py пересобрал только
+macOS ARM64 executable и подписанный app archive, --check подтвердил source
+fingerprint и SHA-256 payload. Windows-кэш не создавался.
+
+Финальный полный прогон после всех правок: 222 passed, 0 failed, 5 ignored.
+Повторный sandbox-прогон UI блокировал четыре существующих TCP mock-теста с
+PermissionDenied; полный workspace/all-features прогон с system access прошёл.
+
+
+### Таймаут подключения и редактирование профилей БД (v0.1.9, 2026-10-30)
+
+Исправлена регрессия v0.1.8: Connect ждал полный catalog crawl колонок, ограничений,
+индексов и DDL каждой таблицы всех видимых namespaces. На удалённой БД это
+исчерпывало общий timeout, не показывая дерево. Теперь Connect запрашивает только
+имена, детали загружаются по требованию отдельными Describe tasks с timeout 20s.
+Ошибки отдельных таблиц локализованы, доступны Retry; ошибка keys/DDL не мешает
+читать колонки и данные. Test Connection проверяет handshake/authentication;
+Connect различает transport/auth timeout и catalog timeout. Connecting…/готовый
+Database Connected отделены от SSH transport ready. Запросы деталей дедуплицируются,
+поздние ответы после disconnect/refresh/update игнорируются.
+
+Edit Connection… доступен для Offline/Online профилей. Форма с прокруткой открывает
+все существующие поля; Cancel сохраняет исходный JSON. Update заменяет ожидаемую
+запись на прежней позиции и сохраняет другие профили. Duplicate/stale/corrupt
+ошибки оставляют файл/форму. Saved credentials сохраняют прежний opt-in и test gate,
+сессионный пароль того же endpoint сохраняется при пустом поле. После Save старый
+pool отменяется; открытые вкладки сохраняют результаты/правки, но блокируют
+запросы к изменённому endpoint. Новое подключение создаёт новые вкладки.
+Версия workspace/Cargo.lock/UI/bundle — 0.1.9, следующая — 0.1.10.
+
+Добавлены SQLite worker-регрессии: повреждённое нераскрытое view не мешает Connect
+и списку таблиц; отказ Describe не ломает другую таблицу; profile Update сохраняет
+порядок/другие профили, разрывает старый pool и отвергает duplicate/stale/untested
+credential updates. Pointer-driven egui-тест редактирует имя и SQLite-путь через
+форму, сохраняет профиль, проверяет dirty-вкладку прежнего endpoint и открытие
+данных нового, ошибку дубликата и Cancel. Пользовательские подключения/БД не
+используются в автоматических тестах.
+
+Проверки v0.1.9: полный native workspace/all-features test с system access для
+существующих localhost TCP mocks — 225 passed, 0 failed, 5 ignored. Первый
+sandbox-прогон затронутых крейтов блокировал четыре прежних TCP mock-теста с
+PermissionDenied; новые тесты БД и формы прошли. Native Clippy workspace/all-targets/
+all-features с -D warnings, rustfmt, workspace release build и git diff --check
+прошли. PostgreSQL/MySQL/MariaDB live tests и Windows build/Clippy не запускались.
+
+Нативная macOS-проверка упакованной 0.1.9 использовала отдельную временную app-копию
+с уникальным bundle ID, временными settings/project и SQLite-файлом с broken view.
+Connect показал Online/Database Connected и дерево; раскрытие broken view показало
+локальную ошибку с Retry, после неё исправная таблица открылась с данными.
+Edit Connection… открыл предзаполненную форму с доступными Save/Cancel. Сохранение
+изменённых полей и защиту старых вкладок проверяет pointer-driven egui regression;
+нативное сохранение изменённых полей не подтверждено. Тестовое окно закрыто.
+Пользовательские профили, credentials и реальные БД не изменялись. macOS ARM64
+executable и подписанный app archive обновлены update-binaries.py; --check проверяет
+source fingerprint и SHA-256 payload. Windows-кэш не создавался, commit/push нет.

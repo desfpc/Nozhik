@@ -230,7 +230,12 @@ impl NozhikUi {
                 self.remote.require_credentials(profile, intent, error);
             }
             Reply::DatabaseFailed(id, error) => self.database.cancel_ssh(id, error),
-            Reply::DatabaseSession(id, session) => self.database.accept_ssh(id, session),
+            Reply::DatabaseSession(id, session) => {
+                self.status =
+                    "Database: SSH transport ready; connecting to database / loading table names…"
+                        .into();
+                self.database.accept_ssh(id, session);
+            }
             Reply::Connected(name) => {
                 self.remote.connected.insert(name.clone());
                 self.status = format!("SSH {name}: Connected");

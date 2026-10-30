@@ -6,6 +6,9 @@ use nozhik_language_support::highlighter::HighlightSpan;
 use std::ops::Range;
 
 pub struct SqlConsole {
+    pub table: Option<crate::table_editor::TableEditor>,
+    pub ddl: bool,
+    pub connection_invalid: bool,
     pub path: Option<std::path::PathBuf>,
     pub split: f32,
     pub focus_id: Option<egui::Id>,
@@ -26,6 +29,9 @@ pub struct SqlConsole {
 impl SqlConsole {
     pub fn new(id: u64, connection: String, schema: String, sql: &str, title: String) -> Self {
         Self {
+            table: None,
+            ddl: false,
+            connection_invalid: false,
             path: None,
             split: 0.45,
             focus_id: None,
@@ -44,6 +50,12 @@ impl SqlConsole {
             open: true,
         }
     }
+    pub fn is_dirty(&self) -> bool {
+        self.table.as_ref().map_or_else(
+            || self.buffer.is_dirty(),
+            |t| t.dirty() || self.pending.is_some(),
+        )
+    }
     /// Returns a request only after toolbar/shortcut execution.
     #[allow(
         clippy::too_many_lines,
@@ -56,6 +68,15 @@ impl SqlConsole {
         tree: Option<&DatabaseSchemaTree>,
         enabled: bool,
     ) -> Option<String> {
+        if let Some(table) = &mut self.table {
+            self.focus_id = None;
+            self.editor_id = None;
+            if !self.error.is_empty() {
+                ui.colored_label(crate::theme::ERROR, &self.error);
+            }
+            table.show(ui, self.pending.is_some(), enabled);
+            return None;
+        }
         let mut execute = false;
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
@@ -87,7 +108,7 @@ impl SqlConsole {
                     });
                 execute = ui
                     .add_enabled(
-                        self.pending.is_none(),
+                        self.pending.is_none() && !self.ddl,
                         egui::Button::new(
                             egui::RichText::new("▶ Execute").color(crate::theme::SUCCESS),
                         ),
@@ -103,6 +124,7 @@ impl SqlConsole {
         });
         if enabled
             && self.pending.is_none()
+            && !self.ddl
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
         {
             execute = true;

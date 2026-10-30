@@ -288,13 +288,50 @@ pub enum Command {
         /// Independent UI cancellation.
         cancel: CancellationToken,
     },
-    /// Reload schema metadata.
+    /// Submit staged edits in a transaction.
+    Apply {
+        /// Request identity.
+        id: u64,
+        /// Connection name.
+        name: String,
+        /// Local snapshot to submit.
+        changes: crate::changes::TableChanges,
+        /// Independent cancellation.
+        cancel: CancellationToken,
+    },
+    /// Lazily load metadata for one relation.
+    Describe {
+        /// Request identity.
+        id: u64,
+        /// Connection name.
+        name: String,
+        /// Namespace.
+        schema: String,
+        /// Relation name.
+        table: String,
+        /// Whether the relation is a view.
+        is_view: bool,
+    },
+    /// Replace an existing profile; the original must still match the persisted version.
+    Update {
+        /// Previously loaded profile.
+        original: crate::ConnectionProfile,
+        /// Edited profile.
+        profile: crate::ConnectionProfile,
+        /// Replacement password, absent to preserve the existing credential.
+        password: Option<nozhik_remote_ssh::credentials::Secret>,
+    },
+    /// Reload schema names and relation names.
     Inspect(String),
 }
 /// Typed completions.
 pub enum Reply {
     /// Loaded or saved profiles.
     Profiles(Vec<crate::ConnectionProfile>),
+    /// Profile replaced successfully; old connection has been invalidated.
+    Updated(String, Vec<crate::ConnectionProfile>),
+    /// One lazily loaded relation's metadata.
+    Table(u64, Result<crate::introspection::TableInfo>),
     /// Profile persistence failed; form remains open.
     SaveError(String),
     /// Connection test/open result.
@@ -305,6 +342,8 @@ pub enum Reply {
     Schema(String, Result<crate::DatabaseSchemaTree>),
     /// Query result, including errors and cancellation.
     Query(u64, Result<Vec<QueryResult>>),
+    /// Transactional edit completion.
+    Applied(u64, Result<()>),
     /// Worker-level failure.
     Error(String),
 }
@@ -319,6 +358,10 @@ pub struct Worker {
 impl Worker {
     /// Start an isolated Tokio worker; profile and credential I/O use blocking pool.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One bounded actor dispatches queries, metadata tasks and connection lifecycle commands"
+    )]
     pub fn start(path: PathBuf, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (input, mut commands) = mpsc::channel(32);
         let (sender, output) = mpsc::channel(32);
@@ -362,6 +405,29 @@ impl Worker {
                         }
                         command = commands.recv() => {
                             let Some(command) = command else { break; };
+                            if let Command::Describe {id,name,schema,table,is_view}=command {
+                                let connection=connections.get(&name).cloned();let sender=sender.clone();let wake=wake.clone();
+                                if tasks.len()>=16 {let _sent=sender.send(Reply::Table(id,Err(Error::Invalid("Too many active database requests".into())))).await;wake();continue;}
+                                tasks.spawn_local(async move {
+                                    let result=if let Some((connection,disconnected))=connection {
+                                        tokio::select! { biased; ()=disconnected.cancelled()=>Err(Error::Cancelled), result=tokio::time::timeout(Duration::from_secs(20),connection.describe_table(&schema,&table,is_view))=>result.unwrap_or_else(|_|Err(Error::Invalid(format!("Metadata timed out for {schema}.{table}; retry this table")))) }
+                                    } else {Err(Error::Invalid("Connection offline".into()))};
+                                    let _sent=sender.send(Reply::Table(id,result)).await;wake();id
+                                });continue;
+                            }
+                            if let Command::Apply { id, name, changes, cancel } = command {
+                                let connection = connections.get(&name).cloned(); let sender = sender.clone(); let wake = wake.clone();
+                                if tasks.len() >= 16 { let _sent = sender.send(Reply::Applied(id, Err(Error::Invalid("Too many active queries".into())))).await; wake(); continue; }
+                                active_tokens.insert(id, cancel.clone());
+                                tasks.spawn_local(async move {
+                                    let result = if let Some((connection, disconnected)) = connection {
+                                        let apply=connection.apply_changes(&changes,&cancel); tokio::pin!(apply);
+                                        tokio::select! { biased; () = disconnected.cancelled() => {cancel.cancel();apply.await}, result = &mut apply => result }
+                                    } else { Err(Error::Invalid("Connection offline".into())) };
+                                    let _sent = sender.send(Reply::Applied(id, result)).await; wake(); id
+                                });
+                                continue;
+                            }
                             if let Command::Query { id, name, sql, schema, cancel } = command {
                                 let connection = connections.get(&name).cloned(); let sender = sender.clone(); let wake = wake.clone();
                                 if tasks.len() >= 16 { let _sent = sender.send(Reply::Query(id, Err(Error::Invalid("Too many active queries".into())))).await; wake(); continue; }
@@ -499,6 +565,45 @@ async fn handle(
                 },
             )
         }
+        Command::Update {
+            original,
+            profile,
+            password,
+        } => {
+            let old_name = original.name.clone();
+            if let Err(e) =
+                validate_update(&original, &profile, password.as_ref(), tested_passwords)
+            {
+                return Some(Reply::SaveError(e.to_string()));
+            }
+            let path = path.to_owned();
+            let saved = tokio::task::spawn_blocking(move || {
+                let mut profiles = crate::load_profiles(&path)?;
+                replace_profile(&mut profiles, &original, profile.clone())?;
+                if profile.save_password {
+                    if let Some(password) = password {
+                        credential(&profile)?.set_password(password.expose())?;
+                    } else if credential_identity(&original) != credential_identity(&profile) {
+                        let password = Secret::new(credential(&original)?.get_password()?);
+                        credential(&profile)?.set_password(password.expose())?;
+                    }
+                }
+                crate::save_profiles(&path, &profiles)?;
+                Ok::<_, Error>(profiles)
+            })
+            .await;
+            match saved {
+                Ok(Ok(profiles)) => {
+                    if let Some((_, token)) = connections.remove(&old_name) {
+                        token.cancel();
+                    }
+                    tested_passwords.remove(&old_name);
+                    Some(Reply::Updated(old_name, profiles))
+                }
+                Ok(Err(e)) => Some(Reply::SaveError(e.to_string())),
+                Err(e) => Some(Reply::SaveError(e.to_string())),
+            }
+        }
         Command::Connect {
             id,
             profile,
@@ -522,9 +627,28 @@ async fn handle(
                 } else {
                     password
                 };
-                let connection =
-                    Arc::new(Connection::connect(&profile, password.as_ref(), ssh.as_ref()).await?);
-                let schema = connection.introspect().await?;
+                let connection = Arc::new(
+                    tokio::time::timeout(
+                        Duration::from_secs(45),
+                        Connection::connect(&profile, password.as_ref(), ssh.as_ref()),
+                    )
+                    .await
+                    .map_err(|_| {
+                        Error::Invalid("Database connection/authentication timed out".into())
+                    })??,
+                );
+                let schema = if test {
+                    crate::DatabaseSchemaTree::default()
+                } else {
+                    tokio::time::timeout(Duration::from_secs(30), connection.catalog())
+                        .await
+                        .map_err(|_| {
+                            Error::Invalid(
+                                "Database connected, but loading namespace/table names timed out"
+                                    .into(),
+                            )
+                        })??
+                };
                 if test
                     && profile.save_password
                     && let Some(password) = password
@@ -542,9 +666,13 @@ async fn handle(
                 }
                 Ok(schema)
             };
-            let result = tokio::time::timeout(Duration::from_secs(45), open)
+            let result = tokio::time::timeout(Duration::from_secs(80), open)
                 .await
-                .unwrap_or_else(|_| Err(Error::Invalid("Connection timed out".into())));
+                .unwrap_or_else(|_| {
+                    Err(Error::Invalid(
+                        "Database connection request timed out".into(),
+                    ))
+                });
             Some(Reply::Connected(id, name, test, result))
         }
         Command::Disconnect(name) => {
@@ -555,14 +683,85 @@ async fn handle(
         }
         Command::Inspect(name) => {
             let result = if let Some((connection, _)) = connections.get(&name) {
-                tokio::time::timeout(Duration::from_secs(30), connection.introspect())
+                tokio::time::timeout(Duration::from_secs(30), connection.catalog())
                     .await
-                    .unwrap_or_else(|_| Err(Error::Invalid("Introspection timed out".into())))
+                    .unwrap_or_else(|_| {
+                        Err(Error::Invalid(
+                            "Loading database/table names timed out".into(),
+                        ))
+                    })
             } else {
                 Err(Error::Invalid("Connection offline".into()))
             };
             Some(Reply::Schema(name, result))
         }
-        Command::Query { .. } => None,
+        Command::Query { .. } | Command::Apply { .. } | Command::Describe { .. } => None,
     }
+}
+
+fn credential_identity(
+    profile: &crate::ConnectionProfile,
+) -> (&str, crate::DbDriverType, &str, u16, &str, &str) {
+    (
+        &profile.name,
+        profile.driver,
+        &profile.host,
+        profile.port,
+        &profile.user,
+        &profile.database,
+    )
+}
+fn same_endpoint(original: &crate::ConnectionProfile, profile: &crate::ConnectionProfile) -> bool {
+    let mut previous = original.clone();
+    previous.name.clone_from(&profile.name);
+    previous.save_password = profile.save_password;
+    previous == *profile
+}
+fn validate_update(
+    original: &crate::ConnectionProfile,
+    profile: &crate::ConnectionProfile,
+    password: Option<&nozhik_remote_ssh::credentials::Secret>,
+    tested: &HashMap<
+        String,
+        (
+            crate::ConnectionProfile,
+            nozhik_remote_ssh::credentials::Secret,
+        ),
+    >,
+) -> Result<()> {
+    profile.validate()?;
+    if profile.save_password {
+        let preserve =
+            password.is_none() && original.save_password && same_endpoint(original, profile);
+        let verified = tested.get(&profile.name).is_some_and(|(p, secret)| {
+            p == profile && password.is_some_and(|s| s.expose() == secret.expose())
+        });
+        if !preserve && !verified {
+            return Err(Error::Invalid(
+                "Test the edited connection and replacement password before saving credentials"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+/// Replace exactly the expected persisted profile, preserving ordering and unrelated entries.
+pub(crate) fn replace_profile(
+    profiles: &mut [crate::ConnectionProfile],
+    original: &crate::ConnectionProfile,
+    profile: crate::ConnectionProfile,
+) -> Result<()> {
+    profile.validate()?;
+    let index = profiles.iter().position(|p| p == original).ok_or_else(|| {
+        Error::Invalid("Connection changed or disappeared; reopen Edit Connection".into())
+    })?;
+    if profiles
+        .iter()
+        .enumerate()
+        .any(|(i, p)| i != index && p.name == profile.name)
+    {
+        return Err(Error::Invalid("Connection name already exists".into()));
+    }
+    profiles[index] = profile;
+    Ok(())
 }

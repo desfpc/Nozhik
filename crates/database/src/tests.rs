@@ -380,3 +380,294 @@ async fn system_postgres_through_authenticated_ssh_tunnel()
     .await??;
     Ok(())
 }
+
+async fn edit_snapshot(
+    db: &Connection,
+    table: &str,
+    keys: Vec<usize>,
+) -> Result<changes::TableChanges> {
+    let result = db
+        .query(
+            &connection::preview_sql(DbDriverType::Sqlite, "main", table),
+            None,
+            &CancellationToken::new(),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Invalid("Missing result".into()))?;
+    Ok(changes::TableChanges::new(
+        DbDriverType::Sqlite,
+        "main".into(),
+        table.into(),
+        result,
+        keys,
+    ))
+}
+#[tokio::test]
+async fn table_edits_stage_preview_submit_revert_and_objects()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let db = memory().await?;
+    let token = CancellationToken::new();
+    db.query("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'default', parent_id INTEGER REFERENCES parent(id), payload BLOB); CREATE INDEX items_name ON items(name); INSERT INTO items(id,name) VALUES(1,'old'),(2,'delete');",None,&token).await?;
+    let tree = db.introspect().await?;
+    let table = tree.schemas[0]
+        .tables
+        .iter()
+        .find(|t| t.name == "items")
+        .ok_or("items")?;
+    assert!(!table.objects.keys.is_empty());
+    assert_eq!(table.objects.foreign_keys.len(), 1);
+    assert_eq!(table.objects.indexes.len(), 1);
+    assert!(table.objects.ddl.contains("CREATE TABLE items"));
+    assert!(table.objects.ddl.contains("CREATE INDEX items_name"));
+    let mut edits = edit_snapshot(&db, "items", vec![0]).await?;
+    let text = "quote ' \\ ; DROP TABLE items; -- Привет\n\0";
+    edits.rows[0].values[0] = Some(DbValue::Int(3));
+    edits.rows[0].values[1] = Some(DbValue::Text(text.into()));
+    edits.rows[1].deleted = true;
+    edits.add_row();
+    edits.rows[2].values[3] = Some(DbValue::Bytes(vec![0, 255]));
+    assert!(edits.is_dirty());
+    let sql = edits.statements()?.join("\n");
+    assert!(sql.contains("UPDATE"));
+    assert!(sql.contains("DELETE"));
+    assert!(sql.contains("INSERT"));
+    assert!(sql.contains("WHERE \"id\" = 1"));
+    let unchanged = edit_snapshot(&db, "items", vec![0]).await?;
+    assert_eq!(unchanged.baseline.rows[0][1], DbValue::Text("old".into()));
+    db.apply_changes(&edits, &token).await?;
+    let fresh = edit_snapshot(&db, "items", vec![0]).await?;
+    assert_eq!(fresh.rows.len(), 2);
+    assert_eq!(fresh.baseline.rows[0][0], DbValue::Int(3));
+    assert_eq!(fresh.baseline.rows[0][1], DbValue::Text(text.into()));
+    assert_eq!(fresh.baseline.rows[1][1], DbValue::Text("default".into()));
+    assert_eq!(fresh.baseline.rows[1][3], DbValue::Bytes(vec![0, 255]));
+    edits.revert();
+    assert!(!edits.is_dirty());
+    assert_eq!(edits.statements()?, Vec::<String>::new());
+    Ok(())
+}
+#[tokio::test]
+async fn submit_rolls_back_constraint_stale_and_ambiguous_rows()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let db = memory().await?;
+    let token = CancellationToken::new();
+    db.query("CREATE TABLE items(id INTEGER PRIMARY KEY,name TEXT NOT NULL); INSERT INTO items VALUES(1,'one'),(2,'two'); CREATE TABLE duplicates(value TEXT); INSERT INTO duplicates VALUES('same'),('same');",None,&token).await?;
+    let mut edits = edit_snapshot(&db, "items", vec![0]).await?;
+    edits.rows[0].values[1] = Some(DbValue::Text("changed".into()));
+    edits.rows[1].values[1] = Some(DbValue::Null);
+    assert!(db.apply_changes(&edits, &token).await.is_err());
+    assert!(edits.is_dirty());
+    assert_eq!(
+        edit_snapshot(&db, "items", vec![0]).await?.baseline.rows[0][1],
+        DbValue::Text("one".into())
+    );
+    edits.rows[1].values[1] = Some(DbValue::Text("second".into()));
+    db.query(
+        "UPDATE items SET name='concurrent' WHERE id=2",
+        None,
+        &token,
+    )
+    .await?;
+    assert!(db.apply_changes(&edits, &token).await.is_err());
+    assert_eq!(
+        edit_snapshot(&db, "items", vec![0]).await?.baseline.rows[0][1],
+        DbValue::Text("one".into())
+    );
+    let mut duplicates = edit_snapshot(&db, "duplicates", vec![]).await?;
+    duplicates.rows[0].deleted = true;
+    assert!(db.apply_changes(&duplicates, &token).await.is_err());
+    assert_eq!(
+        edit_snapshot(&db, "duplicates", vec![]).await?.rows.len(),
+        2
+    );
+    db.query("INSERT INTO duplicates VALUES('unique')", None, &token)
+        .await?;
+    let mut unique = edit_snapshot(&db, "duplicates", vec![]).await?;
+    unique.rows[2].values[0] = Some(DbValue::Text("updated".into()));
+    db.apply_changes(&unique, &token).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn submit_cancel_interrupts_sqlite_trigger_and_rolls_back()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let db = memory().await?;
+    let token = CancellationToken::new();
+    db.query("CREATE TABLE items(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO items VALUES(1,'old'); CREATE TABLE slow(value INTEGER); CREATE TRIGGER slow_update AFTER UPDATE ON items BEGIN INSERT INTO slow SELECT * FROM (WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT x FROM n); END;",None,&token).await?;
+    let mut edits = edit_snapshot(&db, "items", vec![0]).await?;
+    edits.rows[0].values[1] = Some(DbValue::Text("new".into()));
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let (result, ()) = tokio::join!(db.apply_changes(&edits, &cancel), async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        trigger.cancel();
+    });
+    assert!(result.is_err());
+    let fresh = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        edit_snapshot(&db, "items", vec![0]),
+    )
+    .await??;
+    assert_eq!(fresh.baseline.rows[0][1], DbValue::Text("old".into()));
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(db.apply_changes(&edits, &cancelled).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn catalog_connection_is_lazy_and_metadata_failure_is_local()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use worker::{Command, Reply, Worker};
+    let dir = tempfile::tempdir()?;
+    let profile = ConnectionProfile {
+        name: "lazy".into(),
+        database: dir.path().join("lazy.sqlite").display().to_string(),
+        ..Default::default()
+    };
+    let db = Connection::connect(&profile, None, None).await?;
+    db.query("CREATE TABLE good(id INTEGER PRIMARY KEY); CREATE VIEW broken AS SELECT * FROM missing_table;",None,&CancellationToken::new()).await?;
+    let catalog = db.catalog().await?;
+    assert_eq!(catalog.schemas[0].tables.len(), 2);
+    assert!(
+        catalog.schemas[0]
+            .tables
+            .iter()
+            .all(|t| !t.details_loaded && t.columns.is_empty() && t.objects.ddl.is_empty())
+    );
+    let good = db.describe_table("main", "good", false).await?;
+    assert!(good.details_loaded);
+    assert_eq!(good.columns.len(), 1);
+    assert!(db.describe_table("main", "broken", true).await.is_err());
+    let mut worker = Worker::start(
+        dir.path().join("connections.json"),
+        std::sync::Arc::new(|| {}),
+    );
+    assert!(worker.send(Command::Connect {
+        id: 100,
+        profile: profile.clone(),
+        password: None,
+        ssh: None,
+        test: false
+    }));
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv())
+        .await?
+        .ok_or("reply")?;
+    assert!(
+        matches!(reply,Reply::Connected(100,_,false,Ok(tree)) if tree.schemas[0].tables.len()==2)
+    );
+    assert!(worker.send(Command::Describe {
+        id: 101,
+        name: profile.name.clone(),
+        schema: "main".into(),
+        table: "broken".into(),
+        is_view: true
+    }));
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv())
+        .await?
+        .ok_or("reply")?;
+    assert!(matches!(reply, Reply::Table(101, Err(_))));
+    assert!(worker.send(Command::Describe {
+        id: 102,
+        name: profile.name,
+        schema: "main".into(),
+        table: "good".into(),
+        is_view: false
+    }));
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv())
+        .await?
+        .ok_or("reply")?;
+    assert!(matches!(reply,Reply::Table(102,Ok(t)) if t.details_loaded && t.columns.len()==1));
+    worker.shutdown();
+    db.close().await;
+    Ok(())
+}
+#[tokio::test]
+async fn editing_profile_replaces_atomically_and_disconnects_old_pool()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use worker::{Command, Reply, Worker};
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("connections.json");
+    let original = ConnectionProfile {
+        name: "original".into(),
+        ..Default::default()
+    };
+    let other = ConnectionProfile {
+        name: "other".into(),
+        ..Default::default()
+    };
+    save_profiles(&path, &[original.clone(), other.clone()])?;
+    let mut worker = Worker::start(path.clone(), std::sync::Arc::new(|| {}));
+    assert!(worker.send(Command::Connect {
+        id: 1,
+        profile: original.clone(),
+        password: None,
+        ssh: None,
+        test: false
+    }));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv()).await?,
+        Some(Reply::Connected(1, _, false, Ok(_)))
+    ));
+    let mut edited = original.clone();
+    edited.name = "renamed".into();
+    edited.database = dir.path().join("replacement.sqlite").display().to_string();
+    assert!(worker.send(Command::Update {
+        original: original.clone(),
+        profile: edited.clone(),
+        password: None
+    }));
+    assert!(
+        matches!(tokio::time::timeout(std::time::Duration::from_secs(3),worker.output.recv()).await?,Some(Reply::Updated(name,profiles)) if name=="original" && profiles==vec![edited.clone(),other.clone()])
+    );
+    assert_eq!(load_profiles(&path)?, vec![edited.clone(), other]);
+    assert!(worker.send(Command::Query {
+        id: 2,
+        name: "original".into(),
+        sql: "SELECT 1".into(),
+        schema: None,
+        cancel: CancellationToken::new()
+    }));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv()).await?,
+        Some(Reply::Query(2, Err(_)))
+    ));
+    let persisted = std::fs::read(&path)?;
+    assert!(worker.send(Command::Update {
+        original: original.clone(),
+        profile: edited.clone(),
+        password: None
+    }));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv()).await?,
+        Some(Reply::SaveError(_))
+    ));
+    assert_eq!(std::fs::read(&path)?, persisted);
+    let mut duplicate = edited.clone();
+    duplicate.name = "other".into();
+    assert!(worker.send(Command::Update {
+        original: edited.clone(),
+        profile: duplicate,
+        password: None
+    }));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv()).await?,
+        Some(Reply::SaveError(_))
+    ));
+    assert_eq!(std::fs::read(&path)?, persisted);
+    let mut protected = edited.clone();
+    protected.save_password = true;
+    assert!(worker.send(Command::Update {
+        original: edited,
+        profile: protected,
+        password: Some(Secret::new("not-tested".into()))
+    }));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), worker.output.recv()).await?,
+        Some(Reply::SaveError(_))
+    ));
+    assert_eq!(std::fs::read(&path)?, persisted);
+    worker.shutdown();
+    Ok(())
+}

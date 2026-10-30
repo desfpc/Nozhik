@@ -1,5 +1,7 @@
 //! Native UI shell. UI state and text buffers belong to the main thread.
 mod app_ui;
+mod workspace;
+pub use workspace::Workspace;
 mod data_grid;
 mod repository_clone;
 mod welcome;
@@ -87,6 +89,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    workspace: workspace::SessionLinks,
     welcome: welcome::Welcome,
     integration: integration::Integration,
     tabs: editor_tabs::TabStrip,
@@ -160,6 +163,7 @@ impl NozhikUi {
             }
         };
         Self {
+            workspace: workspace::SessionLinks::default(),
             welcome: welcome::Welcome::default(),
             settings_dialog: settings_dialog::SettingsDialog::start(
                 settings.path().to_path_buf(),

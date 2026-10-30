@@ -418,14 +418,22 @@ impl crate::NozhikUi {
                     .inner_margin(16),
             )
             .show(ctx, |ui| {
-                let size = (ctx.screen_rect().size() - egui::vec2(64.0, 64.0))
-                    .min(egui::vec2(690.0, 380.0))
+                let scope_height = if self.project.is_some() { 42.0 } else { 0.0 };
+                let size = (ctx.screen_rect().size() - egui::vec2(64.0, 64.0 + scope_height))
+                    .min(egui::vec2(690.0, 380.0 - scope_height))
                     .max(egui::Vec2::ZERO);
                 ui.set_width(size.x);
                 ui.visuals_mut().window_corner_radius = egui::CornerRadius::same(8);
                 ui.visuals_mut().widgets.inactive.weak_bg_fill =
                     egui::Color32::from_rgb(43, 45, 48);
                 ui.heading("Settings");
+                if let Some(project) = &self.project {
+                    ui.label(format!(
+                        "Project: {}",
+                        crate::workspace::project_name(&project.root_path)
+                    ));
+                    ui.small(project.root_path.display().to_string());
+                }
                 ui.separator();
                 if self.settings_dialog.content(ui, &mut config, size) {
                     self.plugins_open = true;

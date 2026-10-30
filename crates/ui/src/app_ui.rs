@@ -173,33 +173,24 @@ impl NozhikUi {
 
     fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(if self.left == Some(LeftTool::Commit) {
-                50.0
-            } else {
-                36.0
-            })
-            .frame(if self.left == Some(LeftTool::Commit) {
-                egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38))
-            } else {
-                theme::rail_frame()
-            })
+            .exact_height(36.0)
+            .frame(theme::rail_frame())
             .show(ctx, |ui| {
+                if cfg!(target_os = "macos") {
+                    let background = ui.interact(
+                        ui.max_rect(),
+                        ui.id().with("window_drag"),
+                        egui::Sense::drag(),
+                    );
+                    if background.drag_started() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                }
                 ui.horizontal_centered(|ui| {
-                    if cfg!(target_os = "macos") && self.left != Some(LeftTool::Commit) {
+                    if cfg!(target_os = "macos") {
                         ui.add_space(72.0);
                     }
-                    if self.left == Some(LeftTool::Commit) {
-                        self.vcs.toolbar(
-                            ui,
-                            ctx.screen_rect()
-                                .width()
-                                .mul_add(self.layout.value.git, 36.0),
-                        );
-                        return;
-                    }
-                    ui.menu_button("Nozhik v", |ui| {
-                        ui.label("Nozhik · project workspace");
-                    });
+                    self.project_switcher(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if tool_icons::button(ui, Icon::Settings, false, "Settings")
                             .on_hover_text("Settings")
@@ -236,7 +227,8 @@ impl NozhikUi {
             .frame(egui::Frame::new().fill(theme::CHROME).inner_margin(4))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Nozhik").on_hover_text("Nozhik v0.1.0-RC1");
+                    ui.label("Nozhik")
+                        .on_hover_text(concat!("Nozhik v", env!("CARGO_PKG_VERSION")));
                     let errors = self
                         .language
                         .views
@@ -273,8 +265,8 @@ impl NozhikUi {
                             let percent = (done * 100).checked_div(total).unwrap_or(0);
                             ui.weak(format!("Indexing project ({percent}%)..."));
                         }
-                        ui.label("0.1.0-RC1")
-                            .on_hover_text("Release candidate · Help → About Nozhik");
+                        ui.label(env!("CARGO_PKG_VERSION"))
+                            .on_hover_text("Help → About Nozhik");
                         ui.label(self.vcs.branch())
                             .on_hover_text("Current Git branch");
                         ui.label("UTF-8").on_hover_text("Editor text encoding");
@@ -633,6 +625,20 @@ impl NozhikUi {
         self.settings_tick(ctx);
         self.menu_bar(ctx);
         self.top_bar(ctx);
+        self.project_tabs(ctx);
+        if self.left == Some(LeftTool::Commit) {
+            egui::TopBottomPanel::top("git_toolbar")
+                .exact_height(50.0)
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38)))
+                .show(ctx, |ui| {
+                    self.vcs.toolbar(
+                        ui,
+                        ctx.screen_rect()
+                            .width()
+                            .mul_add(self.layout.value.git, 36.0),
+                    );
+                });
+        }
         if self.left == Some(LeftTool::Commit) && self.vcs.is_merging() {
             egui::TopBottomPanel::top("git_merge_banner")
                 .frame(theme::rail_frame())
@@ -665,6 +671,10 @@ impl NozhikUi {
         self.settings_window(ctx);
         self.plugins_window(ctx);
         self.integration_dialogs(ctx);
+        if let Some(path) = self.welcome.clone.tick() {
+            self.open_project(path);
+        }
+        self.welcome.clone.show(ctx);
         self.index_dialogs(ctx);
         if !self.integration.actions.is_empty() {
             ctx.request_repaint();

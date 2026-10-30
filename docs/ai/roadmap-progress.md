@@ -2061,3 +2061,82 @@ update-binaries.py обновил только macOS ARM64 executable и под�
 archive; --check подтвердил source fingerprint и SHA-256 payload. Проверены
 целостность ZIP, совпадение упакованной ICNS и версия bundle 0.1.2.
 Ручной запуск GUI и Windows build/Clippy не выполнялись.
+
+### Несколько проектов в одном окне (v0.1.3, 2026-10-30)
+
+Workspace координирует независимые NozhikUi-сессии: отдельные EventBus,
+файловый worker/watcher, дерево, буферы, Git, терминалы, SQL, SSH, настройки
+и layout. При переключении состояния и несохранённые правки сохраняются;
+неактивные workers продолжают принимать ответы, но не показывают диалоги.
+Отложенное открытие файла привязано к исходному проекту. Закрытие использует
+существующий Save All / Discard / Cancel gate, включая неактивные проекты
+при выходе из IDE; после закрытия последнего проекта доступен launcher.
+
+Верхняя строка содержит имя активного проекта и меню Open / Clone / Open Projects /
+Recent Projects с цветными иконками, путями, отступами и скруглениями по референсам.
+Ниже — равномерные горизонтальные вкладки: активная тёмная, hover светлее,
+крестик при наведении на любую вкладку. Drag-and-drop сохраняет активную сессию
+и явно запрашивает перерисовку после смены порядка. macOS использует прозрачный
+native titlebar с системными кнопками и перетаскиваемым фоном верхней строки.
+
+Новый проект получает Config::default, AI debounce — 1000 мс. Изменения сохраняются
+worker в `.nozhik/settings.toml`, layout — в `.nozhik/layout.json`; диалог явно
+показывает имя и путь проекта. Общий MRU остаётся рядом с глобальным config.
+Повреждённый project config не перезаписывается и не заменяет открытые сессии.
+Watcher исключает `.nozhik`, чтобы атомарная запись внутренних файлов не запускала
+повторные rescans. Версия Cargo/lockfile/UI/bundle — 0.1.3, следующая — 0.1.4.
+
+Три новых headless egui-регрессии проверяют реальные клики меню/вкладок/крестика,
+перетаскивание в обе стороны (в том числе целиком за один кадр) с запросом repaint,
+сохранение буферов/SQL/терминального состояния/дерева, раздельные настройки через
+настоящий slider и settings worker, повторное открытие, canonical deduplication,
+ошибки пути/config, отмену/сохранение/отказ от правок при закрытии, проверку
+неактивных dirty-буферов при выходе и отложенные диалоги неактивных проектов.
+
+Верификация: полный native workspace/all-features test — 214 passed, 0 failed,
+5 existing system/live tests ignored. Для TCP mocks полный прогон выполнен
+с system access после sandbox PermissionDenied. Native Clippy workspace/all-targets/
+all-features с -D warnings, rustfmt, workspace release build и diff whitespace
+check прошли. update-binaries.py обновляет только macOS ARM64 executable и
+подписанный app archive; --check проверяет source fingerprint и payload SHA-256.
+
+Нативная macOS-проверка использовала отдельную временную app-копию с собственным
+bundle ID, временными Alpha/Beta-проектами и отключёнными AI/языками. Проверены
+меню, открытие второго проекта, видимая перестановка вкладок, сохранение выбора,
+подсветка hover/крестик, переключение деревьев, project scope в Settings и закрытие.
+Проверка поймала отсутствие repaint после быстрого drag; оно исправлено и
+повторно проверено в нативном окне. Тестовое приложение закрыто. Реальные
+пользовательские настройки, проекты и credentials не менялись. Windows build,
+Clippy и GUI, commit и push не выполнялись.
+
+### Project tab scrolling and live dragging (v0.1.4, 2026-10-30)
+
+Removed the project row's scrollbar entirely, including hover expansion. A bounded
+28-point ScrollArea inside the fixed 32-point row uses AlwaysHidden and accepts
+only mouse-wheel/trackpad scrolling; overflow adds compact left/right vector
+buttons. Width calculation uses the viewport instead of the scroll canvas.
+
+Project dragging now reorders while primary is held and crosses neighboring tab
+midpoints, rather than waiting for release. Gesture identity uses the project path
+across index changes, preserving the selected session when dragging an inactive
+project. Repeated forward/backward moves and same-frame press/move/release work;
+close targets do not start drags, and release does not activate the moved project.
+Every reorder requests a repaint. Workspace/Cargo.lock/UI/bundle are 0.1.4;
+AGENTS.md records 0.1.5 next.
+
+Validation: native workspace/all-features tests — 216 passed, 0 failed, 5 existing
+system/live tests ignored, run with system access for local TCP mocks. New actual
+egui input regressions cover held drag through multiple neighbors and back before
+release, active-project retention, 20-tab overflow, both arrow buttons, horizontal
+and vertical wheel input, stable viewport geometry under hover, and removal of
+arrows/reset of offset when tabs fit again. Native workspace Clippy with
+all-targets/all-features and -D warnings, rustfmt, workspace release build and
+git diff --check passed. The initial build ran out of disk space; deleting only
+the regenerable target/debug/incremental cache freed space for successful checks.
+
+An isolated copy of the packaged macOS app with a separate bundle ID and temporary
+Alpha/Beta projects (AI/languages disabled) verified no project scrollbar, real
+native dragging in both directions, updated tab order and retained Beta selection.
+The test app was quit. Default update-binaries.py rebuilt only macOS ARM64 executable
+and signed app archive; --check verifies source and payload checksums. Windows
+build/Clippy/GUI, commit and push were not run.

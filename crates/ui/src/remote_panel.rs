@@ -202,7 +202,9 @@ impl NozhikUi {
         for reply in replies {
             self.accept_remote_reply(reply, ctx);
         }
-        self.remote_dialogs(ctx);
+        if !self.workspace.background {
+            self.remote_dialogs(ctx);
+        }
     }
     fn accept_remote_reply(&mut self, reply: Reply, ctx: &egui::Context) {
         match reply {

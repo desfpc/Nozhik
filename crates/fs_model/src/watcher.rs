@@ -79,8 +79,10 @@ fn visible(root: &Path, path: &Path) -> bool {
         return false;
     };
     // Displayed ignored entries must also refresh on create/remove/rename.
-    // Git internals remain hidden and never trigger a project rescan.
-    !relative.components().any(|c| c.as_os_str() == ".git")
+    // Git and IDE internals never trigger project rescans, including atomic settings/layout writes.
+    !relative
+        .components()
+        .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".nozhik")
 }
 
 #[cfg(test)]
@@ -116,13 +118,21 @@ mod tests {
             .build()
     }
     #[test]
-    fn observes_ignored_entries_but_skips_git_internals() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn observes_ignored_entries_but_skips_git_and_ide_internals()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         std::fs::write(dir.path().join(".gitignore"), "*.log\n")?;
         assert!(visible(dir.path(), &dir.path().join("deleted.log")));
         assert!(visible(dir.path(), &dir.path().join("target/a.rs")));
         assert!(!visible(dir.path(), &dir.path().join(".git/index")));
+        assert!(!visible(
+            dir.path(),
+            &dir.path().join(".nozhik/settings.toml")
+        ));
+        assert!(!visible(
+            dir.path(),
+            &dir.path().join(".nozhik/.tmp-layout")
+        ));
         assert!(visible(dir.path(), &dir.path().join("src/main.rs")));
         Ok(())
     }

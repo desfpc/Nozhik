@@ -6,6 +6,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 #[derive(Clone, Copy)]
 pub enum CloseTarget {
     Window,
+    Project,
     Files,
     File(usize),
     Sql(usize),
@@ -73,9 +74,11 @@ impl NozhikUi {
             Arc::new(move || wake.request_repaint()),
         );
         #[cfg(target_os = "macos")]
-        match crate::menu_bar::native::NativeMenu::new(ctx) {
-            Ok(menu) => self.native_menu = Some(menu),
-            Err(e) => self.status = format!("Native menu: {e}"),
+        if !self.workspace.managed {
+            match crate::menu_bar::native::NativeMenu::new(ctx) {
+                Ok(menu) => self.native_menu = Some(menu),
+                Err(e) => self.status = format!("Native menu: {e}"),
+            }
         }
     }
     pub(crate) const fn global_modal(&self) -> bool {
@@ -104,7 +107,7 @@ impl NozhikUi {
     }
     pub(crate) fn close_target_dirty(&self, target: CloseTarget) -> bool {
         match target {
-            CloseTarget::Window => {
+            CloseTarget::Window | CloseTarget::Project => {
                 self.documents.iter().any(|d| d.buffer.is_dirty())
                     || self.database.tabs.iter().any(|t| t.buffer.is_dirty())
             }
@@ -118,6 +121,10 @@ impl NozhikUi {
         }
     }
     pub(crate) fn request_close(&mut self, target: CloseTarget, ctx: &egui::Context) {
+        if self.workspace.managed && matches!(target, CloseTarget::Window) {
+            self.workspace.exit = true;
+            return;
+        }
         if self.close_target_dirty(target) {
             self.integration.close = Some(target);
             self.integration.waiting = false;
@@ -129,6 +136,7 @@ impl NozhikUi {
     fn finish_close(&mut self, target: CloseTarget, ctx: &egui::Context) {
         self.integration.close = None;
         match target {
+            CloseTarget::Project => self.workspace.closed = true,
             CloseTarget::Window => {
                 self.integration.confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -409,8 +417,13 @@ impl NozhikUi {
     }
     pub(crate) fn integration_tick(&mut self, ctx: &egui::Context) {
         self.layout.tick(ctx);
-        self.recent_projects.tick(ctx);
-        if ctx.input(|i| i.viewport().close_requested()) && !self.integration.confirmed {
+        if !self.workspace.managed {
+            self.recent_projects.tick(ctx);
+        }
+        if !self.workspace.managed
+            && ctx.input(|i| i.viewport().close_requested())
+            && !self.integration.confirmed
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.integration.close.is_none() {
                 self.request_close(CloseTarget::Window, ctx);

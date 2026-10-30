@@ -205,6 +205,15 @@ impl VcsPanel {
             .map_or("No repository", |r| r.branch.as_str())
     }
     pub(crate) fn tick(&mut self, ctx: &Context, visible: bool) {
+        self.tick_worker(ctx, visible);
+        self.confirm_discard(ctx);
+        self.dialogs(ctx);
+        self.history_action_dialog(ctx);
+    }
+    pub(crate) fn tick_background(&mut self, ctx: &Context) {
+        self.tick_worker(ctx, false);
+    }
+    fn tick_worker(&mut self, ctx: &Context, visible: bool) {
         let wake = ctx.clone();
         self.worker.set_wakeup(move || wake.request_repaint());
         let replies: Vec<_> = self.worker.drain().collect();
@@ -246,9 +255,6 @@ impl VcsPanel {
                 ctx.request_repaint_after(due.saturating_duration_since(Instant::now()));
             }
         }
-        self.confirm_discard(ctx);
-        self.dialogs(ctx);
-        self.history_action_dialog(ctx);
     }
     fn accept(&mut self, id: u64, outcome: Outcome, ctx: &Context) {
         match outcome {
@@ -262,10 +268,6 @@ impl VcsPanel {
                     != repo.as_ref().and_then(|r| r.head_sha.as_ref());
                 let first = self.repo.is_none();
                 self.repo = repo;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                    "Nozhik — {}",
-                    self.branch()
-                )));
                 if (first || changed_head) && self.repo.is_some() {
                     self.submit(Task::History(self.history_limit));
                 }

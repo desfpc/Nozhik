@@ -17,6 +17,10 @@ impl NozhikUi {
         if !self.welcome.transitioned {
             self.welcome.clone.leave_launcher();
             self.welcome.transitioned = true;
+            // Additional project tabs retain the window size chosen by the user.
+            if self.workspace.managed && self.workspace.entries.len() > 1 {
+                return;
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1440.0, 900.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::Title("Nozhik".into()));
         }

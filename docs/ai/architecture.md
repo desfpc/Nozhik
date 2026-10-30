@@ -36,17 +36,22 @@ CLI executable входят в SHA-256 metadata. Пакет получает л�
 
 ## Поток данных
 
-1. `main` создаёт EventBus с ёмкостью 1024 и загружает ConfigManager.
-2. До первой публикации регистрируется подписчик; Tokio runtime запускает
-   потребитель на рабочем потоке.
-3. Главный поток запускает eframe::run_native (egui + Glow). `NozhikUi`
-   владеет документами и receiver событий; TextEditorView читает видимые Rope-строки.
-4. Успешное создание окна публикует `ActionTriggered("app.started")`.
+1. `main` создаёт EventBus с ёмкостью 1024, загружает настройки стартового окна
+   и запускает Tokio runtime с application-scoped Ollama lifecycle.
+2. Главный поток запускает eframe::run_native (egui + Glow). `Workspace` владеет
+   стартовым экраном и независимыми `NozhikUi` для открытых проектов. Каждый проект
+   имеет отдельные bus/receiver, ConfigManager, документы и фоновые службы.
+3. Worker канонизирует открываемую папку и загружает `.nozhik/settings.toml`.
+   Отсутствующий файл использует defaults; ошибка сохраняет существующие сессии.
+4. TextEditorView читает видимые Rope-строки активного проекта. Фоновые события
+   будят окно через runtime bridge; неактивные проекты обрабатывают ответы,
+   сохраняя диалоги до переключения в них.
 5. Изменение настроек: `replace` → validate → write lock → замена → release
-   lock → `ConfigChanged(All)`. Подписчик получает новый snapshot.
-6. Закрытие окна выходит из event loop. Все producers освобождаются;
-   потребитель дочитывает очередь до `Closed`. На завершение отведены 2 секунды,
-   затем runtime получает до 1 секунды на shutdown. Ошибки возвращаются из main.
+   lock → `ConfigChanged(All)`. SettingsDialog worker атомарно сохраняет файл
+   конкретного проекта. Ollama lifecycle следует настройкам активного проекта.
+6. Закрытие проекта проходит dirty/revision gate и завершает его службы.
+   Закрытие окна проверяет все проекты, выходит из event loop, завершает lifecycle
+   и предоставляет runtime до 1 секунды на shutdown.
 
 ## Шина событий
 
@@ -1134,3 +1139,44 @@ No submodule recursion or persistent credential binding for later fetch/push is 
 Dependency boundaries: ui adds reqwest for GitHub; vcs adds zeroize for transient
 credentials and tempfile for clone staging. Neither adds shell Git dependence.
 Version is inherited from workspace.package by all crates and app bundle metadata.
+
+
+## Multi-project window (v0.1.3)
+
+`Workspace` is the eframe application and owns a launcher plus independent `NozhikUi`
+project sessions. Each session owns its EventBus, ConfigManager, filesystem watcher,
+Git/language/remote/database workers, editor buffers, terminal tabs and panel layout.
+Only the active session renders; inactive workers still drain bounded replies.
+A single native menu moves with the active session. Session buffer-ID ranges avoid
+cross-project egui editor identity collisions; tree scrolling is keyed by root.
+The application-scoped Ollama lifecycle follows the active project's config.
+
+Open requests from pickers, menus, MRU and clone results route through Workspace.
+A worker canonicalizes the path and validates `<root>/.nozhik/settings.toml` before
+constructing a session. Missing settings use Config::default, not global overrides;
+malformed settings never overwrite the source. File paths open in the current editor.
+A canonical root is opened once; duplicate requests activate its existing session.
+Settings writes remain on SettingsDialog's ordered worker and use ConfigManager's
+atomic persistence. The dialog labels the project name and root. Layout is project
+local; one launcher-owned worker writes the shared recent-project history.
+
+The project menu and horizontal tab strip queue switch/close/reorder intents.
+Reorder preserves active identity. Project close uses the existing revision-aware
+Save All / Discard / Cancel gate, then drops only that session and its resources.
+Window close visits every project, including inactive dirty buffers; Cancel aborts
+that sequence. Closing the final project normally returns the retained launcher.
+macOS uses a transparent titlebar with native window controls and a draggable
+header background; project-tab dragging is separate from window dragging.
+
+
+### Project tab scrolling and live reorder (v0.1.4)
+
+The project row has a fixed 32-point height and a bounded 28-point horizontal
+viewport. Its ScrollArea is AlwaysHidden with scrollbar/drag scrolling disabled;
+only wheel/trackpad input and two overflow-only vector arrow buttons change the
+offset. Tab widths derive from the viewport rather than the scrolled canvas.
+A drag stores the canonical project path and press origin. Crossing a neighbor's
+midpoint queues a reorder while primary is held; paths retain gesture identity
+across changing indices. The active project stays selected and each reorder
+requests repaint. Close targets do not start drags and drag release does not
+activate the moved inactive project.

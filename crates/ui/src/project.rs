@@ -21,12 +21,22 @@ pub struct ProjectControls {
 }
 
 impl NozhikUi {
-    /// Opens a project asynchronously; existing documents and unsaved text are retained.
+    /// Opens a project asynchronously in its own workspace session.
     pub fn open_project(&mut self, path: PathBuf) {
+        if self.workspace.managed {
+            self.workspace.open = Some(path);
+            return;
+        }
         self.status = format!("Opening {}…", path.display());
         self.queue(Command::OpenProject(path));
     }
     pub(crate) fn queue(&mut self, command: Command) {
+        if self.workspace.managed
+            && let Command::OpenPath(path) | Command::OpenProject(path) = &command
+        {
+            self.workspace.open = Some(path.clone());
+            return;
+        }
         if !self.fs.send(command) {
             self.status = "Filesystem worker stopped".into();
         }
@@ -108,9 +118,18 @@ impl NozhikUi {
                 }
                 Reply::ProjectCreated(tree) => {
                     self.project_created();
-                    self.recent_projects.note(tree.root_path.clone());
-                    self.project_path = tree.root_path.display().to_string();
-                    self.accept_project_tree(tree);
+                    if self.workspace.managed {
+                        self.workspace.open = Some(tree.root_path.clone());
+                        if let Some(project) = &self.project {
+                            let _sent = self
+                                .fs
+                                .send(Command::OpenProject(project.root_path.clone()));
+                        }
+                    } else {
+                        self.recent_projects.note(tree.root_path.clone());
+                        self.project_path = tree.root_path.display().to_string();
+                        self.accept_project_tree(tree);
+                    }
                 }
                 Reply::ProjectCreationError(error) => {
                     self.integration.creating_project = false;
@@ -118,7 +137,9 @@ impl NozhikUi {
                     self.status = error;
                 }
                 Reply::ProjectOpened(tree) => {
-                    self.recent_projects.note(tree.root_path.clone());
+                    if !self.workspace.managed {
+                        self.recent_projects.note(tree.root_path.clone());
+                    }
                     self.project_path = tree.root_path.display().to_string();
                     self.accept_project_tree(tree);
                 }
@@ -138,6 +159,9 @@ impl NozhikUi {
                 }
                 Reply::Matches { token, files } => self.search.accept(token, files),
                 Reply::Error(error) => {
+                    if self.workspace.managed && self.project.is_none() {
+                        self.workspace.failed = Some(error.clone());
+                    }
                     if !self.integration.saving.is_empty() {
                         self.integration.save_error = Some(error.clone());
                         self.integration.saving.clear();
@@ -374,17 +398,19 @@ impl NozhikUi {
         let mut actions = TreeActions::default();
         #[cfg(test)]
         self.project_controls.rows.clear();
-        egui::ScrollArea::both().show(ui, |ui| {
-            tree_row(
-                ui,
-                tree,
-                &tree.root_path,
-                &mut self.expanded,
-                &mut self.selected_file,
-                &mut actions,
-                &mut self.project_controls,
-            );
-        });
+        egui::ScrollArea::both()
+            .id_salt((&tree.root_path, "tree_scroll"))
+            .show(ui, |ui| {
+                tree_row(
+                    ui,
+                    tree,
+                    &tree.root_path,
+                    &mut self.expanded,
+                    &mut self.selected_file,
+                    &mut actions,
+                    &mut self.project_controls,
+                );
+            });
         for path in actions.loads {
             if self.loading.len() >= 16 {
                 break;

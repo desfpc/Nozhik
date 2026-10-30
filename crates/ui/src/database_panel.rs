@@ -194,7 +194,7 @@ impl NozhikUi {
             }
         }
         // SSH trust/password dialogs must remain above the DB form while authorizing.
-        if !self.remote.modal_open() {
+        if !self.workspace.background && !self.remote.modal_open() {
             self.database_dialogs(ctx);
         }
     }

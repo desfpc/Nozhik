@@ -54,7 +54,7 @@ impl Default for Config {
             enabled_languages: languages::default_enabled(),
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
-            ai_debounce_ms: 350,
+            ai_debounce_ms: 1000,
             file_types: std::collections::BTreeMap::new(),
         }
     }

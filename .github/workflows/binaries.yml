@@ -11,6 +11,10 @@ on:
       - '.cargo/**'
       - 'crates/**'
       - 'scripts/update-binaries.py'
+      - 'scripts/third_party_licenses.py'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'licenses/**'
       - '.github/workflows/binaries.yml'
   workflow_dispatch:
 

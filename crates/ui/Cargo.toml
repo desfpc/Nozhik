@@ -2,7 +2,7 @@
 name = "nozhik-ui"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 reqwest.workspace = true

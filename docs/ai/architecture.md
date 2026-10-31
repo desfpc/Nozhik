@@ -1258,3 +1258,25 @@ Project tabs используют строку 36 logical px с симметри
 (horizontal_top), чтобы вертикальное центрирование не выталкивало вкладки
 за viewport; скрытая прокрутка и drag/reorder не меняются.
 Current File удалён из top toolbar, остальные кнопки сохранены.
+
+
+## Лицензирование и материалы в поставке (v0.1.10)
+
+Собственный код Nozhik — Source-Available (корневой LICENSE); workspace packages
+наследуют license-file, а не SPDX Apache-2.0. Подписка/активация не добавлены.
+Покупка на одного пользователя, без ограничения устройств; самостоятельная
+сборка для себя и внутренней работы организации разрешена. Сторонние компоненты
+сохраняют лицензии. CONTRIBUTING.md ссылается на права для коммерческих сборок
+и перелицензирования вкладов без передачи авторства.
+
+update-binaries.py вызывает third_party_licenses.collect после Cargo build:
+locked/offline metadata с filter-platform определяет пакетный граф. В поставку
+и Resources/Legal bundle входят LICENSE, THIRD_PARTY_NOTICES.md, сгенерированные
+THIRD_PARTY_LICENSES.txt и THIRD_PARTY_SOURCES.zip. Архив содержит оригинальные
+исходники MPL-пакетов и пакетов без отдельных license files; тексты лицензий
+собираются также из вложенных native libraries и fonts. Граф может включать
+build-time/неиспользуемые пакеты. Сборка не меняет исходники зависимостей.
+Legal inputs включены в source fingerprint, payload hashes покрывают sidecars
+и подписанный app archive; CI реагирует на изменение legal inputs.
+Новые зависимости/скопированные ресурсы и Windows GNU runtime требуют отдельной
+проверки условий: collector не устанавливает совместимость лицензий.

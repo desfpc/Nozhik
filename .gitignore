@@ -5,3 +5,6 @@
 
 /binaries/
 .nozhik/cache/
+
+# Python build helpers
+__pycache__/

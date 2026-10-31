@@ -2,7 +2,7 @@
 name = "nozhik-config"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 nozhik-core.workspace = true

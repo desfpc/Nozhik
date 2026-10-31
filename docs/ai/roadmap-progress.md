@@ -2335,3 +2335,47 @@ Edit Connection… открыл предзаполненную форму с д�
 Пользовательские профили, credentials и реальные БД не изменялись. macOS ARM64
 executable и подписанный app archive обновлены update-binaries.py; --check проверяет
 source fingerprint и SHA-256 payload. Windows-кэш не создавался, commit/push нет.
+
+
+### Source-Available лицензия и legal materials (v0.1.10, 2026-10-31)
+
+Apache-2.0 для собственного кода заменена Nozhik Source-Available License 1.0,
+правообладатель Sergei Peshalov. Разрешены аудит, обучение, изменения, исходные
+форки/PR и бесплатная самостоятельная сборка для собственного использования,
+включая коммерческую работу и внутреннее использование организацией. Передача
+бинарников другим пользователям за пределами разрешённого внутреннего
+использования, включая бесплатные/изменённые/переименованные сборки, требует
+письменного разрешения. Купленная официальная сборка лицензируется бессрочно
+на пользователя, без лимита устройств, обязательной активации или подписки;
+будущие обновления/поддержка определяются условиями покупки. Пользовательские
+проекты и результаты не подпадают под лицензию IDE. Сторонние права сохранены.
+CONTRIBUTING.md объясняет неисключительное право использовать и перелицензировать
+вклады без передачи авторства. Git history не переписывалась.
+
+Все 14 Cargo packages наследуют license-file и версию 0.1.10; lockfile обновлён.
+README, AGENTS, architecture и coding standards согласованы. THIRD_PARTY_NOTICES.md
+описывает компоненты, scope target-specific inventory и отдельную проверку
+Windows GNU runtime/новых ресурсов. scripts/third_party_licenses.py собирает
+license/notice/authors тексты, включая nested libgit2/OpenSSL и fonts; MPL source
+и registry packages без отдельных license files поставляются в ZIP с сохранением
+исходных материалов. Для отсутствующих отдельных текстов используется объявленный
+permissive вариант из licenses/. Collector не является проверкой совместимости.
+
+update-binaries.py включает LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt
+и THIRD_PARTY_SOURCES.zip рядом с executable и в Resources/Legal подписанного
+macOS bundle. Legal inputs входят в source fingerprint и CI paths; check требует
+наличия legal sidecars в payload metadata. Изначальная Apache-лицензия сохранена
+в licenses/Apache-2.0.txt только для сторонних компонентов.
+
+Проверки: native workspace/all-features tests — 225 passed, 0 failed, 5 ignored
+после предоставления system access для существующих localhost/process mocks.
+Первый sandbox-прогон блокировал шесть AI mock/lifecycle tests с PermissionDenied.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt, workspace
+release build и git diff --check прошли. Проверены наследование root LICENSE
+в Cargo metadata, MPL sources в архиве, libgit2 linking exception и font notices,
+изменение fingerprint при изменении LICENSE. macOS ARM64 executable и app archive
+обновлены штатным скриптом, --check подтвердил источники и payload hashes.
+ZIP integrity, версия 0.1.10 в plist, совпадение четырёх legal files с sidecars
+и codesign --verify --deep --strict распакованного bundle подтверждены.
+UI-логика не менялась; native GUI, Windows build/Clippy и live DB tests не
+запускались. Windows-кэш не создавался; commit/push не выполнялись.

@@ -155,3 +155,14 @@ Never serialize clone credentials or embed secrets in remote URLs/errors. Explic
 Git credentials must reach libgit2 callbacks; certificate/host-key verification
 must stay enabled. Cancelled completions must not open projects. Version follows
 workspace.package; increase patch once per follow-up change/commit (see AGENTS.md).
+
+
+### Лицензии
+
+Собственные пакеты наследуют workspace.package.license-file (LICENSE).
+Не добавляйте Apache/MIT headers к собственному коду Nozhik. Сторонние notices
+не удаляйте и не перелицензируйте. Для новых зависимостей, ресурсов и данных
+проверяйте условия использования в платной Source-Available IDE. После изменений
+обновляйте legal sidecars через update-binaries.py; MPL source и upstream notices
+должны оставаться в поставке и Resources/Legal. При добавлении нового legal
+build input включайте его в fingerprint и пути CI.

@@ -15,6 +15,8 @@ import sys
 import tempfile
 import zipfile
 
+from third_party_licenses import LEGAL_FILES, collect
+
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
     "aarch64-apple-darwin": ("macos-arm64", "nozhik"),
@@ -33,7 +35,9 @@ def source_hash():
     tracked = run(
         "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
         ".gitattributes", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
-        "crates", "examples", ".cargo", "scripts/update-binaries.py", stdout=subprocess.PIPE,
+        "crates", "examples", ".cargo", "scripts/update-binaries.py",
+        "scripts/third_party_licenses.py", "LICENSE", "THIRD_PARTY_NOTICES.md",
+        "licenses", stdout=subprocess.PIPE,
     ).stdout
     digest = hashlib.sha256()
     for raw in sorted(set(tracked.split(b"\0")) - {b""}):
@@ -112,6 +116,8 @@ def macos_bundle(binary, directory):
         "MacOS/nozhik": (binary.read_bytes(), 0o755),
         "Resources/nozhik.icns": ((ROOT / "crates/app/assets/nozhik.icns").read_bytes(), 0o644),
     }
+    for name in LEGAL_FILES:
+        contents[f"Resources/Legal/{name}"] = ((directory / name).read_bytes(), 0o644)
     with tempfile.TemporaryDirectory(prefix="nozhik-app-") as temporary:
         root = Path(temporary)
         bundle = root / "Nozhik.app"
@@ -167,6 +173,7 @@ def build(target):
         payload = staging / name
         shutil.copy2(executable, payload)
         validate_binary(payload, target)
+        collect(staging, target)
         if target.endswith("apple-darwin"):
             payload.chmod(0o755)
             macos_bundle(payload, staging)
@@ -184,7 +191,7 @@ def build(target):
         (staging / "build.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         # Remove only previously generated payloads, after a successful build.
         for previous in destination.iterdir():
-            if previous.name in {"build.json", "nozhik", "nozhik.exe", "Nozhik.app.zip"} or previous.suffix == ".dll":
+            if previous.name in {"build.json", "nozhik", "nozhik.exe", "Nozhik.app.zip", *LEGAL_FILES} or previous.suffix == ".dll":
                 previous.unlink()
         for artifact in staging.iterdir():
             shutil.copy2(artifact, destination / artifact.name)
@@ -198,6 +205,8 @@ def check(platform):
         raise ValueError(f"{platform}: binaries are stale; run update-binaries.py on a build host")
     if TARGETS.get(metadata["target"], (None, None))[0] != platform or metadata["platform"] != platform:
         raise ValueError(f"{platform}: wrong build target")
+    if not set(LEGAL_FILES).issubset(metadata["files"]):
+        raise ValueError(f"{platform}: missing legal materials; rebuild the distribution")
     expected = set(metadata["files"]) | {"build.json"}
     if {p.name for p in directory.iterdir()} != expected:
         raise ValueError(f"{platform}: unexpected or missing payload files")

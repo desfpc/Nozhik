@@ -2,7 +2,7 @@
 name = "nozhik-language-support"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 nozhik-config = { path = "../config" }

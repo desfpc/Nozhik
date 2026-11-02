@@ -197,7 +197,7 @@ impl NozhikUi {
             }
         }
         for i in 0..self.database.tabs.len() {
-            if self.database.tabs[i].table.is_some() {
+            if self.database.tabs[i].table.is_some() || self.database.tabs[i].data_dirty() {
                 if self.database.tabs[i].is_dirty() {
                     self.integration.save_error =
                         Some("Submit or Revert pending table changes before closing".into());
@@ -479,12 +479,12 @@ impl NozhikUi {
                     .database
                     .tabs
                     .get(i)
-                    .is_some_and(|t| t.table.is_some() && t.is_dirty()),
+                    .is_some_and(crate::sql_console::SqlConsole::data_dirty),
                 CloseTarget::Window | CloseTarget::Project => self
                     .database
                     .tabs
                     .iter()
-                    .any(|t| t.table.is_some() && t.is_dirty()),
+                    .any(crate::sql_console::SqlConsole::data_dirty),
                 _ => false,
             };
             let mut save = false;

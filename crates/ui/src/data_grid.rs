@@ -212,7 +212,7 @@ impl DataGrid {
         }
     }
 }
-fn compare(a: &DbValue, b: &DbValue) -> Ordering {
+pub fn compare(a: &DbValue, b: &DbValue) -> Ordering {
     match (a, b) {
         (DbValue::Null, DbValue::Null) => Ordering::Equal,
         (DbValue::Null, _) => Ordering::Less,

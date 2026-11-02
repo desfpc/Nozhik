@@ -25,6 +25,11 @@ impl From<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>
 }
 #[derive(Default)]
 pub struct EditorLanguage {
+    pub(crate) sql_catalog: Option<(
+        nozhik_database::DatabaseSchemaTree,
+        String,
+        nozhik_database::DbDriverType,
+    )>,
     pub documentation: Option<DocumentationSource>,
     pub triggers: nozhik_language_support::triggers::LanguageTriggerConfig,
     pub project_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,

@@ -20,6 +20,11 @@ pub struct SqlConsole {
     editor: TextEditorView,
     language: EditorLanguage,
     pub results: Vec<DataGrid>,
+    pub result_editors: Vec<crate::table_editor::TableEditor>,
+    pub executed_sql: String,
+    pub result_connection: String,
+    pub result_schema: String,
+    pub pending_sql: String,
     pub selected_result: usize,
     pub pending: Option<(u64, CancellationToken)>,
     pub error: String,
@@ -43,6 +48,11 @@ impl SqlConsole {
             editor: TextEditorView::default(),
             language: EditorLanguage::default(),
             results: Vec::new(),
+            result_editors: Vec::new(),
+            executed_sql: String::new(),
+            result_connection: String::new(),
+            result_schema: String::new(),
+            pending_sql: String::new(),
             selected_result: 0,
             pending: None,
             error: String::new(),
@@ -52,7 +62,7 @@ impl SqlConsole {
     }
     pub fn is_dirty(&self) -> bool {
         self.table.as_ref().map_or_else(
-            || self.buffer.is_dirty(),
+            || self.buffer.is_dirty() || self.data_dirty(),
             |t| t.dirty() || self.pending.is_some(),
         )
     }
@@ -77,53 +87,68 @@ impl SqlConsole {
             table.show(ui, self.pending.is_some(), enabled);
             return None;
         }
+        let results_dirty = self
+            .result_editors
+            .iter()
+            .any(crate::table_editor::TableEditor::dirty);
+        let result_modal = self
+            .result_editors
+            .iter()
+            .any(crate::table_editor::TableEditor::modal_open);
         let mut execute = false;
-        ui.add_enabled_ui(enabled, |ui| {
+        ui.add_enabled_ui(
+            enabled && !results_dirty && !result_modal && self.pending.is_none(),
+            |ui| {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("sql_connection")
+                        .selected_text(&self.connection)
+                        .show_ui(ui, |ui| {
+                            for p in profiles {
+                                if ui
+                                    .selectable_value(&mut self.connection, p.name.clone(), &p.name)
+                                    .changed()
+                                {
+                                    self.schema.clear();
+                                }
+                            }
+                        });
+                    egui::ComboBox::from_id_salt("sql_schema")
+                        .selected_text(if self.schema.is_empty() {
+                            "Default schema"
+                        } else {
+                            &self.schema
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.schema, String::new(), "Default schema");
+                            if let Some(tree) = tree {
+                                for s in &tree.schemas {
+                                    ui.selectable_value(&mut self.schema, s.name.clone(), &s.name);
+                                }
+                            }
+                        });
+                    execute = ui
+                        .add_enabled(
+                            self.pending.is_none() && !self.ddl,
+                            egui::Button::new(
+                                egui::RichText::new("▶ Execute").color(crate::theme::SUCCESS),
+                            ),
+                        )
+                        .clicked();
+                });
+            },
+        );
+        if let Some((_, cancel)) = &self.pending {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("sql_connection")
-                    .selected_text(&self.connection)
-                    .show_ui(ui, |ui| {
-                        for p in profiles {
-                            if ui
-                                .selectable_value(&mut self.connection, p.name.clone(), &p.name)
-                                .changed()
-                            {
-                                self.schema.clear();
-                            }
-                        }
-                    });
-                egui::ComboBox::from_id_salt("sql_schema")
-                    .selected_text(if self.schema.is_empty() {
-                        "Default schema"
-                    } else {
-                        &self.schema
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.schema, String::new(), "Default schema");
-                        if let Some(tree) = tree {
-                            for s in &tree.schemas {
-                                ui.selectable_value(&mut self.schema, s.name.clone(), &s.name);
-                            }
-                        }
-                    });
-                execute = ui
-                    .add_enabled(
-                        self.pending.is_none() && !self.ddl,
-                        egui::Button::new(
-                            egui::RichText::new("▶ Execute").color(crate::theme::SUCCESS),
-                        ),
-                    )
-                    .clicked();
-                if let Some((_, cancel)) = &self.pending {
-                    ui.spinner();
-                    if ui.button("Cancel").clicked() {
-                        cancel.cancel();
-                    }
+                ui.spinner();
+                if ui.button("Cancel").clicked() {
+                    cancel.cancel();
                 }
             });
-        });
+        }
         if enabled
             && self.pending.is_none()
+            && !results_dirty
+            && !result_modal
             && !self.ddl
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
         {
@@ -132,6 +157,11 @@ impl SqlConsole {
         if !self.error.is_empty() {
             ui.colored_label(crate::theme::ERROR, &self.error);
         }
+        self.language.sql_catalog = tree
+            .zip(profiles.iter().find(|p| p.name == self.connection))
+            .map(|(tree, p)| (tree.clone(), self.schema.clone(), p.driver));
+        self.language.triggers.member_access_triggers = vec![".".into()];
+        self.language.triggers.auto_popup_triggers = vec!['.'];
         let revision = self.buffer.snapshot().revision;
         if self.highlighted != Some(revision) {
             let source = self.buffer.rope().to_string();
@@ -190,7 +220,13 @@ impl SqlConsole {
                     );
                 }
             });
-            if let Some(grid) = self.results.get_mut(self.selected_result) {
+            let valid =
+                self.connection == self.result_connection && self.schema == self.result_schema;
+            if let Some(editor) = self.result_editors.get_mut(self.selected_result) {
+                ui.push_id(("sql_result", self.selected_result), |ui| {
+                    editor.show(ui, self.pending.is_some(), enabled && valid);
+                });
+            } else if let Some(grid) = self.results.get_mut(self.selected_result) {
                 grid.show(ui);
             }
         }
@@ -199,6 +235,93 @@ impl SqlConsole {
         } else {
             None
         }
+    }
+    pub(crate) fn result_context_valid(&self) -> bool {
+        self.connection == self.result_connection && self.schema == self.result_schema
+    }
+    pub(crate) fn data_dirty(&self) -> bool {
+        self.table
+            .as_ref()
+            .is_some_and(|t| t.dirty() || self.pending.is_some())
+            || self
+                .result_editors
+                .iter()
+                .any(crate::table_editor::TableEditor::dirty)
+            || (!self.result_editors.is_empty() && self.pending.is_some())
+    }
+    pub(crate) fn active_table(&self) -> Option<&crate::table_editor::TableEditor> {
+        self.table
+            .as_ref()
+            .or_else(|| self.result_editors.get(self.selected_result))
+    }
+    pub(crate) fn active_table_mut(&mut self) -> Option<&mut crate::table_editor::TableEditor> {
+        self.table
+            .as_mut()
+            .or_else(|| self.result_editors.get_mut(self.selected_result))
+    }
+    pub(crate) fn loaded_results(
+        &mut self,
+        results: Vec<nozhik_database::QueryResult>,
+        tree: Option<&DatabaseSchemaTree>,
+        driver: nozhik_database::DbDriverType,
+    ) {
+        self.executed_sql.clone_from(&self.pending_sql);
+        self.result_connection.clone_from(&self.connection);
+        self.result_schema.clone_from(&self.schema);
+        self.results = results.into_iter().map(DataGrid::new).collect();
+        self.rebuild_result_editors(tree, driver);
+    }
+    pub(crate) fn rebuild_result_editors(
+        &mut self,
+        tree: Option<&DatabaseSchemaTree>,
+        driver: nozhik_database::DbDriverType,
+    ) {
+        self.result_editors = self
+            .results
+            .iter()
+            .map(|grid| &grid.result)
+            .map(|result| {
+                let source = tree.and_then(|tree| {
+                    crate::sql_support::select_source(
+                        &self.executed_sql,
+                        &self.result_schema,
+                        tree,
+                        result,
+                    )
+                });
+                let info = source
+                    .as_ref()
+                    .and_then(|source| {
+                        tree?
+                            .schemas
+                            .iter()
+                            .find(|s| s.name == source.schema)?
+                            .tables
+                            .iter()
+                            .find(|t| t.name == source.table)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| nozhik_database::introspection::TableInfo {
+                        name: "Result".into(),
+                        is_view: true,
+                        columns: Vec::new(),
+                        objects: nozhik_database::catalog::TableObjects::default(),
+                        details_loaded: true,
+                    });
+                let mut editor = crate::table_editor::TableEditor::new(driver, info);
+                editor.console_result = true;
+                editor.loaded(
+                    source
+                        .as_ref()
+                        .map_or(self.result_schema.as_str(), |s| s.schema.as_str()),
+                    result.clone(),
+                );
+                if let Some(changes) = &mut editor.changes {
+                    changes.insert_defaults = source.map_or_else(Vec::new, |s| s.defaults);
+                }
+                editor
+            })
+            .collect();
     }
     pub(crate) const fn reveal(&mut self, line: Option<usize>) {
         self.editor.reveal_line = line;
@@ -223,7 +346,7 @@ impl Drop for SqlConsole {
         }
     }
 }
-fn statement_at(source: &str, caret: usize) -> &str {
+pub fn statement_at(source: &str, caret: usize) -> &str {
     let mut start = 0;
     for (range, kind) in tokens(source) {
         if kind.is_none() && source.get(range.clone()) == Some(";") {
@@ -237,7 +360,7 @@ fn statement_at(source: &str, caret: usize) -> &str {
     if tail.is_empty() { source.trim() } else { tail }
 }
 /// Lexes strings, quoted identifiers, dollar quotes, comments and SQL words.
-fn tokens(source: &str) -> Vec<(Range<usize>, Option<&'static str>)> {
+pub fn tokens(source: &str) -> Vec<(Range<usize>, Option<&'static str>)> {
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -290,10 +413,17 @@ fn tokens(source: &str) -> Vec<(Range<usize>, Option<&'static str>)> {
                 .find(delimiter)
                 .map_or(bytes.len(), |end| i + end + delimiter.len());
             kind = Some("string");
-        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
+        } else if source[i..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+        {
+            while let Some(c) = source[i..]
+                .chars()
+                .next()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
+            {
+                i += c.len_utf8();
             }
             let word = source[start..i].to_ascii_uppercase();
             if "SELECT FROM WHERE AS AND OR NOT NULL TRUE FALSE JOIN INNER LEFT RIGHT FULL ON GROUP BY ORDER ASC DESC LIMIT OFFSET INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE VIEW INDEX DROP ALTER PRIMARY KEY REFERENCES DEFAULT DISTINCT UNION ALL HAVING WITH RECURSIVE RETURNING BEGIN COMMIT ROLLBACK EXPLAIN CASE WHEN THEN ELSE END IS IN LIKE EXISTS USE".split_whitespace().any(|k| k==word) {kind=Some("keyword");}
@@ -364,6 +494,101 @@ mod selection_tests {
             .buffer
             .set_cursors(vec![nozhik_buffer::Cursor { anchor, head }])?;
         assert_eq!(console.execution_sql(), "SELECT 2");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers};
+    fn frame(console: &mut SqlConsole, ctx: &egui::Context, events: Vec<Event>) {
+        let (tree, _) = crate::sql_support::tests::fixture();
+        let profile = ConnectionProfile {
+            name: "db".into(),
+            ..Default::default()
+        };
+        let _output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    console.show(ui, std::slice::from_ref(&profile), Some(&tree), true);
+                });
+            },
+        );
+    }
+    #[test]
+    fn keyboard_sql_completion_uses_schema_popup_and_replaces_prefix()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut console = SqlConsole::new(
+            800,
+            "db".into(),
+            "main".into(),
+            "SELECT * FROM ",
+            "console".into(),
+        );
+        let ctx = egui::Context::default();
+        let pos = console
+            .buffer
+            .position_at(console.buffer.rope().len_bytes())?;
+        console.buffer.set_cursors(vec![nozhik_buffer::Cursor {
+            anchor: pos,
+            head: pos,
+        }])?;
+        frame(&mut console, &ctx, vec![]);
+        ctx.memory_mut(|m| m.request_focus(console.editor_id.unwrap_or(egui::Id::NULL)));
+        frame(&mut console, &ctx, vec![Event::Text("go".into())]);
+        assert!(
+            console
+                .language
+                .completions
+                .iter()
+                .any(|i| i.label == "goods")
+        );
+        frame(
+            &mut console,
+            &ctx,
+            vec![Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(console.buffer.rope().to_string(), "SELECT * FROM \"goods\"");
+        frame(&mut console, &ctx, vec![Event::Text(" WHERE ty".into())]);
+        assert!(
+            console
+                .language
+                .completions
+                .iter()
+                .any(|i| i.label == "type")
+        );
+        frame(
+            &mut console,
+            &ctx,
+            vec![Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            console.buffer.rope().to_string(),
+            "SELECT * FROM \"goods\" WHERE \"type\""
+        );
+        frame(&mut console, &ctx, vec![Event::Text("='ty".into())]);
+        assert_eq!(console.language.completions, []);
         Ok(())
     }
 }

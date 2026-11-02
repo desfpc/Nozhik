@@ -16,6 +16,7 @@ pub enum TableAction {
 }
 pub struct TableEditor {
     pub driver: DbDriverType,
+    pub console_result: bool,
     pub info: TableInfo,
     pub changes: Option<TableChanges>,
     pub action: Option<TableAction>,
@@ -36,6 +37,7 @@ impl TableEditor {
     pub fn new(driver: DbDriverType, info: TableInfo) -> Self {
         Self {
             driver,
+            console_result: false,
             info,
             changes: None,
             action: None,
@@ -61,8 +63,10 @@ impl TableEditor {
             self.offset = offset;
             self.page_size = size;
         }
-        self.has_more = result.rows.len() > self.page_size;
-        result.rows.truncate(self.page_size);
+        self.has_more = !self.console_result && result.rows.len() > self.page_size;
+        if !self.console_result {
+            result.rows.truncate(self.page_size);
+        }
         self.reveal_row = Some(0);
         let keys = result
             .columns
@@ -112,6 +116,7 @@ impl TableEditor {
             .changes
             .as_ref()
             .and_then(|c| c.baseline.columns.get(column))
+            .cloned()
         {
             let quoted = nozhik_database::connection::quote_identifier(self.driver, &column.name);
             self.order_input = match self.query.column_descending(self.driver, &column.name) {
@@ -119,7 +124,41 @@ impl TableEditor {
                 Some(false) => format!("{quoted} DESC"),
                 Some(true) => String::new(),
             };
-            self.action = Some(TableAction::Query);
+            if self.console_result {
+                self.query.order.clone_from(&self.order_input);
+                if let Some(changes) = &mut self.changes {
+                    changes.revert();
+                    if let Some(descending) =
+                        self.query.column_descending(self.driver, &column.name)
+                    {
+                        let index = changes
+                            .baseline
+                            .columns
+                            .iter()
+                            .position(|c| c.name == column.name)
+                            .unwrap_or(0);
+                        changes.rows.sort_by(|a, b| {
+                            let ordering = a
+                                .values
+                                .get(index)
+                                .and_then(Option::as_ref)
+                                .zip(b.values.get(index).and_then(Option::as_ref))
+                                .map_or(std::cmp::Ordering::Equal, |(a, b)| {
+                                    crate::data_grid::compare(a, b)
+                                });
+                            if descending {
+                                ordering.reverse()
+                            } else {
+                                ordering
+                            }
+                        });
+                    }
+                }
+                self.inputs.clear();
+                self.selected.clear();
+            } else {
+                self.action = Some(TableAction::Query);
+            }
         }
     }
     fn query_fields(&mut self, ui: &mut egui::Ui, enabled: bool) {
@@ -343,7 +382,11 @@ impl TableEditor {
                     });
                 });
         });
-        self.query_fields(ui, enabled && !busy && !self.preview && !self.dirty());
+        if !self.console_result {
+            self.query_fields(ui, enabled && !busy && !self.preview && !self.dirty());
+        } else if self.info.is_view {
+            ui.label("Read-only result: editing requires direct columns from one base table with its complete primary key.");
+        }
         let mut sort_column = None;
         if let Some(changes) = &mut self.changes {
             let size = egui::vec2(
@@ -372,7 +415,23 @@ impl TableEditor {
         if let Some(column) = sort_column {
             self.cycle_sort(column);
         }
-        self.pagination(ui, enabled && !busy && !self.preview && !self.dirty());
+        if self.console_result {
+            if let Some(changes) = &self.changes {
+                ui.label(format!(
+                    "{} rows{} · {} ms · {} affected",
+                    changes.baseline.rows.len(),
+                    if changes.baseline.truncated {
+                        " · result limit"
+                    } else {
+                        ""
+                    },
+                    changes.baseline.execution_time_ms,
+                    changes.baseline.rows_affected
+                ));
+            }
+        } else {
+            self.pagination(ui, enabled && !busy && !self.preview && !self.dirty());
+        }
         if self.dirty() != dirty {
             ui.ctx().request_repaint();
         }
@@ -838,4 +897,50 @@ fn parse_input(text: &str, kind: &str, previous: Option<&DbValue>) -> DbValue {
         }
     }
     DbValue::Text(text.into())
+}
+
+#[cfg(test)]
+mod console_tests {
+    use super::*;
+    #[test]
+    fn console_sort_cycles_without_changing_row_identity_or_insert_defaults()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (tree, mut result) = crate::sql_support::tests::fixture();
+        result.rows = vec![
+            vec![
+                DbValue::Int(10),
+                DbValue::Int(11),
+                DbValue::Text("last".into()),
+            ],
+            vec![
+                DbValue::Int(2),
+                DbValue::Int(11),
+                DbValue::Text("first".into()),
+            ],
+        ];
+        let mut editor = TableEditor::new(DbDriverType::Sqlite, tree.schemas[0].tables[0].clone());
+        editor.console_result = true;
+        editor.loaded("main", result);
+        editor.changes.as_mut().ok_or("changes")?.insert_defaults =
+            vec![("type".into(), DbValue::Int(11))];
+        for (expected, direction) in [(2, Some(false)), (10, Some(true)), (10, None)] {
+            editor.cycle_sort(0);
+            assert_eq!(
+                editor.query.column_descending(editor.driver, "id"),
+                direction
+            );
+            let changes = editor.changes.as_ref().ok_or("changes")?;
+            assert_eq!(
+                changes.rows[0].original.as_ref().ok_or("original")?[0],
+                DbValue::Int(expected)
+            );
+            assert!(!editor.dirty());
+            assert!(editor.action.is_none());
+            assert_eq!(
+                changes.insert_defaults,
+                vec![("type".into(), DbValue::Int(11))]
+            );
+        }
+        Ok(())
+    }
 }

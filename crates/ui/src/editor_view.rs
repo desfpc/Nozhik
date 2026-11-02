@@ -905,6 +905,21 @@ impl TextEditorView {
         state: &mut crate::language::EditorLanguage,
         explicit: bool,
     ) {
+        if state.sql_catalog.is_some() {
+            state.rebase(buffer);
+        }
+        if let Some((tree, schema, driver)) = &state.sql_catalog {
+            let caret = buffer.cursors().as_slice()[0].head.byte_offset;
+            let source = buffer.rope().to_string();
+            state.completions =
+                crate::sql_support::completions(&source, caret, tree, schema, *driver);
+            state.completion_caret = caret;
+            state.completion_prefix =
+                nozhik_language_support::completion::query(&source, caret).into();
+            state.selected = 0;
+            state.completion_scroll = true;
+            return;
+        }
         state.rebase(buffer);
         state.capture_index();
         let head = buffer.cursors().as_slice()[0].head;

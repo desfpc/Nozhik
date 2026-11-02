@@ -2759,3 +2759,36 @@ legal sidecars с Resources/Legal; LICENSE в поставке совпадае�
 После проверки выполнен cargo clean (6.5 GiB), удалены временные файлы задачи.
 Размер проекта после очистки — 379 MiB; готовый macOS-комплект сохранён,
 Windows-кэш не создавался. git diff --check прошёл.
+
+
+### SQL completion и редактируемые результаты консоли (v0.1.20, 2026-11-02)
+
+Добавлены schema completion для таблиц и полей в SQL-консолях, aliases и lazy
+Describe через существующий worker. Штатный completion popup принимает Tab/Enter
+и Ctrl+Space, не активируется внутри строк/комментариев. Результаты используют
+TableEditor без WHERE/ORDER BY: редактирование, добавление/удаление, Revert, preview,
+Submit и reload исходного запроса. Прямые проекции одной таблицы с полным PK
+редактируемы; неоднозначные/вычисляемые результаты доступны для чтения.
+WHERE type=11 предзаполняет новую строку, включая непоказанные в SELECT поля;
+неравенства/OR/NOT/выражения не дают предполагаемых значений. Добавлены keyboard,
+provenance/defaults, SQLite DML и pointer-driven worker/UI regression.
+Workspace/Cargo.lock/UI/bundle — 0.1.20, следующая доработка — 0.1.21.
+
+Проверки v0.1.20: полный native workspace/all-features test с system access для
+localhost/process fixtures и двумя test threads — 254 passed, 0 failed, 7 ignored.
+Native Clippy workspace/all-targets/all-features с -D warnings и rustfmt прошли.
+Keyboard regression проверяет таблицу/поле, Tab/Enter и подавление в строках;
+SQLite regression — DML с constraint непоказанного поля; pointer-driven worker/UI
+regression — 601 строку без обрезания до 500, preview, dirty Execute gate,
+добавление/удаление и Submit/reload выполненного SQL. Локальная сортировка
+сохраняет row identity и defaults, OR/NOT/неравенства/конфликты/дубликаты
+равенств покрыты отдельно. Реальные MySQL/PostgreSQL и нативное GUI не запускались.
+Windows build/Clippy, commit и push не выполнялись.
+
+Workspace release build и штатный update-binaries.py прошли. macOS ARM64 executable
+и подписанный Nozhik.app.zip обновлены; --check подтвердил source fingerprint и
+payload hashes. Проверены bundle version 0.1.20, целостность обоих ZIP и совпадение
+четырёх legal sidecars с Resources/Legal. После проверки бинарников выполнен
+cargo clean (9.8 GiB logical), удалены 6 untracked Finder files и временные логи.
+Размер проекта после очистки — 379 MiB; готовый macOS-комплект и legal materials
+сохранены. Windows-кэш не создавался. Финальный git diff --check прошёл.

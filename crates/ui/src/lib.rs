@@ -28,6 +28,7 @@ mod remote_worker;
 pub mod search_everywhere;
 mod settings_dialog;
 mod sql_console;
+mod sql_support;
 mod table_editor;
 mod terminal_panel;
 mod terminal_view;

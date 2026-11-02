@@ -1459,4 +1459,31 @@ Dirty/busy/modal/invalid gates блокируют изменение выбор�
 filter/order icons; header arrow рисуется треугольниками без зависимости от font.
 Цикл None→ASC→DESC→None меняет серверный ORDER BY одной колонки. Ручные простые
 одноколоночные ORDER BY распознаются в стрелках, сложные выражения — нейтральные.
-DataGrid результатов SQL-консоли сохраняет прежнюю локальную сортировку.
+Результаты SQL-консоли сортируют загруженный snapshot локально (см. v0.1.20).
+
+
+## SQL completion и редактируемые результаты (v0.1.20)
+
+EditorLanguage.sql_catalog содержит snapshot схемы, namespace и диалект. SQL-ветка
+TextEditorView использует штатные popup/keys/completion edits без PHP/LSP запросов.
+ui::sql_support лексически разрешает FROM/JOIN/UPDATE/INTO и aliases, фильтрует
+таблицы/колонки по префиксу и цитирует вставляемые имена по диалекту. database_editor
+лениво запрашивает Describe для упомянутых relations через прежний bounded worker;
+метаданные дерева и консоли общие. I/O на UI-потоке не добавлен.
+
+SqlConsole хранит executed_sql отдельно от редактируемого буфера и pending_sql.
+Каждый result имеет TableEditor с console_result=true: общий toolbar/grid/preview,
+без WHERE/ORDER BY и серверной pagination, с локальной сортировкой snapshot.
+Консервативный анализатор разрешает DML только для прямых непереименованных колонок
+одной base table, с полным PK для частичной проекции; полный snapshot без PK
+сохраняет прежнюю exactly-one-row transaction проверку. JOIN/CTE/агрегаты/views/
+вычисления/multi-statement и неоднозначная default schema остаются read-only.
+Read-only snapshot может стать редактируемым после запоздавшего Describe.
+
+TableChanges.insert_defaults содержит точные column/literal равенства из AND
+предикатов, исключая OR/NOT, выражения и конфликтующие значения. add_row заполняет
+представленные поля; statements добавляет constraints для отсутствующих в проекции
+полей INSERT. Значения проходят обычный dialect literal encoder, без вставки
+фрагментов WHERE в DML. Исходный query/connection/schema закреплены за snapshot;
+Submit/reload используют выполненный SQL. Dirty/preview/busy gates не дают затереть
+правки Execute или переключением connection/schema. Close/Save All не коммитят DML.

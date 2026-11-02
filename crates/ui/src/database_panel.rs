@@ -1,5 +1,5 @@
 //! Database explorer, connection dialogs and typed worker integration.
-use crate::{NozhikUi, data_grid::DataGrid, sql_console::SqlConsole};
+use crate::{NozhikUi, sql_console::SqlConsole};
 use nozhik_database::{
     CancellationToken, ConnectionProfile, DatabaseSchemaTree, DbDriverType,
     worker::{Command, Reply, Worker},
@@ -81,7 +81,7 @@ impl DatabaseUi {
     pub fn table_modal(&self) -> bool {
         self.active
             .and_then(|i| self.tabs.get(i))
-            .and_then(|t| t.table.as_ref())
+            .and_then(SqlConsole::active_table)
             .is_some_and(crate::table_editor::TableEditor::modal_open)
     }
     pub fn shutdown(&mut self) {
@@ -260,7 +260,7 @@ impl NozhikUi {
                         tab.pending = None;
                         match result {
                             Ok(()) => {
-                                if let Some(table) = &mut tab.table {
+                                if let Some(table) = tab.active_table_mut() {
                                     table.changes = None;
                                 }
                                 self.reload_database_table(index);
@@ -283,7 +283,19 @@ impl NozhikUi {
                                         table.loaded(&tab.schema, result);
                                     }
                                 } else {
-                                    tab.results = results.into_iter().map(DataGrid::new).collect();
+                                    let driver = self
+                                        .database
+                                        .profiles
+                                        .iter()
+                                        .find(|p| p.name == tab.connection)
+                                        .map_or(nozhik_database::DbDriverType::Sqlite, |p| {
+                                            p.driver
+                                        });
+                                    tab.loaded_results(
+                                        results,
+                                        self.database.trees.get(&tab.connection),
+                                        driver,
+                                    );
                                 }
                                 tab.selected_result = 0;
                                 tab.error.clear();
@@ -558,6 +570,22 @@ impl NozhikUi {
                         view.info = info.clone();
                     }
                 }
+                let tree = self.database.trees.get(&pending.name);
+                for tab in &mut self.database.tabs {
+                    if tab.table.is_none()
+                        && !tab.connection_invalid
+                        && tab.result_connection == pending.name
+                        && tab.result_context_valid()
+                        && tab.pending.is_none()
+                        && tab
+                            .result_editors
+                            .iter()
+                            .all(|e| e.info.is_view && !e.dirty())
+                        && let Some(driver) = tab.result_editors.first().map(|e| e.driver)
+                    {
+                        tab.rebuild_result_editors(tree, driver);
+                    }
+                }
                 self.database.table_errors.remove(&(
                     pending.name.clone(),
                     pending.schema.clone(),
@@ -602,7 +630,28 @@ impl NozhikUi {
             .push(SqlConsole::new(id, name, schema, sql, title));
         self.database.active = self.database.tabs.len().checked_sub(1);
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Routes console and shared table actions after scheduling lazy SQL metadata"
+    )]
     pub(crate) fn database_editor(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        if let Some(tab) = self.database.active.and_then(|i| self.database.tabs.get(i)) {
+            let name = tab.connection.clone();
+            let needed = self
+                .database
+                .trees
+                .get(&name)
+                .map_or_else(Vec::new, |tree| {
+                    crate::sql_support::referenced_tables(
+                        &tab.buffer.rope().to_string(),
+                        &tab.schema,
+                        tree,
+                    )
+                });
+            for (schema, table) in needed {
+                self.request_database_table(name.clone(), schema, table, false, false);
+            }
+        }
         if let Some(index) = self.database.active
             && let Some(tab) = self.database.tabs.get_mut(index)
         {
@@ -614,7 +663,7 @@ impl NozhikUi {
                 tree,
                 enabled && !tab.connection_invalid,
             );
-            let action = tab.table.as_mut().and_then(|t| t.action.take());
+            let action = tab.active_table_mut().and_then(|t| t.action.take());
             self.editor_focus = tab.focus_id;
             self.integration.last_editor = tab.editor_id;
             let mut layout = self.layout.value;
@@ -666,9 +715,12 @@ impl NozhikUi {
                     crate::table_editor::TableAction::Submit => self.submit_database_table(index),
                     crate::table_editor::TableAction::Ddl => {
                         let tab = &self.database.tabs[index];
-                        if let Some(table) = &tab.table {
+                        if let Some(table) = tab.active_table() {
                             let name = tab.connection.clone();
-                            let schema = tab.schema.clone();
+                            let schema = table
+                                .changes
+                                .as_ref()
+                                .map_or_else(|| tab.schema.clone(), |c| c.schema.clone());
                             let title = format!("{}.ddl.sql", table.info.name);
                             let ddl = table.info.objects.ddl.clone();
                             if let Some(index) = self.database.tabs.iter().position(|t| {
@@ -695,9 +747,17 @@ impl NozhikUi {
         let Some(tab) = self.database.tabs.get(index) else {
             return;
         };
-        let Some(table) = &tab.table else {
+        let Some(table) = tab.active_table() else {
             return;
         };
+        if table.console_result {
+            if !tab.result_context_valid() {
+                return;
+            }
+            let sql = tab.executed_sql.clone();
+            self.queue_database_sql(index, sql);
+            return;
+        }
         let sql = table.page_sql(&tab.schema);
         match sql {
             Ok(sql) => self.queue_database_sql(index, sql),
@@ -715,10 +775,13 @@ impl NozhikUi {
         let Some(tab) = self.database.tabs.get(index) else {
             return;
         };
-        if tab.pending.is_some() || tab.connection_invalid {
+        if tab.pending.is_some()
+            || tab.connection_invalid
+            || (tab.table.is_none() && (!tab.result_context_valid()))
+        {
             return;
         }
-        let Some(changes) = tab.table.as_ref().and_then(|t| t.changes.clone()) else {
+        let Some(changes) = tab.active_table().and_then(|t| t.changes.clone()) else {
             return;
         };
         if !changes.is_dirty() {
@@ -754,19 +817,26 @@ impl NozhikUi {
         let id = self.database.request_id();
         let token = CancellationToken::new();
         if let Some(tab) = self.database.tabs.get(index) {
-            if tab.pending.is_some() || tab.connection_invalid {
+            if tab.pending.is_some()
+                || tab.connection_invalid
+                || tab
+                    .result_editors
+                    .iter()
+                    .any(crate::table_editor::TableEditor::dirty)
+            {
                 return;
             }
             let command = Command::Query {
                 id,
                 name: tab.connection.clone(),
-                sql,
+                sql: sql.clone(),
                 schema: Some(tab.schema.clone()),
                 cancel: token.clone(),
             };
             if self.database.queue(command)
                 && let Some(tab) = self.database.tabs.get_mut(index)
             {
+                tab.pending_sql = sql;
                 tab.pending = Some((id, token));
                 tab.error.clear();
             }
@@ -1333,6 +1403,119 @@ mod table_tests {
         let header = text(&output, "PK id\nINTEGER").ok_or("id header")?;
         click(shell, ctx, header.min + vec2(162.0, 16.0));
         wait(shell, ctx, |s| s.database.tabs[0].pending.is_none())
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "End-to-end console staging, reload and provenance regression uses the actual worker and pointer input"
+    )]
+    fn sql_console_shared_grid_add_edit_submit_delete_and_reload()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let profile = ConnectionProfile {
+            name: "Console test".into(),
+            database: dir.path().join("console.sqlite").display().to_string(),
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new()?;
+        runtime.block_on(async {
+            let db = Connection::connect(&profile,None,None).await?;
+            db.query("CREATE TABLE goods(id INTEGER PRIMARY KEY,type INTEGER,name TEXT DEFAULT 'new'); INSERT INTO goods VALUES(1,11,'first'),(2,12,'other'); WITH RECURSIVE n(x) AS (VALUES(3) UNION ALL SELECT x+1 FROM n WHERE x<602) INSERT INTO goods SELECT x,11,'item' FROM n",None,&CancellationToken::new()).await?;
+            db.close().await; Ok::<_,nozhik_database::Error>(())
+        })?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        ctx.style_mut(|s| s.animation_time = 0.0);
+        frame(&mut shell, &ctx, vec![]);
+        shell.database.profiles = vec![profile.clone()];
+        shell.start_database_connection(profile, None, false);
+        wait(&mut shell, &ctx, |s| {
+            s.database.trees.contains_key("Console test")
+        })?;
+        let sql = "SELECT * FROM goods WHERE type=11 ORDER BY id";
+        shell.new_sql_console("Console test".into(), "main".into(), sql, "Console".into());
+        shell.execute_database_sql(sql.into());
+        wait(&mut shell, &ctx, |s| {
+            s.database.tabs[0].pending.is_none()
+                && s.database.tabs[0]
+                    .active_table()
+                    .is_some_and(|t| !t.info.is_view)
+        })?;
+        assert_eq!(
+            shell.database.tabs[0]
+                .active_table()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("changes")?
+                .rows
+                .len(),
+            601
+        );
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(text(&output, "WHERE").is_none());
+        assert!(text(&output, "ORDER BY").is_none());
+        replace_cell(&mut shell, &ctx, "first", "edited")?;
+        assert!(shell.database.tabs[0].data_dirty());
+        // Execute cannot discard staged edits, even through the non-UI entry point.
+        shell.execute_database_sql("SELECT 1".into());
+        assert!(shell.database.tabs[0].pending.is_none());
+        click_label(&mut shell, &ctx, "Preview Pending Changes")?;
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "DML Preview").is_some());
+        assert!(shell.database.table_modal());
+        click_label(&mut shell, &ctx, "Cancel")?;
+        click_label(&mut shell, &ctx, "Submit")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .active_table()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("changes")?
+                .rows[0]
+                .values[2],
+            Some(DbValue::Text("edited".into()))
+        );
+        click_label(&mut shell, &ctx, "+")?;
+        let changes = shell.database.tabs[0]
+            .active_table()
+            .and_then(|t| t.changes.as_ref())
+            .ok_or("changes")?;
+        assert_eq!(
+            changes.rows.last().ok_or("new row")?.values[1],
+            Some(DbValue::Int(11))
+        );
+        // Changing editor text after execution must not change reload or insertion defaults.
+        shell.database.tabs[0].buffer.insert(0, "-- draft\n")?;
+        click_label(&mut shell, &ctx, "Submit")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .active_table()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("changes")?
+                .rows
+                .len(),
+            602
+        );
+        replace_cell(&mut shell, &ctx, "edited", "delete me")?;
+        click_label(&mut shell, &ctx, "−")?;
+        click_label(&mut shell, &ctx, "Submit")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .active_table()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("changes")?
+                .rows
+                .len(),
+            601
+        );
+        assert_eq!(shell.database.tabs[0].executed_sql, sql);
+        shell.database.shutdown();
+        Ok(())
     }
     #[test]
     #[allow(

@@ -26,6 +26,8 @@ pub struct TableChanges {
     pub keys: Vec<usize>,
     /// Staged rows in server order followed by insertions.
     pub rows: Vec<EditedRow>,
+    /// Exact query constraints used for omitted columns in new rows.
+    pub insert_defaults: Vec<(String, DbValue)>,
 }
 impl TableChanges {
     /// Create a local editing snapshot.
@@ -44,6 +46,7 @@ impl TableChanges {
             baseline,
             keys,
             rows: Vec::new(),
+            insert_defaults: Vec::new(),
         };
         changes.revert();
         changes
@@ -76,9 +79,20 @@ impl TableChanges {
     }
     /// Append a row whose omitted cells use database defaults.
     pub fn add_row(&mut self) {
+        let values = self
+            .baseline
+            .columns
+            .iter()
+            .map(|c| {
+                self.insert_defaults
+                    .iter()
+                    .find(|(name, _)| *name == c.name)
+                    .map(|(_, value)| value.clone())
+            })
+            .collect();
         self.rows.push(EditedRow {
             original: None,
-            values: vec![None; self.baseline.columns.len()],
+            values,
             deleted: false,
         });
     }
@@ -162,6 +176,12 @@ impl TableChanges {
                 for (column, value) in self.baseline.columns.iter().zip(&row.values) {
                     if let Some(value) = value {
                         columns.push(quote(&column.name));
+                        values.push(literal(self.driver, value)?);
+                    }
+                }
+                for (name, value) in &self.insert_defaults {
+                    if !self.baseline.columns.iter().any(|c| c.name == *name) {
+                        columns.push(quote(name));
                         values.push(literal(self.driver, value)?);
                     }
                 }

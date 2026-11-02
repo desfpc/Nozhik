@@ -416,6 +416,21 @@ async fn table_edits_stage_preview_submit_revert_and_objects()
         .iter()
         .find(|t| t.name == "items")
         .ok_or("items")?;
+    let id = table.columns.iter().find(|c| c.name == "id").ok_or("id")?;
+    assert!(id.is_primary_key && !id.is_foreign_key && !id.nullable);
+    let parent = table
+        .columns
+        .iter()
+        .find(|c| c.name == "parent_id")
+        .ok_or("parent_id")?;
+    assert!(parent.is_foreign_key && parent.nullable && !parent.is_primary_key);
+    let name = table
+        .columns
+        .iter()
+        .find(|c| c.name == "name")
+        .ok_or("name")?;
+    assert_eq!(name.display_type(), "TEXT = 'default'");
+    assert!(!name.is_foreign_key && !name.nullable);
     assert!(!table.objects.keys.is_empty());
     assert_eq!(table.objects.foreign_keys.len(), 1);
     assert_eq!(table.objects.indexes.len(), 1);

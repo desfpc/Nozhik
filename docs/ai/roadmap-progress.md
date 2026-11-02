@@ -2564,3 +2564,42 @@ Finder .DS_Store. Измеренный allocated size проекта: 44.34 GiB 
 Исходники, .git/history, конфигурация и готовый macOS-комплект с legal materials
 сохранены. Windows source/build support сохранена; Windows-кэш не создавался.
 Проверки завершены до очистки; новая компиляция снова создаст target.
+
+
+### Визуализация объектов БД по референсам (v0.1.15, 2026-11-02)
+
+Database Explorer получил компактные строки, точные цвета и размеры по изображениям:
+24 px высота, 19 px вложенность, основной/вторичный текст 14/12 px. Добавлены
+оригинальные векторные иконки namespaces, папок, таблиц/views, колонок с признаками
+nullable/PK/FK, жёлтых ключей, синих внешних ключей и индексов с U для UNIQUE.
+Выделение занимает всю ширину строки, счётчики и типы отделены от названия.
+Убраны кнопки между уровнями дерева: управление подключением доступно по правому
+клику, offline Connect также остаётся внутри ветки. Единственный namespace с именем
+текущей database не дублируется. Double-click/open, lazy Describe/retry и SQL consoles
+сохранены. SchemaColumn получает FK/default из каталогов, MySQL object annotations
+компактно показывают columns/reference/UNIQUE. Версия 0.1.15, следующая — 0.1.16.
+
+Проверки v0.1.15: полный native workspace/all-features test с system access для
+существующих TCP/process mocks и двумя test threads — 242 passed, 0 failed,
+7 optional system/live tests ignored. Native Clippy workspace/all-targets/all-features
+с -D warnings, rustfmt и git diff --check прошли. Pointer-driven explorer/table
+и connection-edit regressions сохранены; новая проверка контролирует высоту,
+вложенность, выделение и цвет аннотации выбранной строки. SQLite-тест проверяет
+PK/FK/nullable/default. Для отсутствующей в UI font стрелки связи добавлен
+векторный рендер и отдельный regression без зависимости от font glyph.
+
+Нативная macOS-проверка выполнялась отдельной временной app-оболочкой с отдельным
+bundle ID, временными settings/project и синтетической SQLite-базой: подключение,
+раскрытие схемы/tables/table и всех четырёх групп, иконки и выделение подтверждены.
+Выявленный missing-glyph square для → устранён после этого осмотра векторной
+стрелкой; исправление проверено headless regression. Пользовательские настройки,
+подключения и реальные БД не изменялись. PostgreSQL/MySQL live tests и Windows
+build/Clippy не запускались. Commit/push не выполнялись.
+
+Финальный workspace release build прошёл. macOS ARM64 executable и подписанный
+Nozhik.app.zip обновлены штатным update-binaries.py; --check подтвердил source
+fingerprint и payload hashes. В ZIP проверены версия 0.1.15, целостность архива
+и совпадение всех четырёх legal sidecars с Resources/Legal. После проверки сборок
+выполнен cargo clean (3.1 GiB), удалены временная тестовая среда и 5 untracked
+Finder files. Размер проекта после очистки — 377 MiB; готовый macOS-комплект
+с legal materials сохранён. Windows-кэш не создавался.

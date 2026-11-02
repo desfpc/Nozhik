@@ -44,6 +44,20 @@ pub struct SchemaColumn {
     pub nullable: bool,
     /// Member of a single or composite primary key.
     pub is_primary_key: bool,
+    /// Member of a foreign key, based on the native catalog (including composite keys).
+    pub is_foreign_key: bool,
+    /// Native SQL default expression, absent when no default is declared.
+    pub default_value: Option<String>,
+}
+impl SchemaColumn {
+    /// Compact explorer annotation; SQL expressions remain in their native spelling.
+    #[must_use]
+    pub fn display_type(&self) -> String {
+        let kind = self.data_type.replace("auto_increment", "(auto increment)");
+        self.default_value
+            .as_ref()
+            .map_or_else(|| kind.clone(), |value| format!("{kind} = {value}"))
+    }
 }
 impl Connection {
     /// Read namespace and relation names without querying columns, indexes or DDL.
@@ -101,6 +115,16 @@ impl Connection {
                     .filter(|r| r.try_get::<i64, _>("pk").is_ok_and(|v| v > 0))
                     .count()
                     == 1;
+                let foreign_columns = sqlx::query(&format!(
+                    "PRAGMA {}.foreign_key_list({})",
+                    quote_identifier(self.driver, schema),
+                    quote_identifier(self.driver, table)
+                ))
+                .fetch_all(p)
+                .await?
+                .iter()
+                .map(|r| r.try_get::<String, _>("from"))
+                .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
                 rows.iter()
                     .map(|r| {
                         let pk = r.try_get::<i64, _>("pk")? > 0;
@@ -111,12 +135,15 @@ impl Connection {
                             data_type,
                             nullable: r.try_get::<i64, _>("notnull")? == 0 && !rowid_pk,
                             is_primary_key: pk,
+                            is_foreign_key: foreign_columns
+                                .contains(&r.try_get::<String, _>("name")?),
+                            default_value: r.try_get("dflt_value")?,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
             }
             Pool::Postgres(p) => {
-                let rows=sqlx::query("SELECT c.column_name, c.data_type, c.is_nullable, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k ON tc.constraint_catalog=k.constraint_catalog AND tc.constraint_schema=k.constraint_schema AND tc.constraint_name=k.constraint_name AND tc.table_name=k.table_name WHERE tc.constraint_type='PRIMARY KEY' AND k.table_schema=c.table_schema AND k.table_name=c.table_name AND k.column_name=c.column_name) AS pk FROM information_schema.columns c WHERE c.table_schema=$1 AND c.table_name=$2 ORDER BY c.ordinal_position").bind(schema).bind(table).fetch_all(p).await?;
+                let rows=sqlx::query("SELECT c.column_name, c.data_type, c.column_default, c.is_nullable, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k USING (constraint_catalog, constraint_schema, constraint_name) WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_name=k.table_name AND k.table_schema=c.table_schema AND k.table_name=c.table_name AND k.column_name=c.column_name) AS fk, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k ON tc.constraint_catalog=k.constraint_catalog AND tc.constraint_schema=k.constraint_schema AND tc.constraint_name=k.constraint_name AND tc.table_name=k.table_name WHERE tc.constraint_type='PRIMARY KEY' AND k.table_schema=c.table_schema AND k.table_name=c.table_name AND k.column_name=c.column_name) AS pk FROM information_schema.columns c WHERE c.table_schema=$1 AND c.table_name=$2 ORDER BY c.ordinal_position").bind(schema).bind(table).fetch_all(p).await?;
                 rows.iter()
                     .map(|r| {
                         Ok(SchemaColumn {
@@ -124,12 +151,14 @@ impl Connection {
                             data_type: r.try_get("data_type")?,
                             nullable: r.try_get::<String, _>("is_nullable")? == "YES",
                             is_primary_key: r.try_get("pk")?,
+                            is_foreign_key: r.try_get("fk")?,
+                            default_value: r.try_get("column_default")?,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
             }
             Pool::Mysql(p) => {
-                let rows=sqlx::query("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4) AS name, CAST(CONCAT(COLUMN_TYPE, IF(EXTRA='','',CONCAT(' ',EXTRA))) AS CHAR CHARACTER SET utf8mb4) AS kind, CAST(IS_NULLABLE AS CHAR CHARACTER SET utf8mb4) AS nullable, CAST(COLUMN_KEY AS CHAR CHARACTER SET utf8mb4) AS pk FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(schema).bind(table).fetch_all(p).await?;
+                let rows=sqlx::query("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4) AS name, CAST(CONCAT(COLUMN_TYPE, IF(EXTRA='','',CONCAT(' ',EXTRA))) AS CHAR CHARACTER SET utf8mb4) AS kind, CAST(IS_NULLABLE AS CHAR CHARACTER SET utf8mb4) AS nullable, CAST(COLUMN_KEY AS CHAR CHARACTER SET utf8mb4) AS pk, CAST(COLUMN_DEFAULT AS CHAR CHARACTER SET utf8mb4) AS default_value, EXISTS (SELECT 1 FROM information_schema.KEY_COLUMN_USAGE k WHERE k.TABLE_SCHEMA=c.TABLE_SCHEMA AND k.TABLE_NAME=c.TABLE_NAME AND k.COLUMN_NAME=c.COLUMN_NAME AND k.REFERENCED_TABLE_NAME IS NOT NULL) AS fk FROM information_schema.COLUMNS c WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(schema).bind(table).fetch_all(p).await?;
                 rows.iter()
                     .map(|r| {
                         Ok(SchemaColumn {
@@ -137,6 +166,8 @@ impl Connection {
                             data_type: r.try_get("kind")?,
                             nullable: r.try_get::<String, _>("nullable")? == "YES",
                             is_primary_key: r.try_get::<String, _>("pk")? == "PRI",
+                            is_foreign_key: r.try_get::<i64, _>("fk")? != 0,
+                            default_value: r.try_get("default_value")?,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?

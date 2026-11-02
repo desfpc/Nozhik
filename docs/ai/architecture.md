@@ -1369,3 +1369,22 @@ The connection test now retains RemoteConnection until advertised refs are read;
 RAII performs disconnect. The ignored live diagnostic accepts URL and token only
 on stdin, stores token in Zeroizing and prints fixed safe errors, never raw transport
 messages. No credentials, user-specific URLs or response bodies are fixtures in code.
+
+
+## Визуализация объектов БД (v0.1.15)
+
+`database_panel/tree.rs` рисует дерево векторными glyphs без внешних icon assets:
+24 logical px на строку, 19 px на уровень, font 14/12, palette референса.
+Состояние раскрытия хранит egui CollapsingState, выделение — DatabaseUi.selected_object;
+ID включают connection/schema/table/category/object. Rows обрабатывают click,
+double-click, context menu и Left/Right для раскрытия сфокусированной группы.
+Tree возвращает типизированные actions; соединение, Describe, retry и SQL-tab
+действия остаются в прежнем worker integration. Connection actions перенесены
+в контекстное меню; offline-профиль также показывает Connect внутри ветки.
+Единственный namespace с именем database не дублирует корень подключения.
+
+SchemaColumn дополнен is_foreign_key и default_value. Признаки берутся из native
+catalog (в SQLite foreign_key_list), а не из названий колонок; display_type сохраняет
+native type/default expression и оформляет MySQL auto_increment как (auto increment).
+MySQL key/FK/index annotations компактны, составные indexes сохраняют порядок
+колонок и один UNIQUE suffix. Ленивое получение деталей и локальные ошибки сохранены.

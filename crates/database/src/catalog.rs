@@ -136,14 +136,31 @@ impl Connection {
                     let name: String = r.try_get("name")?; let kind: String = r.try_get("kind")?;
                     let columns = sqlx::query("SELECT CAST(COLUMN_NAME AS CHAR) AS col, CAST(REFERENCED_TABLE_NAME AS CHAR) AS target, CAST(REFERENCED_COLUMN_NAME AS CHAR) AS dest FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_NAME=? ORDER BY ORDINAL_POSITION").bind(schema).bind(table).bind(&name).fetch_all(pool).await?;
                     let mut parts = Vec::new();
-                    for c in columns { let col: String = c.try_get("col")?; let target: Option<String> = c.try_get("target")?; let dest: Option<String> = c.try_get("dest")?; parts.push(format!("{col}{}",target.map_or(String::new(),|t|format!(" → {t} ({})",dest.unwrap_or_default())))); }
-                    let object = TableObject { name, definition: format!("{kind} ({})",parts.join(", ")) };
+                    let mut destinations = Vec::new();
+                    let mut target = None;
+                    for c in columns {
+                        parts.push(c.try_get::<String, _>("col")?);
+                        if let Some(name) = c.try_get::<Option<String>, _>("target")? { target = Some(name); }
+                        if let Some(name) = c.try_get::<Option<String>, _>("dest")? { destinations.push(name); }
+                    }
+                    let definition = target.map_or_else(
+                        || format!("({}){}", parts.join(", "), if kind == "UNIQUE" { " UNIQUE" } else { "" }),
+                        |target| format!("({}) → {target} ({})", parts.join(", "), destinations.join(", ")),
+                    );
+                    let object = TableObject { name, definition };
                     if kind == "FOREIGN KEY" { objects.foreign_keys.push(object); } else { objects.keys.push(object); }
                 }
                 for r in sqlx::query("SELECT CAST(INDEX_NAME AS CHAR) AS name, CAST(COLUMN_NAME AS CHAR) AS col, CAST(NON_UNIQUE AS SIGNED) AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX").bind(schema).bind(table).fetch_all(pool).await? {
                     let name: String = r.try_get("name")?; let col: Option<String> = r.try_get("col")?;
-                    let definition = format!("{}{}",col.unwrap_or_else(||"expression".into()),if r.try_get::<i64,_>("non_unique")? == 0 { " UNIQUE" } else { "" });
-                    if let Some(index) = objects.indexes.iter_mut().find(|i|i.name==name) { index.definition.push_str(", "); index.definition.push_str(&definition); } else { objects.indexes.push(TableObject { name, definition }); }
+                    let unique = r.try_get::<i64,_>("non_unique")? == 0;
+                    let col = col.unwrap_or_else(|| "expression".into());
+                    if let Some(index) = objects.indexes.iter_mut().find(|i| i.name == name) {
+                        let suffix = if unique { " UNIQUE" } else { "" };
+                        let columns = index.definition.strip_suffix(suffix).unwrap_or(&index.definition).strip_suffix(')').unwrap_or(&index.definition);
+                        index.definition = format!("{columns}, {col}){suffix}");
+                    } else {
+                        objects.indexes.push(TableObject { name, definition: format!("({col}){}", if unique { " UNIQUE" } else { "" }) });
+                    }
                 }
             }
             Pool::Postgres(pool) => {

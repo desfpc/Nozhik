@@ -8,6 +8,8 @@ use nozhik_remote_ssh::{SshSession, credentials::Secret};
 use std::{collections::HashMap, sync::Arc};
 use zeroize::Zeroize;
 
+mod tree;
+
 #[derive(Default)]
 pub struct DatabaseUi {
     worker: Option<Worker>,
@@ -26,6 +28,7 @@ pub struct DatabaseUi {
     pending_save: Option<(String, Secret)>,
     tables_pending: HashMap<u64, PendingTable>,
     table_errors: HashMap<(String, String, String), String>,
+    selected_object: Option<egui::Id>,
 }
 struct PendingTable {
     name: String,
@@ -379,255 +382,25 @@ impl NozhikUi {
         if !self.database.error.is_empty() {
             ui.colored_label(crate::theme::ERROR, &self.database.error);
         }
-        egui::ScrollArea::both().show(ui, |ui| {
-            for profile in &self.database.profiles {
-                let tree = self.database.trees.get(&profile.name);
-                egui::CollapsingHeader::new(format!(
-                    "{} [{}]",
-                    profile.name,
-                    if self
-                        .database
-                        .pending
-                        .values()
-                        .any(|p| !p.test && p.profile.name == profile.name)
-                    {
-                        "Connecting…"
-                    } else if tree.is_some() {
-                        "Online"
-                    } else {
-                        "Offline"
-                    }
-                ))
-                .id_salt((&profile.name, "db"))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                !self
-                                    .database
-                                    .pending
-                                    .values()
-                                    .any(|p| p.profile.name == profile.name),
-                                egui::Button::new("Connect"),
-                            )
-                            .clicked()
-                        {
-                            connect = Some(profile.clone());
-                        }
-                        if tree.is_some()
-                            && ui
-                                .small_button("↻")
-                                .on_hover_text("Refresh metadata")
-                                .clicked()
-                        {
-                            inspect = Some(profile.name.clone());
-                        }
-                        if tree.is_some() && ui.small_button("Disconnect").clicked() {
-                            disconnect = Some(profile.name.clone());
-                        }
-                    });
-                    if ui.button("Edit Connection…").clicked() {
-                        edit = Some(profile.clone());
-                    }
-                    if profile.driver != DbDriverType::Sqlite
-                        && ui.button("Connect with password…").clicked()
-                    {
-                        self.database.login = Some(profile.clone());
-                    }
-                    if ui.button("New SQL Console").clicked() {
-                        console = Some((profile.name.clone(), String::new()));
-                    }
-                    if let Some(tree) = tree {
-                        for schema in &tree.schemas {
-                            egui::CollapsingHeader::new(&schema.name)
-                                .id_salt((&profile.name, &schema.name))
-                                .show(ui, |ui| {
-                                    for (views, label) in [(false, "Tables"), (true, "Views")] {
-                                        egui::CollapsingHeader::new(format!(
-                                            "{label} {}",
-                                            schema
-                                                .tables
-                                                .iter()
-                                                .filter(|t| t.is_view == views)
-                                                .count()
-                                        ))
-                                        .id_salt((&profile.name, &schema.name, label))
-                                        .show(ui, |ui| {
-                                            for table in
-                                                schema.tables.iter().filter(|t| t.is_view == views)
-                                            {
-                                                let response =
-                                                    egui::CollapsingHeader::new(&table.name)
-                                                        .id_salt((
-                                                            &profile.name,
-                                                            &schema.name,
-                                                            &table.name,
-                                                        ))
-                                                        .show(ui, |ui| {
-                                                            if !table.details_loaded {
-                                                                let key = (
-                                                                    profile.name.clone(),
-                                                                    schema.name.clone(),
-                                                                    table.name.clone(),
-                                                                );
-                                                                if let Some(error) = self
-                                                                    .database
-                                                                    .table_errors
-                                                                    .get(&key)
-                                                                {
-                                                                    ui.colored_label(
-                                                                        crate::theme::ERROR,
-                                                                        error,
-                                                                    );
-                                                                    if ui
-                                                                        .button(
-                                                                            "Retry table metadata",
-                                                                        )
-                                                                        .clicked()
-                                                                    {
-                                                                        describe.push((
-                                                                            profile.name.clone(),
-                                                                            schema.name.clone(),
-                                                                            table.clone(),
-                                                                            false,
-                                                                            true,
-                                                                        ));
-                                                                    }
-                                                                } else {
-                                                                    ui.horizontal(|ui| {
-                                                                ui.spinner();
-                                                                ui.label("Loading table metadata…");
-                                                            });
-                                                                    describe.push((
-                                                                        profile.name.clone(),
-                                                                        schema.name.clone(),
-                                                                        table.clone(),
-                                                                        false,
-                                                                        false,
-                                                                    ));
-                                                                }
-                                                                return;
-                                                            }
-                                                            egui::CollapsingHeader::new(format!(
-                                                                "columns {}",
-                                                                table.columns.len()
-                                                            ))
-                                                            .id_salt((
-                                                                "columns",
-                                                                &profile.name,
-                                                                &schema.name,
-                                                                &table.name,
-                                                            ))
-                                                            .show(ui, |ui| {
-                                                                for c in &table.columns {
-                                                                    ui.label(format!(
-                                                                        "{}{}  {}{}",
-                                                                        if c.is_primary_key {
-                                                                            "PK "
-                                                                        } else {
-                                                                            ""
-                                                                        },
-                                                                        c.name,
-                                                                        c.data_type,
-                                                                        if c.nullable {
-                                                                            " ?"
-                                                                        } else {
-                                                                            ""
-                                                                        }
-                                                                    ));
-                                                                }
-                                                            });
-                                                            if let Some(error) =
-                                                                &table.objects.error
-                                                            {
-                                                                ui.colored_label(
-                                                            crate::theme::ERROR,
-                                                            format!(
-                                                                "Keys/DDL unavailable: {error}"
-                                                            ),
-                                                        );
-                                                                if ui
-                                                                    .button("Retry table metadata")
-                                                                    .clicked()
-                                                                {
-                                                                    describe.push((
-                                                                        profile.name.clone(),
-                                                                        schema.name.clone(),
-                                                                        table.clone(),
-                                                                        false,
-                                                                        true,
-                                                                    ));
-                                                                }
-                                                                return;
-                                                            }
-                                                            for (label, objects) in [
-                                                                ("keys", &table.objects.keys),
-                                                                (
-                                                                    "foreign keys",
-                                                                    &table.objects.foreign_keys,
-                                                                ),
-                                                                ("indexes", &table.objects.indexes),
-                                                            ] {
-                                                                egui::CollapsingHeader::new(
-                                                                    format!(
-                                                                        "{label} {}",
-                                                                        objects.len()
-                                                                    ),
-                                                                )
-                                                                .id_salt((
-                                                                    label,
-                                                                    &profile.name,
-                                                                    &schema.name,
-                                                                    &table.name,
-                                                                ))
-                                                                .show(ui, |ui| {
-                                                                    for object in objects {
-                                                                        ui.horizontal(|ui| {
-                                                                            ui.label(&object.name);
-                                                                            ui.weak(
-                                                                                &object.definition,
-                                                                            );
-                                                                        });
-                                                                    }
-                                                                });
-                                                            }
-                                                        });
-                                                if response.header_response.double_clicked() {
-                                                    open = Some((
-                                                        profile.clone(),
-                                                        schema.name.clone(),
-                                                        table.clone(),
-                                                    ));
-                                                }
-                                                response.header_response.context_menu(|ui| {
-                                                    if ui
-                                                        .button("Open Table (Select top 1000)")
-                                                        .clicked()
-                                                    {
-                                                        open = Some((
-                                                            profile.clone(),
-                                                            schema.name.clone(),
-                                                            table.clone(),
-                                                        ));
-                                                        ui.close();
-                                                    }
-                                                    if ui.button("New SQL Console").clicked() {
-                                                        console = Some((
-                                                            profile.name.clone(),
-                                                            schema.name.clone(),
-                                                        ));
-                                                        ui.close();
-                                                    }
-                                                });
-                                            }
-                                        });
-                                    }
-                                });
-                        }
-                    }
-                });
+        let mut selected = self.database.selected_object;
+        let actions = egui::ScrollArea::both()
+            .show(ui, |ui| tree::show(ui, &self.database, &mut selected))
+            .inner;
+        self.database.selected_object = selected;
+        for action in actions {
+            match action {
+                tree::Action::Connect(profile) => connect = Some(profile),
+                tree::Action::Password(profile) => self.database.login = Some(profile),
+                tree::Action::Edit(profile) => edit = Some(profile),
+                tree::Action::Refresh(name) => inspect = Some(name),
+                tree::Action::Disconnect(name) => disconnect = Some(name),
+                tree::Action::Console(name, schema) => console = Some((name, schema)),
+                tree::Action::Describe(name, schema, table, retry) => {
+                    describe.push((name, schema, table, false, retry));
+                }
+                tree::Action::Open(profile, schema, table) => open = Some((profile, schema, table)),
             }
-        });
+        }
         if let Some(profile) = edit {
             self.edit_database_connection(profile);
             ui.ctx().request_repaint();
@@ -1320,7 +1093,7 @@ mod table_tests {
         )
     }
     fn text(output: &egui::FullOutput, label: &str) -> Option<Rect> {
-        output.shapes.iter().find_map(|s| match &s.shape {
+        output.shapes.iter().rev().find_map(|s| match &s.shape {
             egui::Shape::Text(t) if t.galley.text() == label && s.clip_rect.contains(t.pos) => {
                 Some(Rect::from_min_size(t.pos, t.galley.size()))
             }
@@ -1367,6 +1140,34 @@ mod table_tests {
         })
         .ok_or_else(|| format!("Missing UI label: {label}"))?;
         Ok(click(shell, ctx, rect.center()))
+    }
+    fn connection_menu(
+        shell: &mut NozhikUi,
+        ctx: &egui::Context,
+        name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let output = frame(shell, ctx, vec![]);
+        let point = text(&output, name).ok_or("connection row")?.center();
+        frame(
+            shell,
+            ctx,
+            vec![
+                Event::PointerMoved(point),
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        Ok(())
     }
     fn wait(
         shell: &mut NozhikUi,
@@ -1455,9 +1256,9 @@ mod table_tests {
             s.database.trees.contains_key("Table Test")
         })?;
         shell.database.profiles = vec![profile.clone()];
-        click_label(&mut shell, &ctx, "Table Test [Online]")?;
+        click_label(&mut shell, &ctx, "Table Test")?;
         click_label(&mut shell, &ctx, "main")?;
-        click_label(&mut shell, &ctx, "Tables 1")?;
+        click_label(&mut shell, &ctx, "tables")?;
         for _ in 0..40 {
             frame(&mut shell, &ctx, vec![]);
         }
@@ -1477,11 +1278,11 @@ mod table_tests {
         shell.open_database_table(profile.clone(), "main".into(), table);
         assert_eq!(shell.database.tabs.len(), 1);
         let output = frame(&mut shell, &ctx, vec![]);
-        if text(&output, "columns 2").is_none() {
+        if text(&output, "columns").is_none() {
             click_label(&mut shell, &ctx, "items")?;
         }
-        click_label(&mut shell, &ctx, "columns 2")?;
-        click_label(&mut shell, &ctx, "indexes 1")?;
+        click_label(&mut shell, &ctx, "columns")?;
+        click_label(&mut shell, &ctx, "indexes")?;
         replace_cell(&mut shell, &ctx, "first", "edited")?;
         assert!(shell.database.tabs[0].is_dirty());
         assert!(shell.database.tabs[0].pending.is_none());
@@ -1615,7 +1416,7 @@ mod table_tests {
                 .is_some_and(|t| t.table.as_ref().is_some_and(|v| v.changes.is_some()))
         })?;
         replace_cell(&mut shell, &ctx, "old data", "pending data")?;
-        click_label(&mut shell, &ctx, "Editor [Online]")?;
+        connection_menu(&mut shell, &ctx, "Editor")?;
         click_label(&mut shell, &ctx, "Edit Connection…")?;
         replace_cell(&mut shell, &ctx, "Editor", "Renamed")?;
         replace_cell(&mut shell, &ctx, &original.database, &edited.database)?;
@@ -1666,7 +1467,7 @@ mod table_tests {
             Some(DbValue::Text("pending data".into()))
         );
         let persisted = std::fs::read(&path)?;
-        click_label(&mut shell, &ctx, "Renamed [Online]")?;
+        connection_menu(&mut shell, &ctx, "Renamed")?;
         click_label(&mut shell, &ctx, "Edit Connection…")?;
         replace_cell(&mut shell, &ctx, "Renamed", "Other")?;
         click_label(&mut shell, &ctx, "Save")?;

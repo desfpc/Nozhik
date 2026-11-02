@@ -27,6 +27,8 @@ pub enum DbValue {
     Text(String),
     /// Binary payload.
     Bytes(Vec<u8>),
+    /// MySQL internal geometry: little-endian SRID followed by WKB.
+    Geometry(Vec<u8>),
     /// ISO date/time representation.
     DateTime(String),
     /// Serialized JSON.
@@ -40,6 +42,13 @@ impl std::fmt::Display for DbValue {
             Self::Int(v) => v.fmt(f),
             Self::Float(v) => v.fmt(f),
             Self::Text(v) | Self::DateTime(v) | Self::Json(v) => f.write_str(v),
+            Self::Geometry(v) => {
+                if let Some(point) = geometry_point(v) {
+                    write!(f, "POINT ({} {})", point.0, point.1)
+                } else {
+                    write!(f, "GEOMETRY {}", Self::Bytes(v.clone()))
+                }
+            }
             Self::Bytes(v) => {
                 f.write_str("0x")?;
                 for byte in v {
@@ -71,4 +80,34 @@ pub struct QueryResult {
     pub rows_affected: u64,
     /// Result exceeded the retained row or byte limit.
     pub truncated: bool,
+}
+
+// MySQL sends a 4-byte SRID prefix before standard WKB. Preserve the original
+// bytes for every geometry type; only POINT receives a compact text preview.
+fn geometry_point(bytes: &[u8]) -> Option<(f64, f64)> {
+    let wkb = bytes.get(4..)?;
+    let little = match wkb.first()? {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    let kind = wkb.get(1..5)?.try_into().ok()?;
+    if (if little {
+        u32::from_le_bytes(kind)
+    } else {
+        u32::from_be_bytes(kind)
+    }) != 1
+        || wkb.len() != 21
+    {
+        return None;
+    }
+    let read = |range: std::ops::Range<usize>| {
+        let value = wkb.get(range)?.try_into().ok()?;
+        Some(if little {
+            f64::from_le_bytes(value)
+        } else {
+            f64::from_be_bytes(value)
+        })
+    };
+    Some((read(5..13)?, read(13..21)?))
 }

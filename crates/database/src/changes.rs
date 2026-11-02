@@ -127,6 +127,14 @@ impl TableChanges {
                         if matches!(value, DbValue::Null) {
                             return Ok(format!("{name} IS NULL"));
                         }
+                        if let DbValue::Geometry(bytes) = value {
+                            // Compare the original internal bytes, including SRID, without
+                            // spatial equality or SRS-dependent axis conversions.
+                            return Ok(format!(
+                                "CAST({name} AS BINARY) = {}",
+                                literal(self.driver, &DbValue::Bytes(bytes.clone()))?
+                            ));
+                        }
                         let value = literal(self.driver, value)?;
                         Ok(
                             if self.driver == DbDriverType::Postgres
@@ -193,6 +201,15 @@ pub fn literal(driver: DbDriverType, value: &DbValue) -> Result<String> {
         DbValue::Int(v) => v.to_string(),
         DbValue::Float(v) if v.is_finite() => v.to_string(),
         DbValue::Float(_) => return Err(Error::Invalid("Non-finite number".into())),
+        DbValue::Geometry(v) => {
+            if driver != DbDriverType::Mysql {
+                return Err(Error::Invalid(
+                    "MySQL geometry requires a MySQL connection".into(),
+                ));
+            }
+            let (srid, wkb) = geometry_parts(v)?;
+            format!("ST_GeomFromWKB(X'{}', {srid})", hex(wkb))
+        }
         DbValue::Bytes(v) => {
             if driver == DbDriverType::Postgres {
                 format!("decode('{}', 'hex')", hex(v))
@@ -206,4 +223,16 @@ pub fn literal(driver: DbDriverType, value: &DbValue) -> Result<String> {
             DbDriverType::Sqlite => format!("CAST(X'{}' AS TEXT)", hex(s.as_bytes())),
         },
     })
+}
+
+fn geometry_parts(bytes: &[u8]) -> Result<(u32, &[u8])> {
+    let srid = bytes
+        .get(..4)
+        .and_then(|v| v.try_into().ok())
+        .ok_or_else(|| Error::Invalid("Invalid geometry SRID".into()))?;
+    let wkb = bytes
+        .get(4..)
+        .filter(|v| v.len() >= 5)
+        .ok_or_else(|| Error::Invalid("Invalid geometry WKB".into()))?;
+    Ok((u32::from_le_bytes(srid), wkb))
 }

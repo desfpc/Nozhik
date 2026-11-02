@@ -5,6 +5,7 @@ pub mod connection;
 pub mod driver;
 pub mod introspection;
 mod table_ops;
+pub mod table_query;
 pub mod worker;
 
 pub use connection::{Connection, ConnectionProfile, load_profiles, save_profiles};

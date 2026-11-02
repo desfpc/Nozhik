@@ -263,12 +263,30 @@ pub fn quote_identifier(driver: DbDriverType, name: &str) -> String {
         name.replace(quote, &format!("{quote}{quote}"))
     )
 }
-/// Safely construct a qualified table preview limited to 1000 rows.
+/// Safely construct a qualified table preview with 500 rows plus one lookahead row.
 #[must_use]
 pub fn preview_sql(driver: DbDriverType, schema: &str, table: &str) -> String {
     format!(
-        "SELECT * FROM {}.{} LIMIT 1000",
+        "SELECT * FROM {}.{} LIMIT 501",
         quote_identifier(driver, schema),
         quote_identifier(driver, table)
+    )
+}
+
+/// Construct a server-side page with one lookahead row and no explicit ordering.
+/// Page size is clamped to 1..=5000, below the retained query row limit.
+#[must_use]
+pub fn table_page_sql(
+    driver: DbDriverType,
+    schema: &str,
+    table: &crate::introspection::TableInfo,
+    offset: usize,
+    page_size: usize,
+) -> String {
+    format!(
+        "SELECT * FROM {}.{} LIMIT {} OFFSET {offset}",
+        quote_identifier(driver, schema),
+        quote_identifier(driver, &table.name),
+        page_size.clamp(1, 5000) + 1
     )
 }

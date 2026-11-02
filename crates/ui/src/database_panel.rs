@@ -288,7 +288,12 @@ impl NozhikUi {
                                 tab.selected_result = 0;
                                 tab.error.clear();
                             }
-                            Err(e) => tab.error = e.to_string(),
+                            Err(e) => {
+                                if let Some(table) = &mut tab.table {
+                                    table.query_failed();
+                                }
+                                tab.error = e.to_string();
+                            }
                         }
                     }
                 }
@@ -452,12 +457,20 @@ impl NozhikUi {
             self.database.active = Some(index);
             return;
         }
-        let sql = nozhik_database::connection::preview_sql(profile.driver, &schema, &table.name);
-        self.new_sql_console(profile.name, schema, &sql, table.name.clone());
+        let title = table.name.clone();
+        let editor = crate::table_editor::TableEditor::new(profile.driver, table);
+        let sql = match editor.page_sql(&schema) {
+            Ok(sql) => sql,
+            Err(error) => {
+                self.database.error = error.to_string();
+                return;
+            }
+        };
+        self.new_sql_console(profile.name, schema, &sql, title);
         if let Some(index) = self.database.active
             && let Some(tab) = self.database.tabs.get_mut(index)
         {
-            tab.table = Some(crate::table_editor::TableEditor::new(profile.driver, table));
+            tab.table = Some(editor);
         }
         self.execute_database_sql(sql);
     }
@@ -618,6 +631,37 @@ impl NozhikUi {
                             token.cancel();
                         }
                     }
+                    crate::table_editor::TableAction::Page { offset, size } => {
+                        if self.database.tabs[index].pending.is_some()
+                            || self.database.tabs[index].connection_invalid
+                        {
+                            return;
+                        }
+                        if let Some(table) = &mut self.database.tabs[index].table
+                            && !table.dirty()
+                        {
+                            table.pending_page = Some((offset, size));
+                            self.reload_database_table(index);
+                            if self.database.tabs[index].pending.is_none()
+                                && let Some(table) = &mut self.database.tabs[index].table
+                            {
+                                table.query_failed();
+                            }
+                        }
+                    }
+                    crate::table_editor::TableAction::Query => {
+                        if self.database.tabs[index].pending.is_some()
+                            || self.database.tabs[index].connection_invalid
+                        {
+                            return;
+                        }
+                        if let Some(table) = &mut self.database.tabs[index].table
+                            && !table.dirty()
+                        {
+                            table.request_query();
+                            self.reload_database_table(index);
+                        }
+                    }
                     crate::table_editor::TableAction::Reload => self.reload_database_table(index),
                     crate::table_editor::TableAction::Submit => self.submit_database_table(index),
                     crate::table_editor::TableAction::Ddl => {
@@ -654,9 +698,18 @@ impl NozhikUi {
         let Some(table) = &tab.table else {
             return;
         };
-        let sql =
-            nozhik_database::connection::preview_sql(table.driver, &tab.schema, &table.info.name);
-        self.queue_database_sql(index, sql);
+        let sql = table.page_sql(&tab.schema);
+        match sql {
+            Ok(sql) => self.queue_database_sql(index, sql),
+            Err(error) => {
+                self.database.tabs[index].error = error.to_string();
+            }
+        }
+        if self.database.tabs[index].pending.is_none()
+            && let Some(table) = &mut self.database.tabs[index].table
+        {
+            table.query_failed();
+        }
     }
     pub(crate) fn submit_database_table(&mut self, index: usize) {
         let Some(tab) = self.database.tabs.get(index) else {
@@ -1229,6 +1282,337 @@ mod table_tests {
         );
         Ok(())
     }
+    fn set_table_clause(
+        shell: &mut NozhikUi,
+        ctx: &egui::Context,
+        label: &str,
+        value: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let output = frame(shell, ctx, vec![]);
+        let label = text(&output, label).ok_or("clause label")?;
+        click(shell, ctx, label.right_center() + vec2(35.0, 0.0));
+        frame(
+            shell,
+            ctx,
+            vec![
+                Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                if value.is_empty() {
+                    Event::Key {
+                        key: egui::Key::Backspace,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }
+                } else {
+                    Event::Text(value.into())
+                },
+                Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame(shell, ctx, vec![]);
+        Ok(())
+    }
+    fn click_table_sort(
+        shell: &mut NozhikUi,
+        ctx: &egui::Context,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let output = frame(shell, ctx, vec![]);
+        let header = text(&output, "PK id\nINTEGER").ok_or("id header")?;
+        click(shell, ctx, header.min + vec2(162.0, 16.0));
+        wait(shell, ctx, |s| s.database.tabs[0].pending.is_none())
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Pointer-driven server selection/sorting flow checks pagination, stale errors and edit gates together"
+    )]
+    fn table_where_order_and_header_sort_apply_to_the_whole_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let profile = ConnectionProfile {
+            name: "Query test".into(),
+            database: dir.path().join("query.sqlite").display().to_string(),
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new()?;
+        let table=runtime.block_on(async {
+            let db=Connection::connect(&profile,None,None).await?;
+            db.query("CREATE TABLE goods(id INTEGER PRIMARY KEY,name TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1201) INSERT INTO goods SELECT x,'item' FROM n",None,&CancellationToken::new()).await?;
+            let info=db.describe_table("main","goods",false).await?; db.close().await;
+            Ok::<_,nozhik_database::Error>(info)
+        })?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        ctx.style_mut(|s| s.animation_time = 0.0);
+        frame(&mut shell, &ctx, vec![]);
+        shell.database.profiles = vec![profile.clone()];
+        shell.start_database_connection(profile.clone(), None, false);
+        wait(&mut shell, &ctx, |s| {
+            s.database.trees.contains_key("Query test")
+        })?;
+        shell.open_database_table(profile, "main".into(), table);
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .order,
+            ""
+        );
+        for (order, first) in [("\"id\" ASC", 1), ("\"id\" DESC", 1201), ("", 1)] {
+            click_table_sort(&mut shell, &ctx)?;
+            let tab = &shell.database.tabs[0];
+            assert_eq!(tab.error, "");
+            let table = tab.table.as_ref().ok_or("table")?;
+            assert_eq!(table.query.order, order);
+            assert_eq!(table.order_input, order);
+            assert_eq!(
+                table.changes.as_ref().ok_or("snapshot")?.baseline.rows[0][0],
+                DbValue::Int(first)
+            );
+        }
+        set_table_clause(&mut shell, &ctx, "WHERE", "id > 700")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        set_table_clause(&mut shell, &ctx, "ORDER BY", "id DESC")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("snapshot")?
+                .baseline
+                .rows[0][0],
+            DbValue::Int(1201)
+        );
+        click_label(&mut shell, &ctx, ">")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "501–501").is_some());
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("snapshot")?
+                .baseline
+                .rows[0][0],
+            DbValue::Int(701)
+        );
+        set_table_clause(&mut shell, &ctx, "WHERE", "id < 5")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "1–4").is_some());
+        replace_cell(&mut shell, &ctx, "item", "edited")?;
+        click_table_sort(&mut shell, &ctx)?;
+        click_label(&mut shell, &ctx, "Apply")?;
+        assert!(shell.database.tabs[0].is_dirty());
+        assert!(shell.database.tabs[0].pending.is_none());
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .order,
+            "id DESC"
+        );
+        click_label(&mut shell, &ctx, "Submit")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .predicate,
+            "id < 5"
+        );
+        set_table_clause(&mut shell, &ctx, "WHERE", "missing_column = 1")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_ne!(shell.database.tabs[0].error, "");
+        let table = shell.database.tabs[0].table.as_ref().ok_or("table")?;
+        assert_eq!(table.query.predicate, "id < 5");
+        assert_eq!(
+            table
+                .changes
+                .as_ref()
+                .ok_or("snapshot")?
+                .baseline
+                .rows
+                .len(),
+            4
+        );
+        set_table_clause(&mut shell, &ctx, "WHERE", "id < 0")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "0–0").is_some());
+        set_table_clause(&mut shell, &ctx, "WHERE", "")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "1–500").is_some());
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .predicate,
+            ""
+        );
+        replace_cell(&mut shell, &ctx, "id DESC", "name ASC, id DESC")?;
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .order,
+            "id DESC"
+        );
+        click_label(&mut shell, &ctx, "Apply")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .order,
+            "name ASC, id DESC"
+        );
+        // The last clear button belongs to ORDER BY; clearing applies immediately.
+        click_label(&mut shell, &ctx, "×")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .query
+                .order,
+            ""
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn table_pagination_fetches_pages_and_preserves_snapshot_on_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let profile = ConnectionProfile {
+            name: "Pages".into(),
+            database: dir.path().join("pages.sqlite").display().to_string(),
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new()?;
+        let table = runtime.block_on(async {
+            let db = Connection::connect(&profile, None, None).await?;
+            db.query("CREATE TABLE goods(id INTEGER PRIMARY KEY, name TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1201) INSERT INTO goods SELECT x,'item' FROM n", None, &CancellationToken::new()).await?;
+            let table = db.describe_table("main", "goods", false).await?;
+            db.close().await;
+            Ok::<_, nozhik_database::Error>(table)
+        })?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        frame(&mut shell, &ctx, vec![]);
+        shell.database.profiles = vec![profile.clone()];
+        shell.start_database_connection(profile.clone(), None, false);
+        wait(&mut shell, &ctx, |s| s.database.trees.contains_key("Pages"))?;
+        shell.open_database_table(profile, "main".into(), table);
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        let output = frame(&mut shell, &ctx, vec![]);
+        let range = text(&output, "1–500").ok_or("first page range")?;
+        assert!(
+            range.top() > 600.0 && range.bottom() < 700.0,
+            "footer must stay below viewport: {range:?}"
+        );
+        assert!(text(&output, "of 501+").is_some());
+        assert_eq!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .and_then(|t| t.changes.as_ref())
+                .ok_or("snapshot")?
+                .baseline
+                .rows
+                .len(),
+            500
+        );
+        click_label(&mut shell, &ctx, ">")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(text(&output, "501–1000").is_some());
+        assert!(text(&output, "of 1001+").is_some());
+        click_label(&mut shell, &ctx, ">")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(text(&output, "1001–1201").is_some());
+        assert!(text(&output, "of 1201").is_some());
+        click_label(&mut shell, &ctx, ">")?;
+        assert!(shell.database.tabs[0].pending.is_none());
+        click_label(&mut shell, &ctx, "|<")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        click_label(&mut shell, &ctx, "500 rows")?;
+        click_label(&mut shell, &ctx, "100 rows")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "1–100").is_some());
+        replace_cell(&mut shell, &ctx, "item", "changed")?;
+        click_label(&mut shell, &ctx, ">")?;
+        assert!(shell.database.tabs[0].pending.is_none());
+        assert!(shell.database.tabs[0].is_dirty());
+        click_label(&mut shell, &ctx, "Revert")?;
+        runtime.block_on(async {
+            let db = Connection::connect(
+                &ConnectionProfile {
+                    name: "fixture".into(),
+                    database: dir.path().join("pages.sqlite").display().to_string(),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .await?;
+            db.query("DROP TABLE goods", None, &CancellationToken::new())
+                .await?;
+            db.close().await;
+            Ok::<_, nozhik_database::Error>(())
+        })?;
+        click_label(&mut shell, &ctx, ">")?;
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert_ne!(shell.database.tabs[0].error, "");
+        assert!(
+            shell.database.tabs[0]
+                .table
+                .as_ref()
+                .ok_or("table")?
+                .pending_page
+                .is_none()
+        );
+        assert!(text(&frame(&mut shell, &ctx, vec![]), "1–100").is_some());
+        Ok(())
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,

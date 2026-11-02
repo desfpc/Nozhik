@@ -255,7 +255,7 @@ impl Tree<'_> {
                             ));
                         }
                         response.context_menu(|ui| {
-                            if ui.button("Open Table (Select top 1000)").clicked() {
+                            if ui.button("Open Table (First 500 rows)").clicked() {
                                 tree.actions.push(Action::Open(
                                     profile.clone(),
                                     schema.name.clone(),

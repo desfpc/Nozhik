@@ -2603,3 +2603,124 @@ fingerprint и payload hashes. В ZIP проверены версия 0.1.15, ц
 выполнен cargo clean (3.1 GiB), удалены временная тестовая среда и 5 untracked
 Finder files. Размер проекта после очистки — 377 MiB; готовый macOS-комплект
 с legal materials сохранён. Windows-кэш не создавался.
+
+
+### GEOMETRY и серверная пагинация таблиц (v0.1.16, 2026-11-02)
+
+Исправлено открытие goods с nullable POINT/GEOMETRY: MySQL decoder читает
+пространственный payload как байты, а не String. DbValue::Geometry сохраняет
+SRID+WKB; POINT показывается читаемо, другие формы — hex. Колонка GEOMETRY
+доступна для чтения. Submit обычных колонок сравнивает исходные geometry bytes
+через CAST AS BINARY, не меняет координаты и не теряет SRID. Geometry включена
+в общий retained byte limit. Новых зависимостей нет.
+
+Таблицы открываются первыми 500 строками. Серверный SELECT запрашивает только
+page_size+1 с OFFSET и ORDER BY PK при наличии ключа; lookahead не попадает
+в редактируемый snapshot. Нижняя панель под viewport показывает диапазон,
+нижнюю оценку количества строк (501+) или окончание, First/Previous/Next и выбор
+100/500/1000/5000 строк. Номера строк учитывают offset. Переходы заблокированы
+при busy/modal/dirty, ошибка запроса сохраняет прежнюю страницу. Reload и Submit
+сохраняют текущую страницу. Полный COUNT не выполняется; внешний concurrent DML
+может сдвинуть OFFSET, без PK порядок зависит от сервера.
+
+Добавлены SQLite regression на 1201 строку и quoting идентификаторов, geometry
+SRID/WKB/literal/predicate regression для обоих byte orders, pointer-driven UI
+regression первой/средней/последней страницы, положения footer, смены размера,
+dirty gate и ошибки загрузки с сохранением snapshot. Версия workspace/Cargo.lock,
+UI и bundle — 0.1.16, следующая — 0.1.17.
+
+Верификация v0.1.16: полный native workspace/all-features test с system access
+для существующих localhost/process mocks и двумя test threads — 245 passed,
+0 failed, 7 optional system/live tests ignored. Первый sandbox-прогон блокировал
+TCP mocks; финальный полный прогон с разрешённым system access прошёл.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt,
+workspace release build и git diff --check прошли. macOS ARM64 executable и
+подписанный app archive обновлены штатным update-binaries.py; --check подтвердил
+source fingerprint и SHA-256 payload. В ZIP подтверждены версия 0.1.16,
+целостность, совпадение четырёх legal sidecars и целостность sources archive.
+Нативное GUI, live MySQL/PostgreSQL и пользовательская база не проверялись;
+UI проверен headless pointer regression. Локальный MySQL/Docker service недоступен.
+Windows build/Clippy, commit и push не выполнялись; Windows-кэш не создавался.
+
+После проверки готовых бинарников выполнен cargo clean (4.5 GiB), удалены пять
+untracked Finder files и временные логи агента. Итоговый размер проекта — 378 MiB;
+исходники, .git, настройки и актуальный macOS-комплект с legal materials сохранены.
+
+
+### Чтение временных типов MySQL (v0.1.17, 2026-11-02)
+
+Исправлена следующая ошибка открытия goods: NaiveDateTime в SQLx не совместим
+с native TIMESTAMP. MySQL DATE/TIME/DATETIME/TIMESTAMP теперь читаются из
+COM_QUERY text results как точное серверное представление в DbValue::DateTime.
+Сохраняются clock values сессии без добавления UTC/offset, микросекунды,
+legacy zero dates и отрицательные/многосуточные TIME. SQL NULL остаётся Null.
+PostgreSQL/SQLite и страницы по 500 строк сохраняют прежнюю логику.
+
+Добавлен bounded localhost MySQL wire fixture: настоящий SQLx получает
+TIMESTAMP/DATETIME/DATE/TIME native field metadata, а Connection::query проходит
+полный production decode. Проверяются обычные и дробные значения, NULL,
+нулевые даты и TIME -838:59:59.000001. Новых зависимостей нет.
+Версия workspace/Cargo.lock/UI/bundle — 0.1.17; следующая — 0.1.18.
+
+Верификация v0.1.17: новый wire regression сначала запущен с прежним decoder
+и воспроизвёл точную ошибку NaiveDateTime/DATETIME vs TIMESTAMP. После восстановления
+исправления полный native workspace/all-features test с system access для
+localhost/process mocks и двумя test threads прошёл: 246 passed, 0 failed,
+7 existing optional system/live tests ignored. Native Clippy workspace/all-targets/
+all-features с -D warnings, rustfmt и workspace release build прошли.
+Все 14 workspace packages в Cargo.lock используют 0.1.17. Нативное GUI,
+реальные MySQL/PostgreSQL и пользовательская БД не использовались; wire fixture
+изолирован на localhost и не требует установленного сервера или credentials.
+Windows build/Clippy, commit и push не выполнялись.
+
+macOS ARM64 executable и подписанный app archive обновлены update-binaries.py;
+--check подтвердил source fingerprint и payload hashes. ZIP проверен на
+целостность, bundle version 0.1.17 и совпадение четырёх legal sidecars;
+THIRD_PARTY_SOURCES.zip также целостен. После проверки бинарников выполнен
+cargo clean (5.0 GiB), удалены пять untracked Finder files и временные файлы
+агента. Размер проекта — 378 MiB. Готовый macOS-комплект сохранён; Windows-кэш
+не создавался. Финальный git diff --check прошёл.
+
+
+### WHERE, ORDER BY и стрелки сортировки (v0.1.18, 2026-11-02)
+
+Над редактируемой таблицей добавлены WHERE / ORDER BY с векторными иконками,
+крестиками очистки и Apply; Enter применяет оба поля. Сервер получает фильтр и
+порядок до LIMIT/OFFSET, применение сбрасывает страницу на первую. Выборка
+сохраняется при смене размера/страницы, Reload и Submit. Заголовки получили
+векторный цикл нейтральных up/down triangles → ASC/up → DESC/down → neutral;
+стрелка меняет ORDER BY одной колонки. По умолчанию нет скрытой PK-сортировки.
+Простые ручные ORDER BY синхронизируют иконки, сложные выражения остаются neutral.
+
+TableQuery проверяет границы SQL fragments, quotes/скобки, запрещает statements/
+comments и внешние clauses; quoted punctuation допускается. Типовые и прочие
+синтаксические ошибки показываются от сервера. Черновики полей, применённые и
+pending условия разделены: ошибка/отмена сохраняет прежний snapshot и условия.
+Dirty/busy/modal/invalid gates защищают staged edits. Новых зависимостей нет.
+
+Добавлены backend execution regression на 1201 строку (WHERE до paging,
+глобальный DESC, multi-column ORDER BY, пустая выборка, отсутствие default ORDER,
+quoting и отказ script/clause escapes) и pointer-driven UI regression цикла
+стрелок, Enter/Apply, очистки, paging, dirty gate, Submit и ошибки SQL.
+Версия workspace/Cargo.lock/UI/bundle — 0.1.18; следующая — 0.1.19.
+
+Верификация v0.1.18: финальный полный native workspace/all-features test с
+system access для localhost/process mocks и двумя test threads — 248 passed,
+0 failed, 7 existing optional system/live tests ignored. Native Clippy
+workspace/all-targets/all-features с -D warnings, rustfmt, workspace release
+build и git diff --check прошли. Все 14 workspace packages — 0.1.18.
+UI проверен headless pointer-driven: нейтральный/ASC/DESC цикл, глобальный
+результат (DESC начинается с 1201, а не 500), WHERE, Enter, Apply, очистка ORDER,
+переход на последнюю страницу выборки, dirty gate, Submit, пустая выборка и
+server SQL error со старым snapshot. Backend дополнительно проверяет цитирование,
+quoted punctuation и запрет выхода из выражений. Реальные MySQL/PostgreSQL,
+пользовательские БД и нативное GUI не запускались. Windows build/Clippy,
+commit и push не выполнялись; Windows-кэш не создавался.
+
+macOS ARM64 executable и подписанный Nozhik.app.zip обновлены штатным
+update-binaries.py; --check подтвердил source fingerprint и SHA-256 payload.
+Проверены версия bundle 0.1.18, целостность обоих ZIP и совпадение четырёх legal
+sidecars с Resources/Legal. После проверки бинарников выполнен cargo clean
+(4.5 GiB), удалены четыре untracked Finder files и временные логи агента.
+Размер проекта после очистки — 378 MiB. Исходники, .git, настройки, предыдущие
+незакоммиченные доработки и готовый macOS-комплект сохранены.

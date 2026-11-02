@@ -1388,3 +1388,68 @@ catalog (в SQLite foreign_key_list), а не из названий колоно
 native type/default expression и оформляет MySQL auto_increment как (auto increment).
 MySQL key/FK/index annotations компактны, составные indexes сохраняют порядок
 колонок и один UNIQUE suffix. Ленивое получение деталей и локальные ошибки сохранены.
+
+
+## Пространственные значения и страницы таблиц (v0.1.16)
+
+MySQL decoder выделяет GEOMETRY до общего строкового fallback и использует
+unchecked Vec<u8> decode только для этого native type: SQLx не включает GEOMETRY
+в compatibility list бинарных типов. DbValue::Geometry хранит внутренний payload
+SRID (4 little-endian bytes) + WKB без потерь; Display распознаёт POINT обоих
+порядков байт, другие формы имеют hex preview. Geometry учитывается в byte limit.
+Table grid запрещает ручную правку GEOMETRY, включая NULL; остальные ячейки
+редактируются штатно. DML predicates сравнивают CAST(column AS BINARY) с исходным payload (включая SRID), geometry literal
+использует ST_GeomFromWKB, поэтому Submit других колонок сохраняет координаты.
+
+connection::table_page_sql цитирует schema/table/PK, добавляет ORDER BY PK,
+LIMIT page_size+1 и OFFSET. Размер ограничен 1..=5000; preview_sql использует 501.
+TableEditor по умолчанию хранит offset=0/page_size=500. Lookahead удаляется до
+создания TableChanges, has_more управляет Next; нижняя оценка не требует COUNT.
+Footer закреплён под viewport, размеры 100/500/1000/5000, First/Previous/Next.
+Номера строк учитывают offset. Pending page применяется только при успешном
+Reply::Query; ошибка/отмена сохраняет прежние диапазон и snapshot. Busy/dirty/modal
+блокируют переходы; Reload и успешный Apply перечитывают текущую страницу.
+Без PK серверный порядок не гарантирован; OFFSET не является snapshot isolation
+между страницами и может сдвигаться при внешних вставках/удалениях.
+
+
+## Временные значения MySQL (v0.1.17)
+
+mysql_value отдельно обрабатывает DATE/TIME/DATETIME/TIMESTAMP через unchecked
+String decode. Это ограничено native temporal types и опирается на существующий
+инвариант query: все строки MySQL приходят через raw_sql / COM_QUERY text protocol.
+SQLx NaiveDateTime type compatibility допускает только DATETIME, поэтому общий
+fallback приводил к ошибке на TIMESTAMP. Текстовое чтение сохраняет значение
+часов текущей серверной сессии без присвоения часового пояса, дробную часть,
+legacy zero dates и отрицательные/многосуточные TIME; общий null gate сохраняет
+SQL NULL. DbValue::DateTime и генерация DML не меняются, PostgreSQL/SQLite
+сохраняют прежнее декодирование. Binary-protocol query results здесь не используются.
+Regression fixture поднимает временный localhost MySQL wire server, выдаёт native
+field codes и проверяет полный Connection::query, включая NULL и edge values;
+реальный сервер и credentials не нужны, timeout — 10s.
+
+
+## WHERE / ORDER BY и сортировка таблиц (v0.1.18)
+
+TableQuery (database::table_query) содержит predicate/order без ключевых слов.
+page_sql строит один bounded SELECT с WHERE (predicate), ORDER BY order и
+LIMIT page_size+1 OFFSET offset; пустой order не добавляет скрытую PK-сортировку.
+Legacy connection::table_page_sql также не добавляет ORDER BY. Валидатор допускает
+кавычки с удвоением, сбалансированные скобки и вложенные выражения/подзапросы,
+отклоняет separators/comments вне кавычек и внешние clause escapes. Размер каждого
+поля ограничен 16 KiB. Неоднозначные backslash escapes отклоняются без догадок
+о текущем session SQL mode. Синтаксическую/типовую корректность выражений проверяет
+сервер; это не полный SQL parser. Идентификаторы таблицы и стрелочной сортировки
+цитируются по диалекту.
+
+TableEditor разделяет where_input/order_input (черновики), query (условия
+загруженного snapshot), pending_query/pending_page (текущий запрос). Enter/Apply,
+очистка поля и header click создают TableAction::Query с offset=0. Reply::Query
+коммитит условия и диапазон только при успехе; query_failed сбрасывает pending,
+сохраняя snapshot, применённую сортировку и текст полей для исправления. Page,
+Reload и Apply follow-up используют применённые условия, а не несохранённый draft.
+Dirty/busy/modal/invalid gates блокируют изменение выборки. Поля имеют vector
+filter/order icons; header arrow рисуется треугольниками без зависимости от font.
+Цикл None→ASC→DESC→None меняет серверный ORDER BY одной колонки. Ручные простые
+одноколоночные ORDER BY распознаются в стрелках, сложные выражения — нейтральные.
+DataGrid результатов SQL-консоли сохраняет прежнюю локальную сортировку.

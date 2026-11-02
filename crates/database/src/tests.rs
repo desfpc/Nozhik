@@ -43,7 +43,7 @@ fn profiles_roundtrip_validation_and_malformed_preservation()
     );
     assert_eq!(
         connection::preview_sql(DbDriverType::Sqlite, "main", "odd\"; DROP TABLE t;--"),
-        "SELECT * FROM \"main\".\"odd\"\"; DROP TABLE t;--\" LIMIT 1000"
+        "SELECT * FROM \"main\".\"odd\"\"; DROP TABLE t;--\" LIMIT 501"
     );
     Ok(())
 }
@@ -684,5 +684,202 @@ async fn editing_profile_replaces_atomically_and_disconnects_old_pool()
     ));
     assert_eq!(std::fs::read(&path)?, persisted);
     worker.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn table_pages_are_bounded_ordered_and_quote_identifiers()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let db = memory().await?;
+    let cancel = CancellationToken::new();
+    db.query("CREATE TABLE goods(id INTEGER PRIMARY KEY, name TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1201) INSERT INTO goods SELECT x, 'item' FROM n ORDER BY x DESC", None, &cancel).await?;
+    let info = db.describe_table("main", "goods", false).await?;
+    for (offset, count) in [(0, 501), (500, 501), (1000, 201), (1500, 0)] {
+        let sql = connection::table_page_sql(DbDriverType::Sqlite, "main", &info, offset, 500);
+        let results = db.query(&sql, None, &cancel).await?;
+        let result = results.first().ok_or("missing page")?;
+        assert_eq!(result.rows.len(), count);
+        assert!(!result.truncated);
+        if count > 0 {
+            assert_eq!(result.rows[0][0].to_string(), (offset + 1).to_string());
+        }
+    }
+    let mut odd = info;
+    odd.name = "goods`; DROP TABLE goods;--".into();
+    let sql = connection::table_page_sql(DbDriverType::Mysql, "db`name", &odd, 500, 500);
+    assert!(sql.contains("`db``name`.`goods``; DROP TABLE goods;--` LIMIT 501 OFFSET 500"));
+    Ok(())
+}
+
+#[test]
+fn geometry_preserves_srid_wkb_and_safe_edit_predicates()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for little in [true, false] {
+        let mut bytes = 4326_u32.to_le_bytes().to_vec();
+        bytes.push(u8::from(little));
+        bytes.extend(if little {
+            1_u32.to_le_bytes()
+        } else {
+            1_u32.to_be_bytes()
+        });
+        for coordinate in [33.0366_f64, 34.6874] {
+            bytes.extend(if little {
+                coordinate.to_le_bytes()
+            } else {
+                coordinate.to_be_bytes()
+            });
+        }
+        let value = DbValue::Geometry(bytes.clone());
+        assert_eq!(value.to_string(), "POINT (33.0366 34.6874)");
+        let literal = changes::literal(DbDriverType::Mysql, &value)?;
+        assert!(literal.starts_with("ST_GeomFromWKB(X'"));
+        assert!(literal.ends_with("', 4326)"));
+        let mut edits = changes::TableChanges::new(
+            DbDriverType::Mysql,
+            "db".into(),
+            "goods".into(),
+            QueryResult {
+                columns: vec![
+                    ColumnInfo {
+                        name: "coordinates".into(),
+                        data_type: "GEOMETRY".into(),
+                    },
+                    ColumnInfo {
+                        name: "name".into(),
+                        data_type: "VARCHAR".into(),
+                    },
+                ],
+                rows: vec![vec![value.clone(), DbValue::Text("old".into())]],
+                ..QueryResult::default()
+            },
+            vec![],
+        );
+        edits.rows[0].values[1] = Some(DbValue::Text("new".into()));
+        let statements = edits.statements()?;
+        assert!(statements[0].contains("CAST(`coordinates` AS BINARY) = X'"));
+        assert!(statements[0].contains("e6100000"));
+        assert_eq!(edits.rows[0].values[0], Some(value));
+    }
+    assert!(changes::literal(DbDriverType::Mysql, &DbValue::Geometry(vec![0])).is_err());
+    assert!(
+        DbValue::Geometry(vec![0])
+            .to_string()
+            .starts_with("GEOMETRY 0x")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One SQLite fixture verifies selection, ordering, pagination and rejected script escapes without reconnecting"
+)]
+async fn table_conditions_filter_and_sort_before_pagination()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::table_query::TableQuery;
+    let db = memory().await?;
+    let cancel = CancellationToken::new();
+    db.query("CREATE TABLE goods(id INTEGER PRIMARY KEY, name TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1201) INSERT INTO goods SELECT x, CASE WHEN x%2=0 THEN 'even' ELSE 'odd' END FROM n", None, &cancel).await?;
+    let info = db.describe_table("main", "goods", false).await?;
+    let query = TableQuery {
+        predicate: "id > 700 AND (name = 'even' OR name = 'odd')".into(),
+        order: "id DESC".into(),
+    };
+    for (offset, count, first) in [(0, 501, 1201), (500, 1, 701)] {
+        let result = db
+            .query(
+                &query.page_sql(DbDriverType::Sqlite, "main", &info, offset, 500)?,
+                None,
+                &cancel,
+            )
+            .await?;
+        assert_eq!(result[0].rows.len(), count);
+        assert_eq!(result[0].rows[0][0], DbValue::Int(first));
+    }
+    let query = TableQuery {
+        predicate: "id < 5".into(),
+        order: "name ASC, id DESC".into(),
+    };
+    let result = db
+        .query(
+            &query.page_sql(DbDriverType::Sqlite, "main", &info, 0, 500)?,
+            None,
+            &cancel,
+        )
+        .await?;
+    assert_eq!(
+        result[0]
+            .rows
+            .iter()
+            .map(|r| r[0].to_string())
+            .collect::<Vec<_>>(),
+        ["4", "2", "3", "1"]
+    );
+    let empty = TableQuery {
+        predicate: "id < 0".into(),
+        ..TableQuery::default()
+    };
+    assert_eq!(
+        db.query(
+            &empty.page_sql(DbDriverType::Sqlite, "main", &info, 0, 500)?,
+            None,
+            &cancel
+        )
+        .await?[0]
+            .rows
+            .len(),
+        0
+    );
+    let default_sql =
+        TableQuery::default().page_sql(DbDriverType::Sqlite, "main", &info, 0, 500)?;
+    assert!(!default_sql.contains("ORDER BY") && !default_sql.contains("WHERE"));
+    for source in [
+        "1; DELETE FROM goods",
+        "1 -- ignore LIMIT",
+        "1 /* comment */",
+        "1) UNION SELECT 1,2",
+        "1 ORDER BY id",
+        "id LIMIT 1",
+        "1 INTO OUTFILE 'file'",
+    ] {
+        for query in [
+            TableQuery {
+                predicate: source.into(),
+                order: String::new(),
+            },
+            TableQuery {
+                predicate: String::new(),
+                order: source.into(),
+            },
+        ] {
+            assert!(
+                query
+                    .page_sql(DbDriverType::Mysql, "db", &info, 0, 500)
+                    .is_err(),
+                "{source}"
+            );
+        }
+    }
+    let quoted = TableQuery {
+        predicate: "`odd``name` = 'it''s; # -- /* fine */'".into(),
+        order: "`odd``name` DESC".into(),
+    };
+    assert!(
+        quoted
+            .page_sql(DbDriverType::Mysql, "db", &info, 0, 500)?
+            .contains(
+                "WHERE (`odd``name` = 'it''s; # -- /* fine */') ORDER BY `odd``name` DESC LIMIT 501"
+            )
+    );
+    assert_eq!(
+        quoted.column_descending(DbDriverType::Mysql, "odd`name"),
+        Some(true)
+    );
+    assert_eq!(
+        db.query("SELECT COUNT(*) FROM goods", None, &cancel)
+            .await?[0]
+            .rows[0][0],
+        DbValue::Int(1201)
+    );
     Ok(())
 }

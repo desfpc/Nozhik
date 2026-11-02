@@ -73,6 +73,16 @@ fn mysql_value(row: &sqlx::mysql::MySqlRow, i: usize) -> Result<DbValue> {
             let value: u64 = row.try_get(i)?;
             i64::try_from(value).map_or_else(|_| DbValue::Text(value.to_string()), DbValue::Int)
         }
+        // All MySQL query rows come from raw_sql (COM_QUERY text protocol).
+        // Preserve the session's clock, fractional seconds, zero dates and TIME
+        // intervals verbatim. NaiveDateTime's type check rejects TIMESTAMP;
+        // interpreting it as UTC would invent a timezone the session may not use.
+        "DATE" | "TIME" | "DATETIME" | "TIMESTAMP" => {
+            DbValue::DateTime(row.try_get_unchecked::<String, _>(i)?)
+        }
+        // SQLx byte decoding is valid for the wire payload but its generic
+        // Vec<u8> compatibility list excludes GEOMETRY. Never decode it as UTF-8.
+        "GEOMETRY" => DbValue::Geometry(row.try_get_unchecked::<Vec<u8>, _>(i)?),
         "DECIMAL" | "NEWDECIMAL" => {
             DbValue::Text(row.try_get::<rust_decimal::Decimal, _>(i)?.to_string())
         }
@@ -177,7 +187,7 @@ macro_rules! execute_pool {
                                 DbValue::Text(s) | DbValue::Json(s) | DbValue::DateTime(s) => {
                                     s.len()
                                 }
-                                DbValue::Bytes(b) => b.len(),
+                                DbValue::Bytes(b) | DbValue::Geometry(b) => b.len(),
                                 _ => 8,
                             })
                             .sum::<usize>();
@@ -765,3 +775,7 @@ pub(crate) fn replace_profile(
     profiles[index] = profile;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mysql_tests.rs"]
+mod mysql_tests;

@@ -1,6 +1,15 @@
 //! Owned Git snapshots; no libgit2 lifetimes or handles cross the worker boundary.
 use std::path::PathBuf;
 
+/// Immutable staged input for commit-message generation.
+#[derive(Debug, Clone)]
+pub struct CommitContext {
+    /// Identity of HEAD/ref and every index entry, including changes beyond the patch limit.
+    pub fingerprint: u64,
+    /// HEAD-to-index unified patch, bounded to 24 KiB, with an explicit truncation marker.
+    pub patch: String,
+}
+
 /// Display category for a Git delta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeStatus {

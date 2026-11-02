@@ -1,11 +1,14 @@
 //! Git engine with one serial worker. All repository and network I/O stays there.
 pub mod clone;
+mod commit_context;
+pub mod connection;
 mod git_worker;
 mod history_actions;
 mod history_selection;
 mod merge;
 pub mod model;
 pub mod project_paths;
+mod transport_error;
 
 use model::{CommitInfo, DiffTarget, FileChange, FileDiff, GitRepoStatus};
 use std::{
@@ -34,6 +37,28 @@ pub enum Task {
     Open(PathBuf),
     /// Recompute status and local branches.
     Refresh,
+    /// Read a bounded HEAD-to-index patch and identity for commit-message generation.
+    CommitContext,
+    /// Read origin, author identity and non-secret connection preferences.
+    GitSettings,
+    /// Atomically update repository-local Git settings if the snapshot is still current.
+    SaveGitSettings {
+        /// Last settings read by this client; protects against external edits.
+        expected: connection::GitSettings,
+        /// Desired non-secret settings.
+        settings: connection::GitSettings,
+        /// Session-only credentials matching the desired authentication profile.
+        authentication: clone::Authentication,
+    },
+    /// Install clone credentials for this repository session without persisting secrets.
+    Authenticate(clone::Credentials),
+    /// Test the provided fetch URL and credentials without changing refs or settings.
+    TestGitConnection {
+        /// Candidate non-secret settings.
+        settings: connection::GitSettings,
+        /// Candidate session credentials.
+        authentication: clone::Authentication,
+    },
     /// Stage entire files or reset them to HEAD in the index (worktree is retained).
     Stage {
         /// Selected repository-relative files.
@@ -101,10 +126,16 @@ pub enum Task {
     IgnoreExtension(String),
     /// Append an escaped anchored file pattern to the root .gitignore.
     Ignore(PathBuf),
+    /// Append an escaped, root-anchored directory pattern with a trailing slash.
+    IgnoreFolder(PathBuf),
 }
 /// Successful completion.
 #[derive(Debug)]
 pub enum Outcome {
+    /// Current non-secret repository-local connection settings.
+    GitSettings(connection::GitSettings),
+    /// Staged changes only; no worktree contents or index writes.
+    CommitContext(model::CommitContext),
     /// None means the project is outside a non-bare repository.
     Status(Option<GitRepoStatus>),
     /// Patch data for the requested target.

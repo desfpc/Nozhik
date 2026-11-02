@@ -55,6 +55,7 @@ impl NozhikUi {
             return;
         }
         self.editor.ai.runtime = Some(runtime.clone());
+        self.vcs.commit_ai.runtime = Some(runtime.clone());
         self.settings_dialog.ai.runtime = Some(runtime.clone());
         let mut events = self.bus.subscribe();
         let mut updates = self
@@ -730,6 +731,8 @@ impl NozhikUi {
         }
         self.integration.stopped = true;
         self.editor.ai.cancel();
+        self.vcs.commit_ai.cancel();
+        self.vcs.clear_git_secrets();
         self.settings_dialog.ai.stop();
         if let Some(task) = self.wake_task.take() {
             task.abort();

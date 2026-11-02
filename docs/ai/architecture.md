@@ -1177,7 +1177,7 @@ Clone runs in a temporary sibling, checks cancellation, reserves the final direc
 exclusively and moves the completed checkout there. Existing destinations are refused;
 transport errors/cancellation clean temporary data. A filesystem failure during final
 publication may leave a partial destination; its user-visible error is retained.
-No submodule recursion or persistent credential binding for later fetch/push is added.
+No submodule recursion is added. Shared project authentication now retains clone credentials for later fetch/push during that project session (v0.1.12).
 
 Dependency boundaries: ui adds reqwest for GitHub; vcs adds zeroize for transient
 credentials and tempfile for clone staging. Neither adds shell Git dependence.
@@ -1258,3 +1258,92 @@ Project tabs используют строку 36 logical px с симметри
 (horizontal_top), чтобы вертикальное центрирование не выталкивало вкладки
 за viewport; скрытая прокрутка и drag/reorder не меняются.
 Current File удалён из top toolbar, остальные кнопки сохранены.
+
+## Git Changes: игнорирование директорий (v0.1.10)
+
+`Task::IgnoreFolder(PathBuf)` принимает repository-relative директорию и на Git
+worker добавляет в корневой `.gitignore` экранированный anchored pattern с `/`
+на конце. Валидация общая с Ignore: запрещены absolute/traversal/.git и переводы
+строк; `.gitignore` должен быть обычным файлом. Index не меняется.
+UI использует стандартный egui submenu: клик по названию применяет ближайшую
+папку файла, стрелка выбирает одного из предков от ближайшего к верхнему,
+исключая корень. При multiselect папка относится к файлу под контекстным кликом.
+
+## Генерация сообщения коммита (v0.1.11)
+
+`Task::CommitContext` / `Outcome::CommitContext(model::CommitContext)` читают
+на serial Git worker HEAD→index diff (24 KiB + truncation marker, binary metadata).
+Index принудительно перечитывается с диска; snapshot fingerprint учитывает HEAD/ref
+и path/OID/mode/flags всех entries, в том числе за пределами prompt limit.
+Конфликты, Git operation и пустой staged diff отклоняются. Чтение не меняет index
+и не сохраняет worktree; Repository остаётся на Git worker.
+
+`Ollama::commit_message` использует выбранную ai_model и `/api/generate` с JSON
+schema summary/description, stream=false, num_predict=512 и deadline 120s.
+Это отдельный запрос от FIM: stop tokens автокомплита к нему не применяются.
+Ответ ограничен 64 KiB, проверяется завершённость и пригодность полей для формы.
+Prompt просит английское imperative название и описание по diff, трактует diff
+как данные и явно отмечает возможное усечение. Автозагрузки модели нет.
+
+`vcs_panel::commit_ai` владеет abort-on-drop HTTP task/oneshot на app runtime;
+worker и HTTP completion будят egui без polling repaint. Кнопка над формой активна
+только при ai_enabled/model/runtime, staged files и свободном mutation gate.
+Текст формы сохраняется в snapshot: ручные правки отменяют ответ. Любая Git mutation,
+смена проекта/AI settings, Cancel и shutdown прерывают запрос. После HTTP-ответа
+worker повторно читает CommitContext; fingerprint должен совпасть перед заполнением.
+Поздние worker replies дополнительно проверяются generation/request ID. Неактивные
+проекты дренируют эти состояния через background tick. Генерация не создаёт коммит.
+
+## Git project settings and shared clone authentication (v0.1.12)
+
+`vcs::connection` owns non-secret GitSettings/AuthProfile/AuthMethod, validation,
+atomic local-config updates and URL/profile-bound session Authentication. The
+existing clone Authentication and credential resolver are shared by all transport
+callbacks. Existing repositories use `repo.config()` (including repository-local
+credential helpers), clones use the system config before checkout exists.
+Network callbacks restrict credentials to the exact requested fetch/push URL and
+bound attempts; standard certificate/SSH host-key verification remains enabled.
+Transport errors are sanitized and point to Settings → Git. Local commit identity
+errors separately point to author name/email settings.
+
+Tasks GitSettings, SaveGitSettings { expected, settings, authentication },
+Authenticate and TestGitConnection run only on the serial Git worker. Settings
+responses carry no secrets. Save compares the latest effective settings under the
+standard common-dir config.lock and atomically replaces only the local config,
+retaining unrelated keys/permissions. Stale/invalid/locked/symlink config errors
+leave the original untouched. Author/helper overrides are written only when edited;
+blank overrides inherit system settings. origin URL/pushurl and default fetch refspec
+can be added/changed; refs/index/worktree remain intact and saving performs no network.
+Test reads the candidate remote with no refs/config writes; changed credential helpers
+must be saved first. Push permissions are checked by push, not by the fetch test.
+
+Only nozhik.auth.method/username/keypath are persisted, with ordinary origin/user/
+credential.helper keys in Git config. Tokens/passwords/passphrases stay in zeroizing
+session memory. Blank secret fields retain a previous credential only when both
+endpoints and AuthProfile still match. External endpoint/profile changes stop reuse.
+No new OS keychain writes or plaintext secret persistence are added.
+
+UI Settings → Git delegates to VcsPanel and uses the same git_auth::AuthFields as
+Clone Repository. Explicit Save/Reload/Test preserve existing general settings auto-save.
+Draft secrets are cleared on dialog close and successful save; session secrets live
+until project worker shutdown. Successful clone stores non-secret preferences and
+returns owned Authentication alongside the path. The workspace prepared-open message
+carries it to the target project; VcsPanel queues Authenticate after Open, with no
+cross-project singleton or secret logging. Cancel/failed open discards the credential.
+
+## Safe Git transport diagnostics (v0.1.13)
+
+`vcs::transport_error` maps libgit2 error code/class and allowlisted HTTP status
+codes to fixed actionable messages shared by Clone/Test/Fetch/Push. It never echoes
+raw remote errors, response bodies or URLs, preserving secret redaction even if a
+server reflects authentication data. GitHub 403 points to Resource owner/repository
+selection/Contents permissions and organization approval; 404 notes private resource
+hiding, 401/auth errors distinguish rejected credentials, and TLS/SSH/network/proxy
+errors have separate explanations. Missing explicit session tokens/passwords fail
+before connecting; token edge whitespace is trimmed by the shared credential resolver.
+Token USERNAME negotiation consistently uses x-access-token.
+
+The connection test now retains RemoteConnection until advertised refs are read;
+RAII performs disconnect. The ignored live diagnostic accepts URL and token only
+on stdin, stores token in Zeroizing and prints fixed safe errors, never raw transport
+messages. No credentials, user-specific URLs or response bodies are fixtures in code.

@@ -94,10 +94,17 @@ impl SettingsDialog {
         ui.selectable_value(&mut self.category, 1, "File Types & Code Styles");
         ui.selectable_value(&mut self.category, 2, "AI Assistant (Ollama)");
         ui.selectable_value(&mut self.category, 3, "Languages");
+        ui.selectable_value(&mut self.category, 4, "Git");
         ui.button("Plugins…").clicked()
     }
 
-    fn options(&mut self, ui: &mut egui::Ui, config: &mut Config, size: egui::Vec2) {
+    fn options(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &mut Config,
+        size: egui::Vec2,
+        vcs: &mut crate::vcs_panel::VcsPanel,
+    ) {
         egui::ScrollArea::both()
             .id_salt(("settings_options", self.category))
             .auto_shrink([false, false])
@@ -113,6 +120,8 @@ impl SettingsDialog {
                         self.file_types(ui, config);
                     } else if self.category == 2 {
                         self.ai.show(ui, config);
+                    } else if self.category == 4 {
+                        vcs.git_settings_ui(ui);
                     } else {
                         Self::languages(ui, config);
                     }
@@ -120,13 +129,19 @@ impl SettingsDialog {
             });
     }
 
-    fn content(&mut self, ui: &mut egui::Ui, config: &mut Config, size: egui::Vec2) -> bool {
+    fn content(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &mut Config,
+        size: egui::Vec2,
+        vcs: &mut crate::vcs_panel::VcsPanel,
+    ) -> bool {
         let compact = size.x < 560.0;
         let height = (size.y - if compact { 126.0 } else { 86.0 }).max(0.0);
         if compact {
             let plugins = ui.horizontal_wrapped(|ui| self.navigation(ui)).inner;
             ui.separator();
-            self.options(ui, config, egui::vec2(size.x, height));
+            self.options(ui, config, egui::vec2(size.x, height), vcs);
             plugins
         } else {
             ui.horizontal_top(|ui| {
@@ -163,6 +178,7 @@ impl SettingsDialog {
                         (2.0_f32.mul_add(-gap, size.x - sidebar_width) - 1.0).max(0.0),
                         height,
                     ),
+                    vcs,
                 );
                 plugins
             })
@@ -407,6 +423,7 @@ impl crate::NozhikUi {
     }
     pub(crate) fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
+            self.vcs.clear_git_secrets();
             return;
         }
         let mut config = self.config.clone();
@@ -435,7 +452,10 @@ impl crate::NozhikUi {
                     ui.small(project.root_path.display().to_string());
                 }
                 ui.separator();
-                if self.settings_dialog.content(ui, &mut config, size) {
+                if self
+                    .settings_dialog
+                    .content(ui, &mut config, size, &mut self.vcs)
+                {
                     self.plugins_open = true;
                     self.settings_open = false;
                 }
@@ -465,6 +485,9 @@ impl crate::NozhikUi {
         }
         if modal.should_close() {
             self.settings_open = false;
+        }
+        if !self.settings_open {
+            self.vcs.clear_git_secrets();
         }
     }
 }
@@ -557,6 +580,69 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+    #[test]
+    fn project_settings_git_category_loads_repository_controls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        git2::Repository::init(dir.path())?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings =
+            ConfigManager::from_path(dir.path().join(".nozhik/settings.toml"), bus.clone())?;
+        let mut shell = crate::NozhikUi::new(
+            bus,
+            settings,
+            Config {
+                ai_enabled: false,
+                enabled_languages: std::collections::BTreeSet::new(),
+                ..Default::default()
+            },
+        );
+        shell.vcs.set_project(dir.path());
+        shell.settings_open = true;
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let _sizing = language_settings_frame(&mut shell, &ctx, vec![]);
+        let output = language_settings_frame(&mut shell, &ctx, vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Git" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .ok_or("Git category missing")?;
+        for pressed in [true, false] {
+            language_settings_frame(
+                &mut shell,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(shell.settings_dialog.category, 4);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            shell.vcs.tick_background(&ctx);
+            let output = language_settings_frame(&mut shell, &ctx, vec![]);
+            if output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Origin fetch URL")) { break; }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Git settings did not load"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
     #[test]
     fn language_checkboxes_persist_and_stop_restart_services_with_open_buffers()
     -> Result<(), Box<dyn std::error::Error>> {

@@ -5,7 +5,9 @@ use nozhik_vcs::{
     Outcome, Task, Vcs,
     model::{ChangeStatus, CommitInfo, DiffTarget, FileChange, GitRepoStatus, HistorySelection},
 };
+mod commit_ai;
 mod controls;
+mod git_settings;
 mod history_actions;
 mod history_files;
 
@@ -25,6 +27,8 @@ enum Mode {
 pub struct VcsPanel {
     pub open_branches: bool,
     worker: Vcs,
+    git_settings: git_settings::SettingsState,
+    pub(crate) clone_auth: Option<nozhik_vcs::clone::Credentials>,
     project: Option<PathBuf>,
     generation: u64,
     sequence: u64,
@@ -44,6 +48,7 @@ pub struct VcsPanel {
     filter_mode: controls::FilterMode,
     summary: String,
     body: String,
+    pub(crate) commit_ai: commit_ai::CommitAi,
     history: Vec<CommitInfo>,
     history_limit: usize,
     selected: Option<PathBuf>,
@@ -72,6 +77,8 @@ impl Default for VcsPanel {
         Self {
             open_branches: false,
             worker: Vcs::start(),
+            git_settings: git_settings::SettingsState::default(),
+            clone_auth: None,
             project: None,
             generation: 0,
             sequence: 0,
@@ -91,6 +98,7 @@ impl Default for VcsPanel {
             filter_mode: controls::FilterMode::All,
             summary: String::new(),
             body: String::new(),
+            commit_ai: commit_ai::CommitAi::default(),
             history: Vec::new(),
             history_limit: 100,
             selected: None,
@@ -122,8 +130,10 @@ impl VcsPanel {
             return;
         }
         self.generation = self.generation.wrapping_add(1);
+        self.commit_ai.cancel();
         self.project = Some(root.into());
         self.repo = None;
+        self.git_settings = git_settings::SettingsState::default();
         self.pending.clear();
         self.mutations.clear();
         self.selected_paths.clear();
@@ -150,6 +160,9 @@ impl VcsPanel {
         self.notice.clear();
         self.refresh_at = None;
         self.submit(Task::Open(root.into()));
+        if let Some(auth) = self.clone_auth.take() {
+            self.submit(Task::Authenticate(auth));
+        }
     }
     pub(crate) fn run_global(&mut self, task: Task) {
         self.submit(task);
@@ -161,12 +174,17 @@ impl VcsPanel {
             &task,
             Task::Open(_)
                 | Task::Refresh
+                | Task::GitSettings
+                | Task::CommitContext
                 | Task::Diff(_)
                 | Task::History(_)
                 | Task::Details(_)
                 | Task::SelectionDetails(_)
                 | Task::PreviewMerge(_)
         );
+        if mutation {
+            self.commit_ai.cancel();
+        }
         if matches!(&task, Task::Fetch | Task::Pull | Task::PullPush) {
             self.fetch_request = id;
         }
@@ -214,6 +232,7 @@ impl VcsPanel {
         self.tick_worker(ctx, false);
     }
     fn tick_worker(&mut self, ctx: &Context, visible: bool) {
+        self.tick_commit_ai();
         let wake = ctx.clone();
         self.worker.set_wakeup(move || wake.request_repaint());
         let replies: Vec<_> = self.worker.drain().collect();
@@ -226,6 +245,8 @@ impl VcsPanel {
             match reply.result {
                 Ok(outcome) => self.accept(reply.id, outcome, ctx),
                 Err(error) => {
+                    self.commit_context_failed(reply.id);
+                    self.git_settings_result(reply.id, Some(error.to_string()));
                     self.error = Some(error.to_string());
                     eprintln!("Git: {error}");
                 }
@@ -258,6 +279,8 @@ impl VcsPanel {
     }
     fn accept(&mut self, id: u64, outcome: Outcome, ctx: &Context) {
         match outcome {
+            Outcome::GitSettings(settings) => self.accept_git_settings(id, settings),
+            Outcome::CommitContext(context) => self.accept_commit_context(id, context, ctx),
             Outcome::MergePreview { branch, conflicts }
                 if id == self.preview_request && self.merge_branch.as_ref() == Some(&branch) =>
             {
@@ -312,6 +335,7 @@ impl VcsPanel {
                 self.submit(Task::Refresh);
             }
             Outcome::Done(message) => {
+                self.git_settings_result(id, None);
                 self.error = None;
                 if id == self.fetch_request {
                     self.last_fetch = Some(Instant::now());
@@ -480,7 +504,7 @@ impl VcsPanel {
         let filter_mode = self.filter_mode;
         let footer_height = (ui.text_style_height(&egui::TextStyle::Body)
             + ui.spacing().item_spacing.y)
-            .mul_add(6.0, 35.0);
+            .mul_add(7.0, 35.0);
         let list_height = (ui.available_height() - footer_height).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("git_changes")
@@ -501,6 +525,8 @@ impl VcsPanel {
             });
         ui.add_space((ui.max_rect().bottom() - footer_height - ui.cursor().top()).max(0.0));
         ui.separator();
+        let staged = changes.iter().filter(|c| c.is_staged).count();
+        self.commit_ai_button(ui, staged);
         ui.add(
             egui::TextEdit::singleline(&mut self.summary)
                 .hint_text("Summary (required)")
@@ -512,8 +538,6 @@ impl VcsPanel {
                 .desired_width(f32::INFINITY)
                 .desired_rows(5),
         );
-        let staged = changes.iter().filter(|c| c.is_staged).count();
-
         let allowed = !busy
             && staged > 0
             && !self.summary.trim().is_empty()

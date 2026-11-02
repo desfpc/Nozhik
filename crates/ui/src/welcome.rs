@@ -26,7 +26,12 @@ impl NozhikUi {
         }
     }
     pub(crate) fn welcome_screen(&mut self, ctx: &egui::Context) {
-        if let Some(path) = self.welcome.clone.tick() {
+        if let Some((path, auth)) = self.welcome.clone.tick() {
+            if self.workspace.managed {
+                self.workspace.clone_auth = Some(auth);
+            } else {
+                self.vcs.clone_auth = Some(auth);
+            }
             self.open_project(path);
         }
         if self.welcome.logo.is_none()

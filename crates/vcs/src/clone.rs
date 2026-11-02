@@ -35,6 +35,15 @@ pub enum Authentication {
     },
 }
 
+/// Clone credentials bound to the exact origin URL selected for that clone.
+#[derive(Clone)]
+pub struct Credentials {
+    /// Normalized clone URL; must still match before installing session credentials.
+    pub url: String,
+    /// Session-only authentication, never serialized.
+    pub authentication: Authentication,
+}
+
 /// Resolves GitHub shorthand and rejects embedded passwords before any connection.
 ///
 /// # Errors
@@ -93,18 +102,20 @@ pub fn normalize_url(input: &str) -> Result<String, VcsError> {
     ))
 }
 
-fn credentials(
+pub(crate) fn credentials(
     auth: &Authentication,
     url: &str,
     user: Option<&str>,
     allowed: git2::CredentialType,
+    config: &git2::Config,
 ) -> Result<git2::Cred, git2::Error> {
     if allowed.contains(git2::CredentialType::USERNAME) {
         let name = match auth {
             Authentication::Password { username, .. } | Authentication::SshKey { username, .. } => {
                 username.as_str()
             }
-            _ => user.unwrap_or("git"),
+            Authentication::Token(_) => "x-access-token",
+            Authentication::Automatic => user.unwrap_or("git"),
         };
         return git2::Cred::username(name);
     }
@@ -112,7 +123,7 @@ fn credentials(
         Authentication::Token(token)
             if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) =>
         {
-            git2::Cred::userpass_plaintext("x-access-token", token)
+            git2::Cred::userpass_plaintext("x-access-token", token.trim())
         }
         Authentication::Password { username, password }
             if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) =>
@@ -135,7 +146,10 @@ fn credentials(
         Authentication::Automatic
             if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) =>
         {
-            git2::Cred::credential_helper(&git2::Config::open_default()?, url, user)
+            git2::Cred::credential_helper(config, url, user)
+        }
+        Authentication::Automatic if allowed.contains(git2::CredentialType::DEFAULT) => {
+            git2::Cred::default()
         }
         _ => Err(git2::Error::from_str(
             "Selected authentication does not match this repository protocol",
@@ -157,6 +171,7 @@ pub fn repository(
     cancel: &Arc<AtomicBool>,
 ) -> Result<PathBuf, VcsError> {
     let url = normalize_url(input)?;
+    crate::transport_error::credentials_ready(auth)?;
     if !destination.is_absolute() || destination.file_name().is_none() || destination.exists() {
         return Err(VcsError::Invalid(
             "Choose a new, absolute destination directory".into(),
@@ -169,6 +184,7 @@ pub fn repository(
         .prefix(".nozhik-clone-")
         .tempdir_in(parent)?;
     let checkout = temporary.path().join("repository");
+    let config = git2::Config::open_default()?;
     let mut callbacks = git2::RemoteCallbacks::new();
     let mut attempts = 0;
     callbacks.credentials(|remote, user, allowed| {
@@ -183,7 +199,7 @@ pub fn repository(
                 "Authentication failed or cancelled; check your credentials",
             ));
         }
-        credentials(auth, remote, user, allowed)
+        credentials(auth, remote, user, allowed, &config)
     });
     callbacks.transfer_progress(|_| !cancel.load(Ordering::Relaxed));
     let mut fetch = git2::FetchOptions::new();
@@ -192,8 +208,15 @@ pub fn repository(
         .fetch_options(fetch)
         .clone(&url, &checkout);
     // Do not forward transport errors: libgit2 may include credentials supplied by a server.
-    if result.is_err() {
-        return Err(VcsError::Invalid(if cancel.load(Ordering::Relaxed) { "Clone cancelled" } else { "Clone failed. Check URL, credentials, network and host trust. GitHub requires a token or SSH key, not an account password." }.into()));
+    if let Err(error) = &result {
+        return Err(if cancel.load(Ordering::Relaxed) {
+            VcsError::Invalid("Clone cancelled".into())
+        } else {
+            crate::transport_error::explain("Clone", &url, error)
+        });
+    }
+    if let Ok(repo) = &result {
+        crate::connection::remember_clone(repo, auth)?;
     }
     drop(result);
     if cancel.load(Ordering::Relaxed) {
@@ -277,7 +300,8 @@ mod tests {
                 },
                 "https://example.com",
                 None,
-                git2::CredentialType::USER_PASS_PLAINTEXT
+                git2::CredentialType::USER_PASS_PLAINTEXT,
+                &git2::Config::new()?
             )?
             .has_username()
         );

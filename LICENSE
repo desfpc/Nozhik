@@ -1,4 +1,4 @@
-Nozhik Source-Available License 1.0
+Nozhik Source-Available License 1.1
 
 Copyright (c) 2026 Sergei Peshalov. All rights reserved.
 
@@ -43,11 +43,40 @@ applicable law.
 4. Purchased official builds
 
 A purchase of an official build grants one individual user a non-exclusive,
-perpetual right to install and use that build on any number of devices they use,
-for personal, professional or commercial work. An organization may purchase
-licenses for individual users. There is no device limit, activation requirement,
-subscription or recurring fee imposed by this license. A user license may not
-be shared with other individuals. Redistribution remains subject to section 3.
+perpetual right to use that build for personal, professional or commercial work,
+subject to activation and a limit of three active devices per user for that
+licensed product. An active device is a device with an activation that has not
+been deactivated or expired, whether or not the application is currently running.
+The limit is not a limit of three concurrent application sessions. An organization
+may purchase licenses for individual users. A user license may not be shared with
+other individuals. Redistribution remains subject to section 3.
+
+Activation uses a license key and an email address controlled by the licensed
+user. The first activation binds an unassigned key to that email address.
+Activation of an additional device requires a one-time verification code sent
+to the email address already bound to the license. Changing that address requires
+verification through the existing email address and confirmation of the new
+address, or recovery approved by the Licensor after verification of ownership.
+Possession of a license key alone does not authorize changing a bound address.
+
+Users may deactivate their devices to transfer an activation to another device,
+subject to the three-device limit. Activation and periodic renewal of device
+authorization require an internet connection when the activation system is
+available. A device authorization permits offline use for up to seven days from
+its issuance or last successful renewal. Deactivated devices cannot renew their
+authorization; an offline authorization already issued to such a device may
+remain usable until it expires. A replacement activation may therefore briefly
+overlap with an unexpired offline authorization on a deactivated device.
+
+Expiry of a device authorization does not end the perpetual purchase right;
+continued use requires renewed authorization. No subscription or recurring fee
+is imposed by this license. Until the activation system is implemented and made
+available for an official build, technical activation and renewal are not
+required for that build; the personal-use and three-active-device restrictions
+still apply. During that period, a device on which the user keeps an installed
+copy for use counts as active; backup copies alone do not count as active devices.
+This revision does not retroactively replace the terms supplied
+with an earlier purchase unless the purchaser agrees to the replacement terms.
 
 This permission also covers official updates supplied to that user as part of
 the purchase. A purchase does not by itself promise future releases, lifetime

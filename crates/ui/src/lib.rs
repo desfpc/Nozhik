@@ -3,6 +3,7 @@ mod app_ui;
 mod workspace;
 pub use workspace::Workspace;
 mod data_grid;
+mod git_auth;
 mod repository_clone;
 mod welcome;
 pub use data_grid::DataGrid;

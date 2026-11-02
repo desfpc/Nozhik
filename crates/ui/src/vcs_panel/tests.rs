@@ -903,3 +903,390 @@ fn history_missing_worktree_and_unsupported_origin_disable_only_unavailable_acti
     assert!(!dir.path().join("file.txt").exists());
     Ok(())
 }
+
+#[test]
+fn changes_ignore_folder_label_and_submenu_target_the_clicked_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    const LABEL: &str = "Ignore Folder (Add to .gitignore)";
+    for target in [None, Some(".nozhik/logs"), Some(".nozhik")] {
+        let (dir, repo, mut panel, ctx) = fixture()?;
+        std::fs::create_dir_all(dir.path().join(".nozhik/logs"))?;
+        std::fs::write(dir.path().join(".nozhik/logs/log.txt"), "log")?;
+        panel.submit(Task::Refresh);
+        settle(&mut panel, &ctx)?;
+        let output = frame(&mut panel, &ctx, vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == ".nozhik/logs/log.txt" && text.pos.x < 300.0 =>
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .ok_or("missing Changes row")?;
+        click_at(
+            &mut panel,
+            &ctx,
+            point,
+            egui::PointerButton::Secondary,
+            egui::Modifiers::NONE,
+        );
+        settle(&mut panel, &ctx)?;
+        if let Some(target) = target {
+            let output = frame(&mut panel, &ctx, vec![]);
+            let label = text_point(&output, LABEL)?;
+            let arrow = text_point(&output, egui::containers::menu::SubMenuButton::RIGHT_ARROW)?;
+            assert!(arrow.x > label.x);
+            click_at(
+                &mut panel,
+                &ctx,
+                arrow,
+                egui::PointerButton::Primary,
+                egui::Modifiers::NONE,
+            );
+            settle(&mut panel, &ctx)?;
+            assert!(!dir.path().join(".gitignore").exists());
+            let output = frame(&mut panel, &ctx, vec![]);
+            let nearest = text_point(&output, ".nozhik/logs")?;
+            let ancestor = text_point(&output, ".nozhik")?;
+            assert!(nearest.y < ancestor.y);
+            click(&mut panel, &ctx, target)?;
+        } else {
+            click(&mut panel, &ctx, LABEL)?;
+        }
+        settle(&mut panel, &ctx)?;
+        let expected = target.unwrap_or(".nozhik/logs");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".gitignore"))?,
+            format!("\n/{expected}/\n")
+        );
+        assert!(repo.status_should_ignore(std::path::Path::new(".nozhik/logs/next.log"))?);
+        assert_eq!(
+            repo.status_should_ignore(std::path::Path::new(".nozhik/other.txt"))?,
+            target == Some(".nozhik")
+        );
+        assert!(panel.error.is_none(), "{:?}", panel.error);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Exercises the actual button through generation, cancellation and stale replies"
+)]
+async fn commit_ai_button_generates_editable_fields_and_protects_newer_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for scenario in [
+        "success",
+        "form edit",
+        "index edit",
+        "cancel",
+        "disable",
+        "error",
+    ] {
+        let (dir, repo, mut panel, ctx) = fixture()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        panel.commit_ai.runtime = Some(tokio::runtime::Handle::current());
+        panel.commit_ai.client = Some(nozhik_ai_completion::Ollama::new(&format!(
+            "http://{}",
+            listener.local_addr()?
+        ))?);
+        let mut config = nozhik_config::Config {
+            ai_enabled: false,
+            ..Default::default()
+        };
+        panel.configure_commit_ai(&config);
+        click(&mut panel, &ctx, "Auto-fill Commit Message")?;
+        assert!(!panel.commit_ai.busy());
+        config.ai_enabled = true;
+        panel.configure_commit_ai(&config);
+        click(&mut panel, &ctx, "Auto-fill Commit Message")?;
+        assert!(!panel.commit_ai.busy(), "no staged files");
+        std::fs::write(dir.path().join("file.txt"), "staged changes\n")?;
+        panel.submit(Task::Stage {
+            paths: vec!["file.txt".into()],
+            staged: true,
+        });
+        settle(&mut panel, &ctx)?;
+        std::fs::write(dir.path().join("file.txt"), "unstaged changes\n")?;
+        panel.summary = "Original title".into();
+        panel.body = "Original description".into();
+        let output = frame(&mut panel, &ctx, vec![]);
+        let button = text_point(&output, "Auto-fill Commit Message")?;
+        let title = text_point(&output, "Original title")?;
+        assert!(button.y < title.y);
+        click(&mut panel, &ctx, "Auto-fill Commit Message")?;
+        settle(&mut panel, &ctx)?;
+        assert!(panel.commit_ai.busy());
+        let (mut socket, _) =
+            tokio::time::timeout(Duration::from_secs(3), listener.accept()).await??;
+        let mut request = Vec::new();
+        loop {
+            let mut buffer = [0; 4096];
+            let count =
+                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut buffer)).await??;
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+            let text = String::from_utf8_lossy(&request);
+            if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                let length = headers.lines().find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|n| n.parse::<usize>().ok())
+                });
+                if length.is_some_and(|length| body.len() >= length) {
+                    break;
+                }
+            }
+            assert!(request.len() < 16 * 1024);
+        }
+        let request = String::from_utf8_lossy(&request);
+        assert!(request.contains("+staged changes"));
+        assert!(!request.contains("unstaged changes"));
+        match scenario {
+            "form edit" => panel.summary = "My newer title".into(),
+            "index edit" => {
+                let mut index = repo.index()?;
+                index.add_path(std::path::Path::new("file.txt"))?;
+                index.write()?;
+            }
+            "cancel" => click(&mut panel, &ctx, "Cancel")?,
+            "disable" => {
+                config.ai_enabled = false;
+                panel.configure_commit_ai(&config);
+            }
+            _ => {}
+        }
+        if !matches!(scenario, "cancel" | "disable") {
+            let message = serde_json::json!({"summary":"Generated title","description":"Generated description"}).to_string();
+            let body = serde_json::json!({"response":message,"done":true,"done_reason":"stop"})
+                .to_string();
+            let status = if scenario == "error" {
+                "503 Unavailable"
+            } else {
+                "200 OK"
+            };
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while panel.commit_ai.busy() || !panel.pending.is_empty() {
+            let _output = frame(&mut panel, &ctx, vec![]);
+            assert!(Instant::now() < deadline, "AI timeout: {scenario}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if matches!(scenario, "cancel" | "disable") {
+            let mut buffer = [0; 1];
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut buffer)).await??,
+                0,
+                "cancellation closes the HTTP request"
+            );
+        }
+        if scenario == "success" {
+            assert_eq!(panel.summary, "Generated title");
+            assert_eq!(panel.body, "Generated description");
+            assert!(panel.error.is_none());
+        } else {
+            assert_eq!(
+                panel.summary,
+                if scenario == "form edit" {
+                    "My newer title"
+                } else {
+                    "Original title"
+                }
+            );
+            assert_eq!(panel.body, "Original description");
+            if matches!(scenario, "index edit" | "error") {
+                assert!(panel.error.is_some());
+            }
+        }
+        assert_eq!(
+            repo.head()?.peel_to_commit()?.message()?,
+            "Ours",
+            "generation must not commit"
+        );
+    }
+    Ok(())
+}
+
+fn git_settings_frame(panel: &mut VcsPanel, ctx: &Context, events: Vec<Event>) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 1000.0))),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            panel.tick(ctx, false);
+            egui::CentralPanel::default().show(ctx, |ui| panel.git_settings_ui(ui));
+        },
+    )
+}
+fn git_settings_click(panel: &mut VcsPanel, ctx: &Context, point: Pos2) {
+    for pressed in [true, false] {
+        let _output = git_settings_frame(
+            panel,
+            ctx,
+            vec![
+                Event::PointerMoved(point),
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+}
+fn git_settings_action(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _sizing = git_settings_frame(panel, ctx, vec![]);
+    let output = git_settings_frame(panel, ctx, vec![]);
+    let point = text_point(&output, label)?;
+    git_settings_click(panel, ctx, point);
+    Ok(())
+}
+fn edit_git_field(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+    label: &str,
+    text: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = git_settings_frame(panel, ctx, vec![]);
+    let point = text_point(&output, label)? + egui::vec2(0.0, 23.0);
+    git_settings_click(panel, ctx, point);
+    let _output = git_settings_frame(
+        panel,
+        ctx,
+        vec![
+            Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            },
+            Event::Text(text.into()),
+        ],
+    );
+    Ok(())
+}
+fn settle_git_settings(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let _output = git_settings_frame(panel, ctx, vec![]);
+        if panel.pending.is_empty() && panel.git_settings.snapshot.is_some() {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(format!("Git settings timeout: {:?}", panel.error).into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+#[test]
+fn project_git_settings_form_edits_author_remote_and_shared_authentication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo, mut panel, ctx) = fixture()?;
+    settle_git_settings(&mut panel, &ctx)?;
+    edit_git_field(
+        &mut panel,
+        &ctx,
+        "Origin fetch URL",
+        "https://github.com/example/project.git",
+    )?;
+    edit_git_field(&mut panel, &ctx, "Commit author name", "Changed Author")?;
+    edit_git_field(
+        &mut panel,
+        &ctx,
+        "Commit author email",
+        "changed@example.invalid",
+    )?;
+    git_settings_action(&mut panel, &ctx, "Token")?;
+    edit_git_field(&mut panel, &ctx, "Access token (HTTPS)", "dummy-ui-token")?;
+    git_settings_action(&mut panel, &ctx, "Save Git Settings")?;
+    settle_git_settings(&mut panel, &ctx)?;
+    assert_eq!(
+        repo.find_remote("origin")?.url()?,
+        "https://github.com/example/project.git"
+    );
+    assert_eq!(repo.signature()?.name()?, "Changed Author");
+    assert_eq!(repo.signature()?.email()?, "changed@example.invalid");
+    assert_eq!(repo.config()?.get_string("nozhik.auth.method")?, "token");
+    assert!(!std::fs::read_to_string(repo.commondir().join("config"))?.contains("dummy-ui-token"));
+    let output = git_settings_frame(&mut panel, &ctx, vec![]);
+    text_point(
+        &output,
+        "Git settings saved. Session credentials are available until this project closes.",
+    )?;
+    assert!(panel.error.is_none(), "{:?}", panel.error);
+    // Unsaved edits are discarded by Reload; persisted identity survives another read.
+    edit_git_field(&mut panel, &ctx, "Commit author name", "Not saved")?;
+    git_settings_action(&mut panel, &ctx, "Reload Git Settings")?;
+    settle_git_settings(&mut panel, &ctx)?;
+    let output = git_settings_frame(&mut panel, &ctx, vec![]);
+    text_point(&output, "Changed Author")?;
+    assert_eq!(repo.signature()?.name()?, "Changed Author");
+    // Return to a local remote and automatic auth; Test does not save candidate fields.
+    let remote = tempfile::tempdir()?;
+    git2::Repository::init_bare(remote.path())?;
+    git_settings_action(&mut panel, &ctx, "Public / system credentials")?;
+    edit_git_field(
+        &mut panel,
+        &ctx,
+        "Origin fetch URL",
+        &remote.path().display().to_string(),
+    )?;
+    git_settings_action(&mut panel, &ctx, "Test Fetch Connection")?;
+    settle_git_settings(&mut panel, &ctx)?;
+    assert_eq!(
+        repo.find_remote("origin")?.url()?,
+        "https://github.com/example/project.git"
+    );
+    let output = git_settings_frame(&mut panel, &ctx, vec![]);
+    text_point(
+        &output,
+        "Fetch connection successful (push permissions are checked when pushing).",
+    )?;
+    assert!(dir.path().join("file.txt").is_file());
+    Ok(())
+}
+
+#[test]
+fn opening_cloned_project_installs_session_authentication_after_repository_open()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo, _panel, ctx) = fixture()?;
+    let auth = nozhik_vcs::clone::Authentication::Token(zeroize::Zeroizing::new(
+        "dummy-clone-token".into(),
+    ));
+    repo.remote("origin", "https://github.com/example/project")?;
+    nozhik_vcs::connection::remember_clone(&repo, &auth)?;
+    let mut panel = VcsPanel {
+        clone_auth: Some(nozhik_vcs::clone::Credentials {
+            url: "https://github.com/example/project".into(),
+            authentication: auth,
+        }),
+        ..VcsPanel::default()
+    };
+    panel.set_project(dir.path());
+    settle(&mut panel, &ctx)?;
+    assert!(panel.clone_auth.is_none());
+    assert!(panel.error.is_none(), "{:?}", panel.error);
+    assert_eq!(panel.notice, "Git session credentials configured");
+    assert!(
+        !std::fs::read_to_string(repo.commondir().join("config"))?.contains("dummy-clone-token")
+    );
+    Ok(())
+}

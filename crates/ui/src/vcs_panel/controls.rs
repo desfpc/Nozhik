@@ -850,6 +850,43 @@ impl VcsPanel {
         }
         row.context_menu(|ui| self.file_menu(ui, change, busy));
     }
+    fn ignore_folder_menu(&mut self, ui: &mut egui::Ui, change: &FileChange, busy: bool) {
+        let folders: Vec<_> = change
+            .path
+            .parent()
+            .into_iter()
+            .flat_map(std::path::Path::ancestors)
+            .take_while(|path| !path.as_os_str().is_empty())
+            .collect();
+        ui.add_enabled_ui(!busy && !folders.is_empty(), |ui| {
+            let (response, _) = egui::containers::menu::SubMenuButton::new(
+                "Ignore Folder (Add to .gitignore)",
+            )
+            .ui(ui, |ui| {
+                for folder in &folders {
+                    if ui.button(folder.to_string_lossy()).clicked() {
+                        self.submit(Task::IgnoreFolder((*folder).to_owned()));
+                        ui.close();
+                    }
+                }
+            });
+            // The label applies the nearest folder; the rightmost arrow opens the submenu.
+            let arrow_width = ui
+                .spacing()
+                .button_padding
+                .x
+                .mul_add(2.0, ui.spacing().icon_width);
+            if response.clicked()
+                && response
+                    .interact_pointer_pos()
+                    .is_none_or(|pos| pos.x < response.rect.right() - arrow_width)
+                && let Some(folder) = folders.first()
+            {
+                self.submit(Task::IgnoreFolder((*folder).to_owned()));
+                ui.close();
+            }
+        });
+    }
     #[allow(
         clippy::too_many_lines,
         reason = "File context actions share the same immutable selected-path snapshot"
@@ -884,6 +921,7 @@ impl VcsPanel {
             }
             ui.close();
         }
+        self.ignore_folder_menu(ui, change, busy);
         let mut extensions: Vec<_> = paths
             .iter()
             .filter_map(|p| p.extension().and_then(|e| e.to_str()).map(str::to_owned))

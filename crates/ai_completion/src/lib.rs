@@ -114,6 +114,69 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires a running local Ollama and the installed default model"]
+    async fn live_ollama_commit_message() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Ollama::new(DEFAULT_ENDPOINT)?;
+        let message = client.commit_message(DEFAULT_MODEL,
+            "diff --git a/math.rs b/math.rs\n--- a/math.rs\n+++ b/math.rs\n@@ -1 +1 @@\n-fn add(a: i32, b: i32) -> i32 { a - b }\n+fn add(a: i32, b: i32) -> i32 { a + b }\n").await?;
+        assert_ne!(message.summary, "");
+        assert_ne!(message.description, "");
+        println!("{}\n\n{}", message.summary, message.description);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_message_uses_structured_output_and_rejects_invalid_replies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (summary, done, reason, valid) in [
+            ("Add folder ignores", true, "stop", true),
+            ("", true, "stop", false),
+            ("line\nbreak", true, "stop", false),
+            ("Incomplete", false, "stop", false),
+            ("Cut off", true, "length", false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await?;
+                let body = request_body(&mut socket).await?;
+                let json: serde_json::Value = serde_json::from_slice(&body)?;
+                assert_eq!(json["model"], "selected-local-model");
+                assert_eq!(json["stream"], false);
+                assert_eq!(
+                    json["format"]["required"],
+                    serde_json::json!(["summary", "description"])
+                );
+                assert!(json["options"]["stop"].is_null());
+                assert_eq!(json["options"]["num_predict"], 512);
+                assert!(
+                    json["prompt"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("+staged change"))
+                );
+                let message = serde_json::json!({"summary":summary,"description":"Explain changes\nwith details"}).to_string();
+                let body = serde_json::json!({"response":message,"done":done,"done_reason":reason})
+                    .to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            });
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                client.commit_message("selected-local-model", "+staged change"),
+            )
+            .await?;
+            assert_eq!(result.is_ok(), valid);
+            if valid {
+                let message = result?;
+                assert_eq!(message.summary, summary);
+                assert_eq!(message.description, "Explain changes\nwith details");
+            }
+            server.await?.map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn abort_closes_obsolete_http_request() -> Result<(), Box<dyn std::error::Error>> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let endpoint = format!("http://{}", listener.local_addr()?);

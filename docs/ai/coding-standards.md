@@ -166,3 +166,14 @@ workspace.package; increase patch once per follow-up change/commit (see AGENTS.m
 обновляйте legal sidecars через update-binaries.py; MPL source и upstream notices
 должны оставаться в поставке и Resources/Legal. При добавлении нового legal
 build input включайте его в fingerprint и пути CI.
+
+### Git connection settings
+
+Git auth preferences belong in the repository-local config, with atomic writes
+under config.lock; never serialize Authentication secrets. Clone and existing-project
+transports must share credential resolution and honor repository-local helpers.
+Bind session secrets to saved URLs/profile, reject redirected credentials, and keep
+certificate/SSH trust checks enabled. Settings read/save/test stay on the Git worker;
+connection tests must not change refs, index, worktree or persist candidate settings.
+Successful clone credentials travel with that project's open request and must not
+become global state. Blank fields may retain only a matching session credential.

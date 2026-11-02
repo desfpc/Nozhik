@@ -630,6 +630,7 @@ impl NozhikUi {
         {
             self.status = message;
         }
+        self.vcs.configure_commit_ai(&self.config);
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
         let git_files = self.vcs.take_open_paths();
         for path in git_files {
@@ -667,7 +668,12 @@ impl NozhikUi {
         self.settings_window(ctx);
         self.plugins_window(ctx);
         self.integration_dialogs(ctx);
-        if let Some(path) = self.welcome.clone.tick() {
+        if let Some((path, auth)) = self.welcome.clone.tick() {
+            if self.workspace.managed {
+                self.workspace.clone_auth = Some(auth);
+            } else {
+                self.vcs.clone_auth = Some(auth);
+            }
             self.open_project(path);
         }
         self.welcome.clone.show(ctx);

@@ -1,5 +1,5 @@
 //! Session-only GitHub account and clone dialog; I/O runs outside the UI thread.
-use nozhik_vcs::clone::Authentication;
+use nozhik_vcs::clone::{Authentication, Credentials};
 use std::{
     path::PathBuf,
     sync::{
@@ -11,14 +11,6 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-enum AuthKind {
-    #[default]
-    Automatic,
-    Token,
-    Password,
-    Ssh,
-}
 #[derive(serde::Deserialize)]
 struct Account {
     login: String,
@@ -30,7 +22,7 @@ struct Repository {
 }
 enum Reply {
     Account(String, Vec<Repository>),
-    Cloned(PathBuf),
+    Cloned(PathBuf, Credentials),
 }
 
 #[derive(Default)]
@@ -39,11 +31,7 @@ pub struct CloneDialog {
     github: bool,
     url: String,
     destination: String,
-    auth: AuthKind,
-    username: String,
-    secret: Zeroizing<String>,
-    key: String,
-    passphrase: Zeroizing<String>,
+    connection: crate::git_auth::AuthFields,
     token: Zeroizing<String>,
     account: Option<String>,
     repos: Vec<Repository>,
@@ -120,7 +108,7 @@ impl CloneDialog {
             wake.request_repaint();
         });
     }
-    pub fn tick(&mut self) -> Option<PathBuf> {
+    pub fn tick(&mut self) -> Option<(PathBuf, Credentials)> {
         let result = self.pending.as_ref()?.try_recv();
         let result = match result {
             Ok(result) => result,
@@ -132,10 +120,10 @@ impl CloneDialog {
             return None;
         }
         match result {
-            Ok(Reply::Cloned(path)) => {
+            Ok(Reply::Cloned(path, auth)) => {
                 self.clear_secrets();
                 self.open = false;
-                return Some(path);
+                return Some((path, auth));
             }
             Ok(Reply::Account(login, repos)) => {
                 self.account = Some(login);
@@ -152,8 +140,7 @@ impl CloneDialog {
         self.clear_secrets();
     }
     fn clear_secrets(&mut self) {
-        self.secret = Zeroizing::default();
-        self.passphrase = Zeroizing::default();
+        self.connection.clear_secrets();
         self.token = Zeroizing::default();
         self.account = None;
         self.repos.clear();
@@ -163,23 +150,7 @@ impl CloneDialog {
         if self.github {
             return Authentication::Token(self.token.clone());
         }
-        match self.auth {
-            AuthKind::Automatic => Authentication::Automatic,
-            AuthKind::Token => Authentication::Token(self.secret.clone()),
-            AuthKind::Password => Authentication::Password {
-                username: self.username.clone(),
-                password: self.secret.clone(),
-            },
-            AuthKind::Ssh => Authentication::SshKey {
-                username: if self.username.is_empty() {
-                    "git".into()
-                } else {
-                    self.username.clone()
-                },
-                path: PathBuf::from(&self.key),
-                passphrase: self.passphrase.clone(),
-            },
-        }
+        self.connection.authentication()
     }
     fn can_clone(&self) -> bool {
         if self.destination.trim().is_empty() {
@@ -191,12 +162,7 @@ impl CloneDialog {
         if nozhik_vcs::clone::normalize_url(&self.url).is_err() {
             return false;
         }
-        match self.auth {
-            AuthKind::Automatic => true,
-            AuthKind::Token => !self.secret.is_empty(),
-            AuthKind::Password => !self.username.trim().is_empty() && !self.secret.is_empty(),
-            AuthKind::Ssh => !self.key.trim().is_empty(),
-        }
+        self.connection.ready()
     }
     pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
@@ -300,8 +266,18 @@ impl CloneDialog {
         let destination = PathBuf::from(self.destination.trim());
         let auth = self.authentication();
         self.start(ctx, move |cancel| {
-            nozhik_vcs::clone::repository(&remote, &destination, &auth, &cancel)
-                .map(Reply::Cloned)
+            let url =
+                nozhik_vcs::clone::normalize_url(&remote).map_err(|error| error.to_string())?;
+            nozhik_vcs::clone::repository(&url, &destination, &auth, &cancel)
+                .map(|path| {
+                    Reply::Cloned(
+                        path,
+                        Credentials {
+                            url,
+                            authentication: auth,
+                        },
+                    )
+                })
                 .map_err(|error| error.to_string())
         });
     }
@@ -331,7 +307,7 @@ impl CloneDialog {
             self.selected = None;
             self.repos.clear();
         }
-        ui.small("Token stays in memory for this dialog. Grant access to the repositories you want to clone.");
+        ui.small("Token stays in memory for this project session. Grant access to the repositories you want to clone.");
         let connect = ui
             .add_enabled(
                 !self.token.is_empty(),
@@ -384,56 +360,8 @@ impl CloneDialog {
     fn url_form(&mut self, ui: &mut egui::Ui) {
         ui.label("Repository URL or GitHub owner/repository");
         ui.add(egui::TextEdit::singleline(&mut self.url).desired_width(f32::INFINITY));
-        ui.label("Authentication");
-        ui.horizontal(|ui| {
-            for (kind, title) in [
-                (AuthKind::Automatic, "Public / system credentials"),
-                (AuthKind::Token, "Token"),
-                (AuthKind::Password, "Login / password"),
-                (AuthKind::Ssh, "SSH key"),
-            ] {
-                ui.selectable_value(&mut self.auth, kind, title);
-            }
-        });
-        match self.auth {
-            AuthKind::Automatic => {
-                ui.small(
-                    "Uses a public connection, SSH agent, or configured Git credential helper.",
-                );
-            }
-            AuthKind::Token => {
-                ui.label("Access token (HTTPS)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut *self.secret)
-                        .password(true)
-                        .desired_width(f32::INFINITY),
-                );
-            }
-            AuthKind::Password => {
-                ui.label("Login");
-                ui.text_edit_singleline(&mut self.username);
-                ui.label("Password / token (HTTPS)");
-                ui.add(egui::TextEdit::singleline(&mut *self.secret).password(true));
-                ui.small("GitHub requires a personal access token instead of an account password.");
-            }
-            AuthKind::Ssh => {
-                ui.label("SSH username (default: git)");
-                ui.text_edit_singleline(&mut self.username);
-                ui.label("Private key path");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.key);
-                    if ui.button("Choose key…").clicked() {
-                        match crate::project_dialog::pick(crate::project_dialog::Picker::File, None)
-                        {
-                            Ok(Some(path)) => self.key = path.display().to_string(),
-                            Ok(None) => {}
-                            Err(error) => self.error = Some(error),
-                        }
-                    }
-                });
-                ui.label("Key passphrase (optional)");
-                ui.add(egui::TextEdit::singleline(&mut *self.passphrase).password(true));
-            }
+        if let Err(error) = self.connection.show(ui) {
+            self.error = Some(error);
         }
     }
 }
@@ -505,22 +433,47 @@ mod tests {
     }
 
     #[test]
+    fn successful_clone_transfers_session_credentials_and_clears_dialog()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut dialog = CloneDialog::default();
+        dialog.token = Zeroizing::new("dummy-transfer-token".into());
+        let (send, receive) = mpsc::channel();
+        dialog.pending = Some(receive);
+        send.send(Ok(Reply::Cloned(
+            PathBuf::from("/tmp/cloned-project"),
+            Credentials {
+                url: "https://github.com/example/project".into(),
+                authentication: Authentication::Token(dialog.token.clone()),
+            },
+        )))
+        .map_err(|_| "closed clone receiver")?;
+        let (path, authentication) = dialog.tick().ok_or("missing cloned project")?;
+        assert_eq!(path, PathBuf::from("/tmp/cloned-project"));
+        assert!(
+            matches!(authentication.authentication, Authentication::Token(token) if token.as_str() == "dummy-transfer-token")
+        );
+        assert!(dialog.token.is_empty());
+        assert!(!dialog.open);
+        Ok(())
+    }
+
+    #[test]
     fn clone_form_gates_credentials_and_ignores_cancelled_reply() {
         let mut dialog = CloneDialog::default();
         dialog.url.push_str("owner/repository");
         dialog.destination.push_str("/tmp/new-project");
         assert!(dialog.can_clone());
-        dialog.auth = AuthKind::Password;
+        dialog.connection.kind = nozhik_vcs::connection::AuthMethod::Password;
         assert!(!dialog.can_clone());
-        dialog.username = "login".into();
-        dialog.secret = Zeroizing::new("password".into());
+        dialog.connection.username = "login".into();
+        dialog.connection.secret = Zeroizing::new("password".into());
         assert!(dialog.can_clone());
         assert!(
             matches!(dialog.authentication(), Authentication::Password { username, password } if username == "login" && password.as_str() == "password")
         );
-        dialog.auth = AuthKind::Ssh;
+        dialog.connection.kind = nozhik_vcs::connection::AuthMethod::SshKey;
         assert!(!dialog.can_clone());
-        dialog.key = "/tmp/key".into();
+        dialog.connection.key = "/tmp/key".into();
         assert!(dialog.can_clone());
         dialog.github = true;
         assert!(!dialog.can_clone());
@@ -532,11 +485,21 @@ mod tests {
         dialog.pending = Some(receive);
         dialog.cancel.store(true, Ordering::Relaxed);
         assert!(
-            send.send(Ok(Reply::Cloned(PathBuf::from("/tmp/cancelled"))))
-                .is_ok()
+            send.send(Ok(Reply::Cloned(
+                PathBuf::from("/tmp/cancelled"),
+                Credentials {
+                    url: "https://github.com/example/project".into(),
+                    authentication: Authentication::Automatic
+                }
+            )))
+            .is_ok()
         );
         assert!(dialog.tick().is_none());
         dialog.clear_secrets();
-        assert!(dialog.token.is_empty() && dialog.secret.is_empty() && dialog.account.is_none());
+        assert!(
+            dialog.token.is_empty()
+                && dialog.connection.secret.is_empty()
+                && dialog.account.is_none()
+        );
     }
 }

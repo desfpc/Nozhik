@@ -18,6 +18,7 @@ type Result<T> = std::result::Result<T, VcsError>;
 #[derive(Default)]
 pub struct GitWorker {
     repo: Option<Repository>,
+    session: crate::connection::Session,
 }
 impl GitWorker {
     #[allow(
@@ -27,6 +28,7 @@ impl GitWorker {
     pub fn execute(&mut self, task: Task) -> Result<Outcome> {
         if let Task::Open(path) = task {
             self.repo = None;
+            self.session = crate::connection::Session::default();
             match Repository::discover(path) {
                 Ok(repo) if !repo.is_bare() => self.repo = Some(repo),
                 Ok(_) => return Ok(Outcome::Status(None)),
@@ -41,8 +43,75 @@ impl GitWorker {
             .repo
             .as_mut()
             .ok_or_else(|| invalid("Open a Git repository first"))?;
+        let authentication = if matches!(
+            &task,
+            Task::Fetch | Task::Push | Task::Pull | Task::PullPush
+        ) {
+            self.session.authentication(&crate::connection::read(repo)?)
+        } else {
+            crate::clone::Authentication::Automatic
+        };
         let message = match task {
+            Task::GitSettings => return Ok(Outcome::GitSettings(crate::connection::read(repo)?)),
+            Task::SaveGitSettings {
+                expected,
+                settings,
+                authentication,
+            } => {
+                if authentication.profile() != settings.auth {
+                    return Err(invalid(
+                        "Authentication does not match the selected profile",
+                    ));
+                }
+                let settings = crate::connection::save(repo, &expected, settings)?;
+                self.session.replace(settings.clone(), authentication);
+                return Ok(Outcome::GitSettings(settings));
+            }
+            Task::Authenticate(credentials) => {
+                let settings = crate::connection::read(repo)?;
+                let authentication = credentials.authentication;
+                if settings.remote_url != credentials.url
+                    || !settings.push_url.is_empty()
+                    || authentication.profile() != settings.auth
+                {
+                    return Err(invalid(
+                        "Clone authentication no longer matches repository settings",
+                    ));
+                }
+                self.session.replace(settings, authentication);
+                "Git session credentials configured"
+            }
+            Task::TestGitConnection {
+                mut settings,
+                authentication,
+            } => {
+                crate::connection::validate(&mut settings)?;
+                if settings.credential_helper != crate::connection::read(repo)?.credential_helper {
+                    return Err(invalid(
+                        "Save the credential helper before testing the connection.",
+                    ));
+                }
+                if authentication.profile() != settings.auth {
+                    return Err(invalid(
+                        "Authentication does not match the selected profile",
+                    ));
+                }
+                let mut candidate = crate::connection::Session::default();
+                candidate.replace(settings.clone(), authentication);
+                // Reuse current credentials only for unchanged endpoints/profile and blank secret fields.
+                let candidate_auth = candidate.authentication(&settings);
+                let auth = if candidate_auth.has_secret() {
+                    candidate_auth
+                } else {
+                    self.session.authentication(&settings)
+                };
+                test_connection(repo, &settings.remote_url, &auth)?;
+                "Git fetch connection successful"
+            }
             Task::Refresh => return self.snapshot(),
+            Task::CommitContext => {
+                return Ok(Outcome::CommitContext(crate::commit_context::read(repo)?));
+            }
             Task::Stage { paths, staged } => {
                 stage(repo, &paths, staged)?;
                 "Index updated"
@@ -75,7 +144,7 @@ impl GitWorker {
             Task::HistoryAction(request) => return crate::history_actions::execute(repo, request),
             Task::PullPush => {
                 require_clean(repo)?;
-                fetch(repo)?;
+                fetch(repo, &authentication)?;
                 let name = repo.head()?.shorthand()?.to_owned();
                 let upstream = repo.find_branch(&name, BranchType::Local)?.upstream()?;
                 if !upstream
@@ -89,7 +158,7 @@ impl GitWorker {
                 let (ahead, behind) = repo.graph_ahead_behind(head.id(), target.id())?;
                 if behind > 0 {
                     if ahead == 0 {
-                        pull(repo)?;
+                        pull(repo, &authentication)?;
                     } else {
                         let upstream_name = upstream
                             .name()?
@@ -103,19 +172,19 @@ impl GitWorker {
                         }
                     }
                 }
-                push(repo)?;
+                push(repo, &authentication)?;
                 "Pulled and pushed origin"
             }
             Task::Fetch => {
-                fetch(repo)?;
+                fetch(repo, &authentication)?;
                 "Fetched origin"
             }
             Task::Push => {
-                push(repo)?;
+                push(repo, &authentication)?;
                 "Pushed origin"
             }
             Task::Pull => {
-                pull(repo)?;
+                pull(repo, &authentication)?;
                 "Branch is up to date"
             }
             Task::Checkout(name) => {
@@ -187,6 +256,10 @@ impl GitWorker {
             Task::Ignore(path) => {
                 ignore_file(repo, &path)?;
                 "Added to .gitignore (tracked files remain tracked)"
+            }
+            Task::IgnoreFolder(path) => {
+                append_ignore(repo, &format!("{}/", ignore_path_pattern(&path)?))?;
+                "Added folder to .gitignore (tracked files remain tracked)"
             }
             Task::Open(_) => return Err(invalid("Unexpected open command")),
         };
@@ -527,7 +600,9 @@ fn commit(repo: &Repository, summary: &str, body: &str) -> Result<CommitInfo> {
         return Err(invalid("No staged changes to commit"));
     }
     let tree = repo.find_tree(index.write_tree()?)?;
-    let author = repo.signature()?;
+    let author = repo.signature().map_err(|_| {
+        invalid("Configure the commit author name and email in project Settings → Git.")
+    })?;
     let message = if body.trim().is_empty() {
         summary.to_owned()
     } else {
@@ -749,34 +824,67 @@ pub fn checkout(repo: &Repository, name: &str, create: bool) -> Result<()> {
     repo.set_head(reference.name()?)?;
     Ok(())
 }
-fn callbacks() -> std::result::Result<git2::RemoteCallbacks<'static>, git2::Error> {
-    let config = git2::Config::open_default()?;
+fn callbacks(
+    repo: &Repository,
+    auth: &crate::clone::Authentication,
+    expected_url: &str,
+) -> Result<git2::RemoteCallbacks<'static>> {
+    let config = repo.config()?;
+    let auth = auth.clone();
+    let expected_url = expected_url.to_owned();
     let mut callbacks = git2::RemoteCallbacks::new();
+    let mut attempts = 0;
     callbacks.credentials(move |url, username, allowed| {
-        if allowed.contains(git2::CredentialType::SSH_KEY) {
-            return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
+        attempts += 1;
+        if url != expected_url || attempts > 4 {
+            return Err(git2::Error::from_str(
+                "Authentication failed. Check project Settings → Git.",
+            ));
         }
-        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            return git2::Cred::credential_helper(&config, url, username);
-        }
-        if allowed.contains(git2::CredentialType::USERNAME) {
-            return git2::Cred::username(username.unwrap_or("git"));
-        }
-        git2::Cred::default()
+        crate::clone::credentials(&auth, url, username, allowed, &config)
     });
     callbacks.push_update_reference(|_, status| {
         status.map_or(Ok(()), |message| Err(git2::Error::from_str(message)))
     });
     Ok(callbacks)
 }
-fn fetch(repo: &Repository) -> Result<()> {
-    let mut remote = repo.find_remote("origin")?;
-    let mut options = git2::FetchOptions::new();
-    options.remote_callbacks(callbacks()?);
-    remote.fetch(&[] as &[&str], Some(&mut options), None)?;
+fn test_connection(
+    repo: &Repository,
+    url: &str,
+    auth: &crate::clone::Authentication,
+) -> Result<()> {
+    if url.is_empty() {
+        return Err(invalid("Enter an origin URL"));
+    }
+    crate::transport_error::credentials_ready(auth)?;
+    let mut remote = repo.remote_anonymous(url)?;
+    let connection = remote
+        .connect_auth(
+            git2::Direction::Fetch,
+            Some(callbacks(repo, auth, url)?),
+            None,
+        )
+        .map_err(|error| crate::transport_error::explain("Connection", url, &error))?;
+    // Keep the RAII connection alive for the full test; dropping it disconnects.
+    connection
+        .list()
+        .map_err(|error| crate::transport_error::explain("Connection", url, &error))?;
     Ok(())
 }
-fn push(repo: &Repository) -> Result<()> {
+fn fetch(repo: &Repository, authentication: &crate::clone::Authentication) -> Result<()> {
+    crate::transport_error::credentials_ready(authentication)?;
+    let mut remote = repo.find_remote("origin")?;
+    let mut options = git2::FetchOptions::new();
+    options.remote_callbacks(callbacks(repo, authentication, remote.url()?)?);
+    remote
+        .fetch(&[] as &[&str], Some(&mut options), None)
+        .map_err(|error| {
+            crate::transport_error::explain("Fetch", remote.url().unwrap_or(""), &error)
+        })?;
+    Ok(())
+}
+fn push(repo: &Repository, authentication: &crate::clone::Authentication) -> Result<()> {
+    crate::transport_error::credentials_ready(authentication)?;
     let head = repo.head()?;
     if !head.is_branch() {
         return Err(invalid("Cannot push detached HEAD"));
@@ -793,9 +901,23 @@ fn push(repo: &Repository) -> Result<()> {
         .unwrap_or(name);
     let spec = format!("refs/heads/{name}:refs/heads/{destination}");
     let mut options = git2::PushOptions::new();
-    options.remote_callbacks(callbacks()?);
-    repo.find_remote("origin")?
-        .push(&[&spec], Some(&mut options))?;
+    let mut remote = repo.find_remote("origin")?;
+    options.remote_callbacks(callbacks(
+        repo,
+        authentication,
+        remote.pushurl()?.unwrap_or(remote.url()?),
+    )?);
+    remote.push(&[&spec], Some(&mut options)).map_err(|error| {
+        crate::transport_error::explain(
+            "Push",
+            remote
+                .pushurl()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| remote.url().unwrap_or("")),
+            &error,
+        )
+    })?;
     let establish = upstream.is_none();
     drop(upstream);
     if establish {
@@ -803,9 +925,9 @@ fn push(repo: &Repository) -> Result<()> {
     }
     Ok(())
 }
-fn pull(repo: &Repository) -> Result<()> {
+fn pull(repo: &Repository, authentication: &crate::clone::Authentication) -> Result<()> {
     require_clean(repo)?;
-    fetch(repo)?;
+    fetch(repo, authentication)?;
     let mut head = repo.head()?;
     let name = head.shorthand()?;
     if !head.is_branch() {
@@ -893,6 +1015,9 @@ fn discard(repo: &Repository, path: &Path) -> Result<()> {
     Ok(())
 }
 fn ignore_file(repo: &Repository, path: &Path) -> Result<()> {
+    append_ignore(repo, &ignore_path_pattern(path)?)
+}
+fn ignore_path_pattern(path: &Path) -> Result<String> {
     validate_path(path)?;
     let text = path
         .to_str()
@@ -908,7 +1033,7 @@ fn ignore_file(repo: &Repository, path: &Path) -> Result<()> {
         }
         pattern.push(ch);
     }
-    append_ignore(repo, &pattern)
+    Ok(pattern)
 }
 fn append_ignore(repo: &Repository, pattern: &str) -> Result<()> {
     let destination = workdir(repo)?.join(".gitignore");

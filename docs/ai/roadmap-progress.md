@@ -2379,3 +2379,188 @@ ZIP integrity, версия 0.1.10 в plist, совпадение четырёх
 и codesign --verify --deep --strict распакованного bundle подтверждены.
 UI-логика не менялась; native GUI, Windows build/Clippy и live DB tests не
 запускались. Windows-кэш не создавался; commit/push не выполнялись.
+
+### Игнорирование директорий из Git Changes (v0.1.10, 2026-11-02)
+
+Сразу под игнором выбранных файлов добавлен `Ignore Folder (Add to .gitignore)`
+в существующем стиле меню. Клик по названию игнорирует родительскую папку файла
+под правым кликом (также при multiselect); правая стрелка открывает стандартное
+submenu egui с предками от ближайшего к верхнему, исключая корень репозитория.
+Для `.nozhik/logs/log.txt` доступны `.nozhik/logs` и `.nozhik`; для файла в корне
+действие отключено. Mutation busy gate сохранён.
+
+`Task::IgnoreFolder` работает на serial Git worker, использует общую с Ignore
+валидацию и экранирование, добавляя anchored directory-only pattern `/folder/`
+в корневой `.gitignore`. Tracked entries не удаляются из index. Добавлены тест
+worker для вложенности/anchoring/спецсимволов/недопустимых путей/сохранения tracked
+entries и headless egui-регрессия с реальными pointer events для прямого клика,
+открытия стрелкой без записи и выбора каждого из двух предков.
+Workspace/Cargo.lock/UI/bundle — 0.1.10, следующая версия — 0.1.11.
+
+Проверки: полный native workspace/all-features test — 227 passed, 0 failed,
+5 existing system/live tests ignored. Первый sandbox-прогон блокировал
+существующие localhost TCP mocks с PermissionDenied; повторный полный прогон
+с system access прошёл. Native Clippy workspace/all-targets/all-features
+с -D warnings, rustfmt, workspace release build и git diff --check прошли.
+macOS ARM64 executable и подписанный app archive обновлены update-binaries.py;
+--check подтвердил source fingerprint и SHA-256 payload. UI проверен headless
+через pointer events; нативное GUI-окно в этой итерации не запускалось.
+Windows build/Clippy/GUI, commit и push не выполнялись.
+
+### AI-заполнение сообщения коммита (v0.1.11, 2026-11-02)
+
+Над Summary/Description добавлена `Auto-fill Commit Message`, доступная при
+включённом AI completion, выбранной модели и хотя бы одном staged-файле.
+Кнопка использует ту же локальную Ollama/ai_model, работает асинхронно и показывает
+Generating/Cancel. Модель возвращает редактируемые английские summary/description;
+коммит создаётся только прежней кнопкой. Ошибка сохраняет прежний текст формы.
+
+Новый read-only Git task CommitContext передаёт ограниченный HEAD→index patch,
+без unstaged/unsaved/untracked contents, с binary metadata и truncation marker
+при превышении 24 KiB. Index перечитывается с диска. Fingerprint HEAD/ref и всех
+index entries проверяется повторно после HTTP-ответа. Ручное изменение формы,
+Cancel, изменение AI enabled/model, проекта, Git mutation и shutdown отменяют
+запрос; stale replies не перезаписывают поля. Модели не скачиваются автоматически.
+
+Ollama transport использует schema summary/description и отдельные от FIM options:
+512 tokens, context 16384, deadline 120s, bounded response 64 KiB. Некорректные поля,
+незавершённая/оборванная генерация отклоняются. Тест worker проверяет staged-only,
+unborn HEAD, отсутствие index writes, большие Unicode patch и изменение identity.
+HTTP mock проверяет schema/model/options, multiline description и invalid output.
+Pointer-driven egui проверяет положение кнопки, disabled states, заполнение формы,
+ошибку HTTP, Cancel/disable с закрытием соединения, ручные правки, внешнее изменение
+index и отсутствие автоматического коммита. Добавлен ignored live Ollama smoke
+на синтетическом diff. Workspace/Cargo.lock/UI/bundle — 0.1.11, следующая — 0.1.12.
+
+Верификация v0.1.11: полный native workspace/all-features test с system access
+для локальных TCP mocks — 230 passed, 0 failed, 6 ignored (включая новый live smoke).
+Live smoke отдельно выполнен на установленной локальной qwen2.5-coder:1.5b-base
+с искусственным diff замены вычитания на сложение: получены summary/description.
+Пользовательские изменения в live-запрос не отправлялись. После сокращения
+Generating… для узкой панели pointer-driven AI regression повторно прошла.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt,
+workspace release build и git diff --check прошли. Нативное GUI-окно не запускалось;
+Windows build/Clippy/GUI, commit и push не выполнялись.
+macOS ARM64 executable и подписанный Nozhik.app.zip обновлены через
+update-binaries.py после всех правок; --check подтвердил source fingerprint
+и SHA-256 payload. Windows-кэш не создавался.
+
+### Настройки Git проекта и общая аутентификация (v0.1.12, 2026-11-02)
+
+Settings → Git доступен для любого открытого репозитория, включая проект,
+клонированный сторонним клиентом и открытый как папка. Форма показывает repo root,
+origin fetch URL, отдельный optional push URL, commit author name/email,
+authentication (system/helper/agent, HTTPS token, login/password, SSH key/passphrase)
+и credential helper. Save/Reload/Test работают через serial Git worker; общий
+AuthFields используется также в Clone Repository. Обычный Config auto-save не меняет
+Git config — для него есть явная Save Git Settings.
+
+Новые GitSettings/AuthProfile/AuthMethod содержат только несекретные поля.
+SaveGitSettings проверяет входные поля, protocol/auth compatibility и stale snapshot,
+записывает common-dir config атомарно под стандартным config.lock с сохранением
+прочих ключей/permissions. Секреты не сериализуются. Пустые identity/helper overrides
+используют системные настройки; прежний push URL при пустом поле заменяется fetch URL.
+Origin changes не меняют refs/index/worktree и не запускают сеть. После смены origin
+нужно явно сделать Fetch для актуализации remote-tracking refs.
+
+Fetch/Pull/Push теперь используют repository-local Git credential config и общую
+с clone credential resolution, с session Authentication для выбранных endpoint/profile.
+Внешнее изменение URL/method прекращает использование старого секрета; callbacks
+не передают credentials при redirect и ограничивают число попыток. TLS/SSH trust
+проверки сохранены. Sanitized transport errors указывают Settings → Git; ошибки
+commit identity отдельно указывают поля автора. Test Fetch Connection не сохраняет
+черновик/refs и не проверяет push permissions; изменённый helper сначала сохраняется.
+
+Clone сохраняет только nozhik.auth.method/username/keypath, затем передаёт
+Credentials { url, authentication } с путём в workspace prepared-open request
+целевого проекта. Authenticate ставится после Open и повторно проверяет исходный
+URL, отсутствие нового push URL и соответствие profile. Это исключает применение
+clone token после внешней смены remote. Dialog secrets очищаются после передачи;
+проект хранит их только в zeroizing session memory до закрытия. После повторного
+открытия токен/пароль требуется заново, либо используется helper/SSH agent.
+При отмене/ошибке открытия credentials отбрасываются; глобального credential cache нет.
+
+Новые backend-регрессии проверяют local helper, author identity/local commit,
+origin/push URL, отсутствие secret на диске, сохранение matching session credentials,
+повторное открытие без секретов, stale/invalid/config.lock gates, read-only connection
+test и отказ clone credentials при смене URL до Open. Pointer-driven UI проверяет
+навигацию Settings → Git, редактирование полей и методов, Save/Reload/Test и отсутствие
+записи токена. Дополнительные регрессии проверяют transfer/очистку clone dialog и
+порядок Open→Authenticate. Workspace/Cargo.lock/UI/bundle — 0.1.12; следующая — 0.1.13.
+
+Проверки v0.1.12: полный native workspace/all-features test с system access для
+локальных TCP mocks — 238 passed, 0 failed, 6 existing optional system/live tests
+ignored. Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt,
+workspace release build и git diff --check прошли. macOS ARM64 executable и
+подписанный Nozhik.app.zip обновлены update-binaries.py; --check подтвердил source
+fingerprint и SHA-256 payload. Windows-кэш не создавался. Нативное GUI-окно и
+реальная авторизация на GitHub/SSH не проверялись; UI проверен headless pointer
+regressions, transport/helpers — на временных локальных fixtures. Реальные remotes,
+user identity, credentials и настройки пользователя не менялись. Windows build/Clippy,
+commit и push не выполнялись.
+
+### GitHub token access diagnostics (v0.1.13, 2026-11-02)
+
+По явному разрешению пользователя выполнена read-only проверка переданного PAT:
+GitHub /user подтвердил его валидность (200), repository metadata/contents вернули
+404, Git upload-pack advertisement вернул 403 с отказом доступа. Токен не записывался
+в файлы, Git config, process arguments или вывод; вводился через stdin с отключённым
+echo. Сразу после диагностики пользователю сообщено о завершении и необходимости
+отозвать раскрытый token. Никаких commits/push/config writes на реальном проекте
+не было. Результат указывает на доступ token к репозиторию/permissions, а не TLS.
+
+Общая ошибка v0.1.12 скрывала HTTP status. Новый transport_error формирует фиксированные
+сообщения для 401/auth, 403 (GitHub Resource owner/repo/Contents/approval), 404/private
+repo, TLS/SSH, DNS/network, proxy, rate limits, server errors и non-fast-forward.
+Raw error body/URL/credentials по-прежнему не выводятся. Пустые session secrets
+обнаруживаются до сети; token whitespace trimmed, USERNAME использует x-access-token.
+Test удерживает RAII connection до чтения advertised refs, без двойного disconnect.
+
+Добавлены проверка safe diagnostics с фиктивным server-echo secret, HTTP mock
+401→Basic auth→403 с фиктивным токеном и ignored live diagnostic с URL/token на stdin.
+Пользовательские token/URL не зашиты в тестах. Workspace/Cargo.lock/UI/bundle — 0.1.13,
+следующая версия — 0.1.14.
+
+Верификация v0.1.13: полный native workspace/all-features test с system access
+для localhost mocks — 240 passed, 0 failed, 7 ignored. Новый live GitHub
+diagnostic не входит в обычный прогон; разрешённая live-проверка выше воспроизвела
+403, после неё реальный токен больше не использовался. Новый unit-тест выявил
+обработку HTTP code с пунктуацией после числа; parser исправлен, финальный полный
+прогон прошёл. Native Clippy workspace/all-targets/all-features с -D warnings,
+rustfmt, workspace release build и git diff --check прошли. macOS ARM64 executable
+и подписанный app archive обновлены update-binaries.py; --check подтвердил source
+fingerprint и SHA-256 payload. Windows build/Clippy/GUI, native GUI, commit/push
+не выполнялись; Windows-кэш не создавался.
+
+
+### Слияние Git-доработок и смены лицензии (v0.1.14, 2026-11-02)
+
+Разрешены конфликты master/imp_0 в версиях и документации. Сохранены Source-Available
+LICENSE, CONTRIBUTING, THIRD_PARTY_NOTICES, наследование license-file во всех Cargo
+packages, legal collector и упаковка notices/sources в локальные дистрибутивы.
+Сохранены Git folder ignore, Ollama commit message generation, project Git settings,
+clone/session authentication и безопасная transport diagnostics ветки imp_0.
+Документация обеих веток объединена без удаления исторических записей. Версия
+workspace/Cargo.lock/UI/bundle — 0.1.14, следующая доработка — 0.1.15.
+
+Проверки merge: полный native workspace/all-features test с system access и
+--test-threads=2 — 240 passed, 0 failed, 7 ignored. Первый запуск сборок
+остановился из-за нехватки диска; после удаления incremental cache сборка прошла.
+Параллельный test/release прогон затем дал timeout существующего файлового UI-теста;
+повторный полный прогон без параллельной сборки и с двумя test threads прошёл.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt, workspace
+release build и git diff --check прошли. Все 14 Cargo packages через metadata
+проверены на 0.1.14 и наследование root LICENSE. Rust sources совпадают с imp_0,
+лицензионные файлы/collector/упаковка сохранены из master. macOS ARM64 executable
+и подписанный app archive обновлены update-binaries.py; --check подтвердил source
+fingerprint и payload hashes. В ZIP проверены версия bundle, четыре legal files
+с точным совпадением sidecars и целостность THIRD_PARTY_SOURCES.zip (1846 entries).
+Native GUI, Windows build/Clippy и реальные GitHub credentials не использовались.
+
+По отдельному запросу пользователя удалён весь генерируемый target через cargo clean
+(199913 files, 68.1 GiB logical), локальный Windows-комплект (53 MiB) и 16 untracked
+Finder .DS_Store. Измеренный allocated size проекта: 44.34 GiB →
+377.0 MiB, освобождено 43.97 GiB allocated storage.
+Исходники, .git/history, конфигурация и готовый macOS-комплект с legal materials
+сохранены. Windows source/build support сохранена; Windows-кэш не создавался.
+Проверки завершены до очистки; новая компиляция снова создаст target.

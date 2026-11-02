@@ -16,6 +16,7 @@ use std::{
 pub struct SessionLinks {
     pub managed: bool,
     pub open: Option<PathBuf>,
+    pub clone_auth: Option<nozhik_vcs::clone::Credentials>,
     pub entries: Vec<PathBuf>,
     pub switch: Option<usize>,
     pub close: Option<usize>,
@@ -53,6 +54,7 @@ pub fn project_name(path: &Path) -> String {
 
 type OpenResult = Result<(PathBuf, Option<(EventBus, ConfigManager, Config)>), String>;
 struct Prepared {
+    authentication: Option<nozhik_vcs::clone::Credentials>,
     origin: Option<PathBuf>,
     result: OpenResult,
 }
@@ -101,6 +103,14 @@ impl Workspace {
 
     /// Requests opening a folder in a new tab, or a file in the current project.
     pub fn open_path(&mut self, path: PathBuf, ctx: &Context) {
+        self.open_with_auth(path, ctx, None);
+    }
+    fn open_with_auth(
+        &mut self,
+        path: PathBuf,
+        ctx: &Context,
+        authentication: Option<nozhik_vcs::clone::Credentials>,
+    ) {
         self.current().status = format!("Opening {}…", path.display());
         self.opening += 1;
         let origin = self
@@ -122,7 +132,11 @@ impl Workspace {
                 let config = settings.snapshot().map_err(|e| e.to_string())?;
                 Ok((path, Some((bus, settings, config))))
             })();
-            let _sent = output.send(Prepared { origin, result });
+            let _sent = output.send(Prepared {
+                authentication,
+                origin,
+                result,
+            });
             wake.request_repaint();
         });
     }
@@ -176,6 +190,11 @@ impl Workspace {
                         .iter()
                         .position(|p| p.settings.path() == settings.path())
                     {
+                        if let Some(auth) = reply.authentication {
+                            self.projects[index]
+                                .vcs
+                                .run_global(nozhik_vcs::Task::Authenticate(auth));
+                        }
                         self.activate(index);
                         continue;
                     }
@@ -183,6 +202,7 @@ impl Workspace {
                     project.next_buffer_id = self.next_session.saturating_mul(1_000_000_000);
                     self.next_session += 1;
                     // Queue the initial root before enabling routing to this coordinator.
+                    project.vcs.clone_auth = reply.authentication;
                     project.open_project(path);
                     project.workspace.managed = true;
                     project.attach_runtime(ctx, &self.runtime);
@@ -239,6 +259,7 @@ impl Workspace {
             project.database_tick(ctx);
             project.language_tick(ctx);
             project.settings_tick(ctx);
+            project.vcs.configure_commit_ai(&project.config);
             project.vcs.tick_background(ctx);
             if let Some(terminal) = &mut project.terminal {
                 terminal.tick();
@@ -301,7 +322,8 @@ impl Workspace {
             ctx.request_repaint();
         }
         if let Some(path) = self.current().workspace.open.take() {
-            self.open_path(path, ctx);
+            let auth = self.current().workspace.clone_auth.take();
+            self.open_with_auth(path, ctx, auth);
         }
         if self.current().workspace.exit {
             self.current().workspace.exit = false;

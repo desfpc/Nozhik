@@ -159,7 +159,7 @@ fn local_origin_fetch_push_ahead_behind_and_fast_forward()
     stage(&repo, &["file.txt".into()], true)?;
     commit(&repo, "Base", "")?;
     let branch = status(&repo)?.branch;
-    push(&repo)?;
+    push(&repo, &crate::clone::Authentication::Automatic)?;
     assert!(status(&repo)?.has_upstream);
     assert_eq!(status(&repo)?.ahead, 0);
     remote.set_head(&format!("refs/heads/{branch}"))?;
@@ -175,10 +175,10 @@ fn local_origin_fetch_push_ahead_behind_and_fast_forward()
     fs::write(peer_dir.path().join("file.txt"), "base\nremote edit\n")?;
     stage(&peer, &["file.txt".into()], true)?;
     commit(&peer, "Remote commit", "")?;
-    push(&peer)?;
-    fetch(&repo)?;
+    push(&peer, &crate::clone::Authentication::Automatic)?;
+    fetch(&repo, &crate::clone::Authentication::Automatic)?;
     assert_eq!(status(&repo)?.behind, 1);
-    pull(&repo)?;
+    pull(&repo, &crate::clone::Authentication::Automatic)?;
     assert_eq!(
         fs::read_to_string(dir.path().join("file.txt"))?,
         "base\nremote edit\n"
@@ -190,9 +190,9 @@ fn local_origin_fetch_push_ahead_behind_and_fast_forward()
     fs::write(peer_dir.path().join("peer.txt"), "peer")?;
     stage(&peer, &["peer.txt".into()], true)?;
     commit(&peer, "Diverging commit", "")?;
-    push(&peer)?;
-    assert!(pull(&repo).is_err());
-    assert!(push(&repo).is_err());
+    push(&peer, &crate::clone::Authentication::Automatic)?;
+    assert!(pull(&repo, &crate::clone::Authentication::Automatic).is_err());
+    assert!(push(&repo, &crate::clone::Authentication::Automatic).is_err());
     assert_eq!(fs::read_to_string(dir.path().join("local.txt"))?, "local");
     let mut worker = GitWorker::default();
     worker.execute(Task::Open(dir.path().to_path_buf()))?;
@@ -205,10 +205,10 @@ fn local_origin_fetch_push_ahead_behind_and_fast_forward()
             .target(),
         repo.head()?.target()
     );
-    pull(&peer)?;
+    pull(&peer, &crate::clone::Authentication::Automatic)?;
     history_commit(&repo, "file.txt", "local conflict\n")?;
     history_commit(&peer, "file.txt", "remote conflict\n")?;
-    push(&peer)?;
+    push(&peer, &crate::clone::Authentication::Automatic)?;
     let remote_tip = peer.head()?.target();
     let result = worker.execute(Task::PullPush)?;
     assert!(matches!(result, Outcome::Done(message) if message.contains("then push")));
@@ -919,5 +919,406 @@ fn history_selected_files_keep_deletions_renames_and_encoded_historical_links()
             .iter()
             .all(|f| f.github_url.is_none())
     );
+    Ok(())
+}
+
+#[test]
+fn ignore_folder_is_anchored_escaped_and_preserves_tracked_files()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    fs::create_dir_all(dir.path().join(".nozhik/logs"))?;
+    fs::write(dir.path().join(".nozhik/logs/tracked.txt"), "tracked")?;
+    stage(&repo, &[".nozhik/logs/tracked.txt".into()], true)?;
+    commit(&repo, "Tracked log", "")?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    worker.execute(Task::IgnoreFolder(".nozhik/logs".into()))?;
+    assert!(repo.status_should_ignore(Path::new(".nozhik/logs/new.txt"))?);
+    assert!(!repo.status_should_ignore(Path::new(".nozhik/other.txt"))?);
+    assert!(!repo.status_should_ignore(Path::new("nested/.nozhik/logs/new.txt"))?);
+    assert!(
+        repo.index()?
+            .get_path(Path::new(".nozhik/logs/tracked.txt"), 0)
+            .is_some()
+    );
+    worker.execute(Task::IgnoreFolder("a[1] #!".into()))?;
+    assert!(repo.status_should_ignore(Path::new("a[1] #!/child.txt"))?);
+    assert!(!repo.status_should_ignore(Path::new("a1 #!/child.txt"))?);
+    let before = fs::read_to_string(dir.path().join(".gitignore"))?;
+    assert!(before.contains("/.nozhik/logs/\n"));
+    for path in [
+        "",
+        ".",
+        "..",
+        "../outside",
+        "/absolute",
+        ".git",
+        "bad\nfolder",
+    ] {
+        assert!(worker.execute(Task::IgnoreFolder(path.into())).is_err());
+    }
+    assert_eq!(fs::read_to_string(dir.path().join(".gitignore"))?, before);
+    Ok(())
+}
+
+#[test]
+fn commit_context_reads_only_staged_contents_and_bounds_large_patches()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    assert!(worker.execute(Task::CommitContext).is_err());
+    fs::write(dir.path().join("chosen.txt"), "staged version\n")?;
+    stage(&repo, &["chosen.txt".into()], true)?;
+    fs::write(dir.path().join("chosen.txt"), "unstaged secret\n")?;
+    fs::write(dir.path().join("unselected.txt"), "unselected secret\n")?;
+    let before = fs::read(repo.path().join("index"))?;
+    let Outcome::CommitContext(first) = worker.execute(Task::CommitContext)? else {
+        return Err("missing context".into());
+    };
+    assert!(first.patch.contains("+staged version"));
+    assert!(!first.patch.contains("unstaged secret"));
+    assert!(!first.patch.contains("unselected"));
+    assert_eq!(fs::read(repo.path().join("index"))?, before);
+    let Outcome::CommitContext(same) = worker.execute(Task::CommitContext)? else {
+        return Err("missing context".into());
+    };
+    assert_eq!(same.fingerprint, first.fingerprint);
+    fs::write(dir.path().join("large.txt"), "unicode 🦀\n".repeat(10_000))?;
+    stage(&repo, &["large.txt".into()], true)?;
+    let Outcome::CommitContext(large) = worker.execute(Task::CommitContext)? else {
+        return Err("missing context".into());
+    };
+    assert_ne!(large.fingerprint, first.fingerprint);
+    assert!(large.patch.len() < 25 * 1024);
+    assert!(large.patch.contains("[Staged diff truncated"));
+    fs::write(
+        dir.path().join("large.txt"),
+        "changed beyond limit\n".repeat(10_000),
+    )?;
+    stage(&repo, &["large.txt".into()], true)?;
+    let Outcome::CommitContext(changed) = worker.execute(Task::CommitContext)? else {
+        return Err("missing context".into());
+    };
+    assert_ne!(large.fingerprint, changed.fingerprint);
+    Ok(())
+}
+
+#[test]
+fn project_git_settings_persist_identity_remotes_and_keep_secrets_in_session()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        clone::Authentication,
+        connection::{AuthMethod, GitSettings},
+    };
+    let (dir, repo) = repository()?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    let Outcome::GitSettings(original) = worker.execute(Task::GitSettings)? else {
+        return Err("missing settings".into());
+    };
+    let auth = Authentication::Token(zeroize::Zeroizing::new("dummy-session-token".into()));
+    let requested = GitSettings {
+        remote_url: "owner/repo".into(),
+        push_url: "https://github.com/owner/other.git".into(),
+        author_name: "Project Author".into(),
+        author_email: "author@example.invalid".into(),
+        auth: auth.profile(),
+        ..original.clone()
+    };
+    let Outcome::GitSettings(saved) = worker.execute(Task::SaveGitSettings {
+        expected: original,
+        settings: requested,
+        authentication: auth,
+    })?
+    else {
+        return Err("missing saved settings".into());
+    };
+    assert_eq!(saved.remote_url, "https://github.com/owner/repo");
+    assert_eq!(
+        repo.find_remote("origin")?.pushurl()?,
+        Some("https://github.com/owner/other.git")
+    );
+    assert_eq!(repo.signature()?.name()?, "Project Author");
+    assert_eq!(repo.signature()?.email()?, "author@example.invalid");
+    assert!(
+        matches!(worker.session.authentication(&saved), Authentication::Token(token) if token.as_str() == "dummy-session-token")
+    );
+    let blank_auth = Authentication::Token(zeroize::Zeroizing::default());
+    worker.execute(Task::SaveGitSettings {
+        expected: saved.clone(),
+        settings: saved.clone(),
+        authentication: blank_auth,
+    })?;
+    assert!(
+        matches!(worker.session.authentication(&saved), Authentication::Token(token) if token.as_str() == "dummy-session-token")
+    );
+    let config = fs::read_to_string(repo.commondir().join("config"))?;
+    assert!(!config.contains("dummy-session-token"));
+    assert!(!repo.commondir().join("config.lock").exists());
+    fs::write(dir.path().join("file.txt"), "new")?;
+    worker.execute(Task::Stage {
+        paths: vec!["file.txt".into()],
+        staged: true,
+    })?;
+    worker.execute(Task::Commit {
+        summary: "Local commit".into(),
+        body: String::new(),
+    })?;
+    assert_eq!(
+        repo.head()?.peel_to_commit()?.author().name()?,
+        "Project Author"
+    );
+    let mut fresh = GitWorker::default();
+    fresh.execute(Task::Open(dir.path().into()))?;
+    let Outcome::GitSettings(reloaded) = fresh.execute(Task::GitSettings)? else {
+        return Err("missing reloaded settings".into());
+    };
+    assert_eq!(reloaded.auth.method, AuthMethod::Token);
+    assert!(
+        matches!(fresh.session.authentication(&reloaded), Authentication::Token(token) if token.is_empty())
+    );
+    // External endpoint edits never inherit the old endpoint's session secret.
+    repo.remote_set_url("origin", "https://github.com/another/repo")?;
+    let current = crate::connection::read(&repo)?;
+    assert!(
+        matches!(worker.session.authentication(&current), Authentication::Token(token) if token.is_empty())
+    );
+    let before = fs::read(repo.commondir().join("config"))?;
+    assert!(
+        worker
+            .execute(Task::SaveGitSettings {
+                expected: saved.clone(),
+                settings: saved,
+                authentication: Authentication::Token(zeroize::Zeroizing::default())
+            })
+            .is_err()
+    );
+    assert_eq!(fs::read(repo.commondir().join("config"))?, before);
+    assert!(!repo.commondir().join("config.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn project_git_settings_validate_before_writing_and_test_local_remote()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::clone::Authentication;
+    let (dir, repo) = repository()?;
+    let remote_dir = tempfile::tempdir()?;
+    Repository::init_bare(remote_dir.path())?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    let expected = crate::connection::read(&repo)?;
+    let mut settings = expected.clone();
+    settings.remote_url = remote_dir.path().display().to_string();
+    let before = fs::read(repo.commondir().join("config"))?;
+    worker.execute(Task::TestGitConnection {
+        settings: settings.clone(),
+        authentication: Authentication::Automatic,
+    })?;
+    assert_eq!(
+        fs::read(repo.commondir().join("config"))?,
+        before,
+        "connection test must not save"
+    );
+    worker.execute(Task::SaveGitSettings {
+        expected,
+        settings,
+        authentication: Authentication::Automatic,
+    })?;
+    worker.execute(Task::Fetch)?;
+    let saved = crate::connection::read(&repo)?;
+    for invalid_url in [
+        "https://user:dummy-password@host/repo",
+        "https://host/repo?token=dummy",
+        "invalid",
+        "\n",
+    ] {
+        let mut invalid_settings = saved.clone();
+        invalid_settings.remote_url = invalid_url.into();
+        let before = fs::read(repo.commondir().join("config"))?;
+        assert!(
+            worker
+                .execute(Task::SaveGitSettings {
+                    expected: saved.clone(),
+                    settings: invalid_settings,
+                    authentication: Authentication::Automatic
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(repo.commondir().join("config"))?, before);
+    }
+    fs::write(repo.commondir().join("config.lock"), "external Git lock")?;
+    assert!(
+        worker
+            .execute(Task::SaveGitSettings {
+                expected: saved.clone(),
+                settings: saved,
+                authentication: Authentication::Automatic
+            })
+            .is_err()
+    );
+    assert_eq!(
+        fs::read_to_string(repo.commondir().join("config.lock"))?,
+        "external Git lock"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn automatic_git_authentication_uses_repository_local_helper()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo) = repository()?;
+    repo.config()?.set_str(
+        "credential.helper",
+        "!f() { printf 'username=local-test-user\\npassword=local-test-secret\\n'; }; f",
+    )?;
+    let config = repo.config()?;
+    let helper = git2::CredentialHelper::new("https://example.invalid/owner/repo")
+        .config(&config)
+        .execute();
+    assert!(
+        matches!(helper, Some((user, password)) if user == "local-test-user" && password == "local-test-secret")
+    );
+    let credential = crate::clone::credentials(
+        &crate::clone::Authentication::Automatic,
+        "https://example.invalid/owner/repo",
+        None,
+        git2::CredentialType::USER_PASS_PLAINTEXT,
+        &config,
+    )?;
+    assert!(credential.has_username());
+    Ok(())
+}
+
+#[test]
+fn clone_credentials_refuse_an_origin_changed_before_project_open()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    repo.remote("origin", "https://github.com/example/original")?;
+    let auth =
+        crate::clone::Authentication::Token(zeroize::Zeroizing::new("dummy-clone-secret".into()));
+    crate::connection::remember_clone(&repo, &auth)?;
+    repo.remote_set_url("origin", "https://github.com/example/changed")?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    assert!(
+        worker
+            .execute(Task::Authenticate(crate::clone::Credentials {
+                url: "https://github.com/example/original".into(),
+                authentication: auth,
+            }))
+            .is_err()
+    );
+    let settings = crate::connection::read(&repo)?;
+    assert!(
+        matches!(worker.session.authentication(&settings), crate::clone::Authentication::Token(secret) if secret.is_empty())
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "Requires URL and session token on stdin; read-only GitHub connection"]
+fn live_github_token_connection() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::io::BufRead;
+    let input = std::io::stdin();
+    let mut input = input.lock();
+    let mut url = String::new();
+    input.read_line(&mut url)?;
+    let url = crate::clone::normalize_url(url.trim())?;
+    let mut token = zeroize::Zeroizing::new(String::new());
+    input.read_line(&mut token)?;
+    drop(input);
+    if token.trim().is_empty() {
+        return Err("No token supplied".into());
+    }
+    let directory = tempfile::tempdir()?;
+    let repo = Repository::init(directory.path())?;
+    let auth = crate::clone::Authentication::Token(token);
+    let mut remote = repo.remote_anonymous(&url)?;
+    let result = remote.connect_auth(
+        git2::Direction::Fetch,
+        Some(callbacks(&repo, &auth, &url)?),
+        None,
+    );
+    match result {
+        Ok(connection) => {
+            println!(
+                "GitHub libgit2 connection: successful; {} advertised refs",
+                connection.list()?.len()
+            );
+        }
+        Err(error) => {
+            return Err(crate::transport_error::explain("Connection", &url, &error).into());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn token_connection_sends_basic_credentials_and_reports_http_403()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    let (_dir, repo) = repository()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let url = format!("http://{}/repo.git", listener.local_addr()?);
+    let server = std::thread::spawn(move || -> std::result::Result<(), String> {
+        for attempt in 0..2 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut socket, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err("mock accept timeout".into());
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            };
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .map_err(|error| error.to_string())?;
+            let mut request = Vec::new();
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let mut buffer = [0; 2048];
+                let count = socket
+                    .read(&mut buffer)
+                    .map_err(|error| error.to_string())?;
+                if count == 0 || request.len() > 16 * 1024 {
+                    return Err("invalid mock request".into());
+                }
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            if attempt == 0 {
+                assert!(!request.contains("authorization:"));
+                socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"Git\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").map_err(|error| error.to_string())?;
+            } else {
+                // Base64 of the fixed dummy pair x-access-token:dummy-token, never a real credential.
+                assert!(
+                    request.contains("authorization: basic ec1hy2nlc3mtdg9rzw46zhvtbxktdg9rzw4=")
+                );
+                socket
+                    .write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    });
+    let auth =
+        crate::clone::Authentication::Token(zeroize::Zeroizing::new(" dummy-token \n".into()));
+    let error = test_connection(&repo, &url, &auth)
+        .err()
+        .ok_or("expected HTTP 403")?;
+    let message = error.to_string();
+    assert!(message.contains("HTTP 403"), "{message}");
+    assert!(!message.contains("dummy-token"));
+    server.join().map_err(|_| "mock server panicked")??;
     Ok(())
 }

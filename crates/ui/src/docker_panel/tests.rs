@@ -260,3 +260,64 @@ fn verify_console(shell: &mut NozhikUi, ctx: &egui::Context) -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn refresh_does_not_shift_container_list() {
+    for width in [180.0, 280.0, 420.0] {
+        let ctx = egui::Context::default();
+        let mut state = DockerUi::default();
+        let mut idle_position = None;
+        for (busy, user_operation) in [(false, false), (true, false), (true, true), (false, false)]
+        {
+            state.busy = busy.then_some(1);
+            state.user_operation = user_operation;
+            // Allow egui's layout sizing to settle before comparing frames.
+            for pass in 0..2 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 600.0))),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            panel_header(ui, &mut state);
+                            ui.label("Container list");
+                        });
+                    },
+                );
+                assert!(text(&output, "Docker operation…").is_none());
+                assert!(text(&output, "Cancel").is_some());
+                let position = text(&output, "Container list");
+                assert!(position.is_some());
+                if pass == 1 {
+                    if let Some(idle) = idle_position {
+                        assert_eq!(position, Some(idle), "toolbar shifted at width {width}");
+                    } else {
+                        idle_position = position;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn spinner_only_appears_for_user_requests() {
+    let ctx = egui::Context::default();
+    let mut state = DockerUi::default();
+    for (busy, user_operation) in [(false, false), (true, false), (true, true), (false, true)] {
+        state.busy = busy.then_some(1);
+        state.user_operation = user_operation;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                operation_indicator(ui, &state);
+            });
+        });
+        let spinner_paths = output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Path(_)))
+            .count();
+        assert_eq!(spinner_paths, usize::from(busy && user_operation));
+    }
+}

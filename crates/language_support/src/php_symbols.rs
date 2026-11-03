@@ -480,34 +480,29 @@ fn push_reference(
 }
 fn reference_location(name: Node<'_>, source: &str, path: &Path) -> ReferenceLocation {
     let byte = name.start_byte();
-    let line_start = byte.saturating_sub(name.start_position().column);
+    let (preview, preview_offset) = crate::symbol_index::reference_preview(source, byte);
     ReferenceLocation {
         path: path.into(),
         byte,
         length: name.byte_range().len(),
         line: u32::try_from(name.start_position().row).unwrap_or(u32::MAX),
         column: u32::try_from(name.start_position().column).unwrap_or(u32::MAX),
-        preview: source
-            .get(line_start..)
-            .and_then(|s| s.lines().next())
-            .unwrap_or("")
-            .into(),
+        preview,
+        preview_offset,
     }
 }
 fn location_at(byte: usize, length: usize, source: &str, path: &Path) -> ReferenceLocation {
     let before = source.get(..byte).unwrap_or("");
     let line_start = before.rfind('\n').map_or(0, |n| n + 1);
+    let (preview, preview_offset) = crate::symbol_index::reference_preview(source, byte);
     ReferenceLocation {
         path: path.into(),
         byte,
         length,
         line: u32::try_from(before.bytes().filter(|b| *b == b'\n').count()).unwrap_or(u32::MAX),
         column: u32::try_from(byte - line_start).unwrap_or(u32::MAX),
-        preview: source
-            .get(line_start..)
-            .and_then(|s| s.lines().next())
-            .unwrap_or("")
-            .into(),
+        preview,
+        preview_offset,
     }
 }
 fn doc_references(

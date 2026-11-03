@@ -3177,3 +3177,89 @@ codesign --verify --deep --strict и совпадение embedded legal materia
 и шесть untracked Finder files. Размер проекта после очистки — 376 MiB;
 готовый macOS-комплект сохранён. Windows-кэш не создавался.
 Финальные git status и git diff --check проверены.
+
+### Docker: прелоадер только для действий пользователя (v0.1.29, 2026-11-03)
+
+Периодическое обновление контейнеров/логов выполняется без прелоадера.
+Явные запросы из UI (Refresh, выбор конфигурации, запуск/остановка, Logs,
+Open console и gutter actions) отмечаются отдельно при принятии команды worker.
+Индикатор отображается только для такого активного запроса, в постоянном месте
+строки кнопок панели и окна контейнера. Cancel постоянно присутствует в панели
+и активен во время запроса. Удалена условная строка Docker operation над списком:
+появление и исчезновение индикатора больше не меняет положение контейнеров.
+Ошибки и отмена сохраняют прежнее поведение. Новых зависимостей нет.
+Workspace/Cargo.lock/UI/bundle — 0.1.29; следующая доработка — 0.1.30.
+
+Проверки: native workspace/all-features последовательно — 287 passed, 0 failed,
+10 прежних optional tests ignored. Headless regression сравнивает положение
+списка при idle/background/user requests и ширине 180/280/420 px; отдельный тест
+проверяет фактическую отрисовку spinner только для пользовательского запроса.
+Rustfmt и native Clippy workspace/all-targets/all-features с -D warnings прошли.
+Первый sandbox-прогон блокировал localhost fixtures; полный повторный прогон
+с системным доступом прошёл. Native GUI вручную, Windows build/Clippy, commit
+и push не выполнялись.
+
+Workspace release build и штатный update-binaries.py прошли. Обновлены macOS
+ARM64 executable и подписанный Nozhik.app.zip; --check подтвердил fingerprint
+и SHA-256. Проверены bundle 0.1.29, ZIP integrity и все четыре embedded legal
+sidecars. После проверки cargo clean удалил 7.2 GiB; удалены временные логи
+и packaging bytecode. Размер проекта — 375 MiB; готовый macOS-комплект сохранён.
+Windows-кэш не создавался. Финальные git status и git diff --check проверены.
+
+### Память PHP/CSS-индексов (v0.1.30, 2026-11-03)
+
+Устранено размножение полных строк минифицированного CSS/PHP в preview каждого
+символа. Общий extractor сохраняет максимум 512 UTF-8 байт вокруг символа;
+preview_offset отделён от исходных byte/line/column, поэтому подсветка usages
+и точные переходы работают после обрезки. Preview хранится в Arc<str>, FileSymbols
+разделяется через Arc. Disk/live/UI разделяют неизменённый Arc<SymbolIndex>;
+copy-on-write создаёт отдельное состояние только при изменении. После Close
+последнего overlay live снова разделяет disk. Неиспользуемый UI CSS SymbolIndex
+удалён; класс-каталог остаётся. CSS/markup используют общую таблицу строк файла,
+исключая повторное сканирование всего префикса для каждого класса.
+
+Входной mailbox объединяет Overlay/Close по пути, сохраняет независимые Changed
+и при потоке более 256 разных путей ставит Reconcile. Выходной mailbox сохраняет
+последний снимок каждого вида и последний progress/finished/error; старые Arc
+освобождаются до чтения UI. Пакет команд публикует снимки и класс-каталог один раз.
+Drop очищает очередь и будит ожидающий worker. Кэши схемы 6 имеют новые имена
+index_php_v6.json/index_css_v6.json: старые гигабайтные JSON не десериализуются,
+удаляются только после успешной атомарной записи нового кэша своего языка.
+Все поддерживаемые источники и несохранённые overlays по-прежнему индексируются.
+
+Read-only аудит CSS реальных проектов (временный отдельный executable удалён):
+leadforms — 88 файлов, 71280 классов, старый cache 2403396036 bytes против
+29681492 bytes нового сериализованного SymbolIndex; nozhove.com — 13 файлов,
+10764 класса, 1857858368 против 8182106 bytes. Число классов сохранено.
+Оба новых CSS-индекса, worker/live/UI Arc handles и class catalogs одновременно
+удерживались процессом: peak RSS 147996672 bytes (~141 MiB), 3.21 s wall time
+в debug build. Это CSS-only измерение, не расход всей IDE. Исходники и кэши
+пользовательских проектов при аудите не изменялись. Первичный измерительный
+процесс остановлен перед оптимизацией таблицы строк; финальный замер завершён.
+
+Undo проверен по реализации: история использует copy-on-write Rope и edits.
+Автосохранение не устраняет рабочий текст/семантический индекс и не заменяет Undo
+через Git. mark_saved сейчас завершает typing group; запись каждого символа
+добавила бы filesystem/Git события и изменила Undo. Поведение сохранения и истории
+в этой доработке сохранено; autosave с debounce/local recovery — отдельная функция.
+
+Проверки: полный native workspace/all-features последовательно — 291 passed,
+0 failed, 10 прежних optional tests ignored. Новые regressions проверяют bounded
+minified CSS/PHP/Unicode previews и точные координаты, sharing/COW/Close, пропуск
+legacy JSON и безопасную миграцию, очереди из 1000 обновлений и освобождение
+устаревших snapshots. Existing UI usages/completion/navigation/Undo и project
+switching tests проходят. Первый полный прогон нашёл старое имя кэша в UI-тесте
+настроек; после обновления ожидания полный прогон прошёл. Native Clippy
+workspace/all-targets/all-features с -D warnings и rustfmt прошли.
+Новых пакетов нет; serde включён с rc для сериализации разделяемых данных.
+Workspace/Cargo.lock/UI/bundle — 0.1.30; следующая доработка — 0.1.31.
+Windows build/Clippy, ручной native GUI, commit и push не выполнялись.
+
+Workspace release build и штатный update-binaries.py прошли. Обновлён macOS ARM64
+комплект; --check подтвердил source fingerprint/SHA-256. Проверены bundle 0.1.30,
+оба ZIP, codesign --verify --deep --strict и совпадение четырёх embedded legal
+materials. После проверок cargo clean удалил 9.4 GiB; временные diagnostic example,
+логи, executable в target и packaging bytecode удалены. Размер проекта после
+очистки — 376 MiB; готовые бинарники/legal materials сохранены. Windows-кэш
+не создавался. Предыдущие незакоммиченные Docker-изменения сохранены.
+Финальные git status и git diff --check проверены.

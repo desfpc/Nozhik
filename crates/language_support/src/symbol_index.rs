@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 pub use nozhik_config::languages::LanguageId;
@@ -106,9 +107,37 @@ pub struct ReferenceLocation {
     pub line: u32,
     /// Zero-based byte column.
     pub column: u32,
-    /// Original line content.
-    pub preview: String,
+    /// Bounded source excerpt, shared by index snapshots and lookup tables.
+    pub preview: Arc<str>,
+    /// UTF-8 byte offset of the symbol inside the excerpt (independent of column).
+    #[serde(default)]
+    pub preview_offset: usize,
 }
+/// Captures at most 512 UTF-8 bytes around a source position, without copying long lines.
+/// The returned offset highlights the symbol even when the beginning is cropped.
+#[must_use]
+pub fn reference_preview(source: &str, byte: usize) -> (Arc<str>, usize) {
+    let mut byte = byte.min(source.len());
+    while !source.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    let mut start = byte.saturating_sub(160);
+    while !source.is_char_boundary(start) {
+        start += 1;
+    }
+    if let Some(newline) = source[start..byte].rfind('\n') {
+        start += newline + 1;
+    }
+    let mut end = (start + 512).min(source.len());
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    if let Some(newline) = source[byte..end].find(['\r', '\n']) {
+        end = byte + newline;
+    }
+    (Arc::from(&source[start..end]), byte - start)
+}
+
 /// Bounded, AST-free PHP receiver type expression.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PhpTypeSource {
@@ -161,7 +190,7 @@ pub struct SymbolIndex {
     pub declarations_by_file: DeclarationsByFile,
     /// Resolved reverse edges.
     pub references_by_symbol: ReferencesBySymbol,
-    files: HashMap<PathBuf, FileSymbols>,
+    files: HashMap<PathBuf, Arc<FileSymbols>>,
     candidates: HashMap<String, HashSet<PathBuf>>,
     #[serde(skip)]
     declaration_lookup: HashMap<String, (PathBuf, usize)>,
@@ -175,7 +204,7 @@ struct StoredIndex {
     language: LanguageId,
     declarations_by_file: DeclarationsByFile,
     references_by_symbol: ReferencesBySymbol,
-    files: HashMap<PathBuf, FileSymbols>,
+    files: HashMap<PathBuf, Arc<FileSymbols>>,
     candidates: HashMap<String, HashSet<PathBuf>>,
     #[serde(default)]
     dependencies_by_file: HashMap<PathBuf, HashSet<String>>,
@@ -226,12 +255,12 @@ impl SymbolIndex {
     pub fn file_facts(&self) -> impl Iterator<Item = (&Path, &FileSymbols)> {
         self.files
             .iter()
-            .map(|(path, facts)| (path.as_path(), facts))
+            .map(|(path, facts)| (path.as_path(), facts.as_ref()))
     }
     /// Retrieves immutable parsed facts for restoring a disk overlay.
     #[must_use]
     pub fn file_symbols(&self, path: &Path) -> Option<&FileSymbols> {
-        self.files.get(path)
+        self.files.get(path).map(AsRef::as_ref)
     }
     /// Iterates declarations without filesystem access.
     pub fn declarations(&self) -> impl Iterator<Item = &SymbolDeclaration> {
@@ -363,6 +392,14 @@ impl SymbolIndex {
     }
     /// Installs a batch before resolving references, avoiding repeated linking during discovery.
     pub fn replace_files(&mut self, updates: Vec<(PathBuf, FileSymbols)>) {
+        self.replace_shared_files(
+            updates
+                .into_iter()
+                .map(|(path, facts)| (path, Arc::new(facts)))
+                .collect(),
+        );
+    }
+    pub(crate) fn replace_shared_files(&mut self, updates: Vec<(PathBuf, Arc<FileSymbols>)>) {
         if updates.is_empty() {
             return;
         }

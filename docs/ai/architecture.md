@@ -880,7 +880,7 @@ ProjectIndexer is a single-owner dedicated thread with commands Changed(path),
 Overlay(path,revision,Rope), Close, Reconcile and Invalidate. Wake callbacks and
 bounded event drains deliver Arc snapshots/progress/errors; no UI filesystem I/O.
 Disk facts/stamps and unsaved overlay facts are separate: cache writes never include
-unsaved text. Startup loads versioned, root-bound index_php.json, then reconciles
+unsaved text. Startup loads versioned, root-bound index_php_v6.json, then reconciles
 nanosecond mtime + length. An atomic same-directory tempfile replaces the cache.
 ignore and tempfile are now explicit language_support dependencies. Traversal
 includes ignored supported sources and skips only .git/.nozhik internals (policy clarified 2026-10-29).
@@ -1581,7 +1581,7 @@ The builtin css_default.json profile uses the existing CodeStyle/settings worker
 format replies retain BufferId/revision/profile gates and one undo transaction.
 
 ProjectIndexer owns a Worker per enabled PHP/CSS partition, each with its own
-SymbolIndex, stamps, overlays and atomic cache (index_php.json/index_css.json).
+SymbolIndex, stamps, overlays and atomic cache (index_php_v6.json/index_css_v6.json).
 FileSymbols.css_classes retains raw UTF-8 ranges and decoded, case-sensitive CSS
 identifiers; SymbolIndex::css_classes exposes them with source paths, independently
 of PHP declaration normalization/linking. CSS snapshot events do not replace PHP
@@ -1677,7 +1677,9 @@ and stderr are drained concurrently with bounded retained output; commands have
 timeouts and cancellation. Cancel/shutdown terminate the owned CLI process tree (including Compose plugins), never implicitly stop
 containers. Discovery works without invoking Docker; engine queries run only while
 the Docker view is visible or after explicit actions. The UI disallows actions with
-unsaved configuration files. Logs retain the last 500 timestamped stdout/stderr lines.
+unsaved configuration files. The toolbar always includes Cancel (enabled only while
+busy); only user-initiated requests show a spinner in a fixed toolbar slot.
+Periodic snapshot/log refreshes remain silent and do not shift the list. Logs retain the last 500 timestamped stdout/stderr lines.
 
 The Docker tool appears between Database and Notifications and requires a nonempty
 Compose inventory. Editor/tree tabs use a native vector whale icon. Container Info
@@ -1696,3 +1698,29 @@ closes the project-local modal, reloads the parent and opens new files through t
 existing editor read path. A refresh error after creation cannot retry the mutation.
 ShowInFileManager runs direct OS argv on the worker (macOS open -R, Windows
 Explorer /select, Linux xdg-open of the parent); no shell or new dependency.
+
+### Index memory and mailboxes (v0.1.30)
+
+ReferenceLocation stores a shared Arc<str> excerpt of at most 512 UTF-8 bytes,
+plus preview_offset independent of the original byte/line/column coordinates.
+PHP and CSS use the same bounded extraction; usages highlighting uses the excerpt
+offset and navigation retains original positions. SymbolIndex shares immutable
+FileSymbols via Arc. Worker disk/live and UI snapshots share Arc<SymbolIndex>
+when no overlay diverges; mutation uses copy-on-write. The UI no longer retains
+an unused CSS SymbolIndex alongside its class catalog.
+
+ProjectIndexer commands coalesce Overlay/Close per path, retain independent disk
+changes and replace more than 256 pending distinct Changed paths with Reconcile.
+No file notification is silently discarded: Reconcile checks all source metadata.
+A batch publishes at most one snapshot per changed partition and one class catalog.
+The event mailbox retains the latest event per kind, with Progress/Finished sharing
+one slot; obsolete snapshots are released before UI drains. Drop clears pending
+commands and wakes the sleeping worker. Schema 6 uses new cache filenames, so legacy
+huge JSON is never deserialized. Old per-language files are removed only after a
+successful atomic replacement of the new cache.
+
+Saving documents is independent of index memory. Undo already retains copy-on-write
+Rope snapshots and edits, not complete independent file copies per keystroke. Git
+tracks staged/committed/worktree states and cannot replace editor Undo. This change
+preserves explicit save and dirty/revision gates; per-keystroke disk writes would
+also trigger filesystem/Git work and split typing undo groups via mark_saved.

@@ -688,7 +688,7 @@ mod tests {
                 .enabled_languages
                 .contains(&nozhik_config::languages::LanguageId::Php)
         );
-        let cache_path = root.join(".nozhik/cache/index_php.json");
+        let cache_path = root.join(".nozhik/cache/index_php_v6.json");
         let modified = cache_path.metadata()?.modified()?;
         click_php_setting(&mut shell, &ctx)?;
         wait_language_settings(&mut shell, &ctx, false, &path)?;

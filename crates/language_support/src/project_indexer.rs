@@ -7,9 +7,10 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
 };
+
+mod queue;
 
 /// Commands never parse or perform I/O on the caller thread.
 #[derive(Clone)]
@@ -49,8 +50,8 @@ pub enum IndexEvent {
 }
 /// Nonblocking worker handle; dropping cancels traversal and pending work.
 pub struct ProjectIndexer {
-    sender: mpsc::Sender<IndexCommand>,
-    events: mpsc::Receiver<IndexEvent>,
+    sender: Arc<queue::Commands>,
+    events: Arc<queue::Events>,
     stop: Arc<AtomicBool>,
 }
 impl ProjectIndexer {
@@ -66,13 +67,15 @@ impl ProjectIndexer {
         enabled_languages: BTreeSet<LanguageId>,
         wake: impl Fn() + Send + 'static,
     ) -> Self {
-        let (sender, commands) = mpsc::channel::<IndexCommand>();
-        let (output, events) = mpsc::channel();
+        let sender = Arc::new(queue::Commands::default());
+        let commands = sender.clone();
+        let events = Arc::new(queue::Events::default());
+        let output = events.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         std::thread::spawn(move || {
             let notify = |event| {
-                let _sent = output.send(event);
+                output.send(event);
                 wake();
             };
             let mut workers: Vec<_> = [LanguageId::Php, LanguageId::Css]
@@ -80,7 +83,7 @@ impl ProjectIndexer {
                 .filter(|id| nozhik_config::languages::enabled(&enabled_languages, *id))
                 .map(|id| {
                     let mut worker = Worker::new(root.clone());
-                    worker.disk = SymbolIndex::new(id);
+                    worker.disk = Arc::new(SymbolIndex::new(id));
                     worker.live = worker.disk.clone();
                     worker.enabled_languages.clone_from(&enabled_languages);
                     worker
@@ -105,33 +108,41 @@ impl ProjectIndexer {
             }
             notify(class_snapshot(&workers));
             while !stopping.load(Ordering::Relaxed) {
-                let Ok(command) = commands.recv() else {
+                let batch = commands.receive();
+                if stopping.load(Ordering::Relaxed) {
                     break;
-                };
-                if matches!(command, IndexCommand::Invalidate) {
-                    match std::fs::remove_dir_all(root.join(".nozhik/cache")) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => {
-                            notify(IndexEvent::Error(e.to_string()));
-                            continue;
+                }
+                let mut partitions_changed = vec![false; workers.len()];
+                for command in batch {
+                    if matches!(command, IndexCommand::Invalidate) {
+                        match std::fs::remove_dir_all(root.join(".nozhik/cache")) {
+                            Ok(()) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => {
+                                notify(IndexEvent::Error(e.to_string()));
+                                continue;
+                            }
+                        }
+                    }
+                    for (worker, changed) in workers.iter_mut().zip(&mut partitions_changed) {
+                        let result = if matches!(command, IndexCommand::Invalidate) {
+                            worker.rebuild(&stopping, &notify)
+                        } else {
+                            worker.command(command.clone(), &stopping, &notify)
+                        };
+                        match result {
+                            Ok(true) => {
+                                *changed = true;
+                            }
+                            Ok(false) => {}
+                            Err(e) => notify(IndexEvent::Error(e.to_string())),
                         }
                     }
                 }
-                let mut changed = false;
-                for worker in &mut workers {
-                    let result = if matches!(command, IndexCommand::Invalidate) {
-                        worker.rebuild(&stopping, &notify)
-                    } else {
-                        worker.command(command.clone(), &stopping, &notify)
-                    };
-                    match result {
-                        Ok(true) => {
-                            changed = true;
-                            notify(worker.snapshot());
-                        }
-                        Ok(false) => {}
-                        Err(e) => notify(IndexEvent::Error(e.to_string())),
+                let changed = partitions_changed.iter().any(|changed| *changed);
+                for (worker, changed) in workers.iter().zip(partitions_changed) {
+                    if changed {
+                        notify(worker.snapshot());
                     }
                 }
                 if changed {
@@ -148,16 +159,17 @@ impl ProjectIndexer {
     /// Reliable queue while the worker is alive; callers retain/retry on false.
     #[must_use]
     pub fn send(&self, command: IndexCommand) -> bool {
-        self.sender.send(command).is_ok()
+        self.sender.send(command)
     }
     /// Bounded, nonblocking notification drain.
-    pub fn drain(&self) -> impl Iterator<Item = IndexEvent> + '_ {
-        self.events.try_iter().take(128)
+    pub fn drain(&self) -> impl Iterator<Item = IndexEvent> {
+        self.events.drain()
     }
 }
 impl Drop for ProjectIndexer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.sender.close();
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,8 +207,8 @@ struct CacheRef<'a> {
 struct Worker {
     root: PathBuf,
     enabled_languages: BTreeSet<LanguageId>,
-    disk: SymbolIndex,
-    live: SymbolIndex,
+    disk: Arc<SymbolIndex>,
+    live: Arc<SymbolIndex>,
     stamps: HashMap<PathBuf, Stamp>,
     overlays: HashMap<PathBuf, (u64, FileSymbols)>,
     parsed: usize,
@@ -206,8 +218,8 @@ impl Worker {
         Self {
             root,
             enabled_languages: nozhik_config::languages::default_enabled(),
-            disk: SymbolIndex::new(LanguageId::Php),
-            live: SymbolIndex::new(LanguageId::Php),
+            disk: Arc::new(SymbolIndex::new(LanguageId::Php)),
+            live: Arc::new(SymbolIndex::new(LanguageId::Php)),
             stamps: HashMap::new(),
             overlays: HashMap::new(),
             parsed: 0,
@@ -226,9 +238,9 @@ impl Worker {
     }
     fn cache_name(&self) -> &'static str {
         if self.disk.language == LanguageId::Css {
-            "index_css.json"
+            "index_css_v6.json"
         } else {
-            "index_php.json"
+            "index_php_v6.json"
         }
     }
     fn extract(&self, path: &Path, source: &str) -> crate::Result<FileSymbols> {
@@ -256,7 +268,7 @@ impl Worker {
             Err(e) => return Err(e),
         };
         let cache: Cache = serde_json::from_reader(std::io::BufReader::new(file))?;
-        if cache.version != 5 {
+        if cache.version != 6 {
             return Ok(());
         }
         let expected_language = self.disk.language;
@@ -265,7 +277,7 @@ impl Worker {
                 "Incompatible project index cache; use Invalidate Caches",
             ));
         }
-        self.disk = cache.index;
+        self.disk = Arc::new(cache.index);
         self.live = self.disk.clone();
         self.stamps = cache.stamps;
         Ok(())
@@ -276,7 +288,7 @@ impl Worker {
         serde_json::to_writer(
             std::io::BufWriter::new(file.as_file_mut()),
             &CacheRef {
-                version: 5,
+                version: 6,
                 root: &self.root,
                 stamps: &self.stamps,
                 index: &self.disk,
@@ -284,6 +296,17 @@ impl Worker {
         )?;
         file.persist(self.cache_dir().join(self.cache_name()))
             .map_err(|e| e.error)?;
+        // The legacy cache can contain gigabytes of repeated previews. Never deserialize it.
+        let legacy = if self.disk.language == LanguageId::Css {
+            "index_css.json"
+        } else {
+            "index_php.json"
+        };
+        match std::fs::remove_file(self.cache_dir().join(legacy)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         Ok(())
     }
     fn snapshot(&self) -> IndexEvent {
@@ -293,7 +316,7 @@ impl Worker {
             IndexEvent::Snapshot
         };
         snapshot(
-            Arc::new(self.live.clone()),
+            self.live.clone(),
             self.overlays
                 .iter()
                 .map(|(p, (r, _))| (p.clone(), *r))
@@ -304,9 +327,11 @@ impl Worker {
         if self.stamps.remove(path).is_none() {
             return false;
         }
-        self.disk.remove(path);
-        if !self.overlays.contains_key(path) {
-            self.live.remove(path);
+        Arc::make_mut(&mut self.disk).remove(path);
+        if self.overlays.is_empty() {
+            self.live = self.disk.clone();
+        } else if !self.overlays.contains_key(path) {
+            Arc::make_mut(&mut self.live).remove(path);
         }
         true
     }
@@ -333,20 +358,24 @@ impl Worker {
         if updates.is_empty() {
             return false;
         }
-        let live = updates
-            .iter()
-            .filter(|(p, _, _)| !self.overlays.contains_key(p))
-            .map(|(p, facts, _)| (p.clone(), facts.clone()))
-            .collect();
-        let disk = updates
+        let disk: Vec<_> = updates
             .into_iter()
             .map(|(path, facts, stamp)| {
                 self.stamps.insert(path.clone(), stamp);
-                (path, facts)
+                (path, Arc::new(facts))
             })
             .collect();
-        self.disk.replace_files(disk);
-        self.live.replace_files(live);
+        let live = disk
+            .iter()
+            .filter(|(path, _)| !self.overlays.contains_key(path))
+            .cloned()
+            .collect();
+        Arc::make_mut(&mut self.disk).replace_shared_files(disk);
+        if self.overlays.is_empty() {
+            self.live = self.disk.clone();
+        } else {
+            Arc::make_mut(&mut self.live).replace_shared_files(live);
+        }
         true
     }
     fn update(&mut self, path: &Path) -> std::io::Result<bool> {
@@ -453,11 +482,11 @@ impl Worker {
         stop: &AtomicBool,
         notify: &impl Fn(IndexEvent),
     ) -> std::io::Result<bool> {
-        self.disk = SymbolIndex::new(self.disk.language);
+        self.disk = Arc::new(SymbolIndex::new(self.disk.language));
         self.live = self.disk.clone();
         self.stamps.clear();
         // Revision gates must only advertise facts present in this snapshot.
-        self.live.replace_files(
+        Arc::make_mut(&mut self.live).replace_files(
             self.overlays
                 .iter()
                 .map(|(path, (_, facts))| (path.clone(), facts.clone()))
@@ -495,7 +524,7 @@ impl Worker {
                     .extract(&path, &text.to_string())
                     .map_err(std::io::Error::other)?;
                 self.parsed += 1;
-                self.live.replace(path.clone(), facts.clone());
+                Arc::make_mut(&mut self.live).replace(path.clone(), facts.clone());
                 self.overlays.insert(path, (revision, facts));
                 Ok(true)
             }
@@ -504,10 +533,12 @@ impl Worker {
                     return Ok(false);
                 }
                 self.update(&path)?;
-                if let Some(facts) = self.disk.file_symbols(&path).cloned() {
-                    self.live.replace(path, facts);
+                if self.overlays.is_empty() {
+                    self.live = self.disk.clone();
+                } else if let Some(facts) = self.disk.file_symbols(&path).cloned() {
+                    Arc::make_mut(&mut self.live).replace(path, facts);
                 } else {
-                    self.live.remove(&path);
+                    Arc::make_mut(&mut self.live).remove(&path);
                 }
                 Ok(true)
             }
@@ -564,7 +595,8 @@ fn class_snapshot(workers: &[Worker]) -> IndexEvent {
             HashMap::new(),
         );
     }
-    let index = crate::css_symbols::ClassIndex::from_partitions(workers.iter().map(|w| &w.live));
+    let index =
+        crate::css_symbols::ClassIndex::from_partitions(workers.iter().map(|w| w.live.as_ref()));
     let revisions = workers
         .iter()
         .flat_map(|w| {
@@ -583,6 +615,99 @@ fn excluded(name: &std::ffi::OsStr) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_cache_is_skipped_and_snapshots_share_immutable_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("a.css");
+        std::fs::write(&path, ".first { color: red; }.second{ color: blue; }")?;
+        let mut worker = Worker::new(dir.path().into());
+        worker.disk = Arc::new(SymbolIndex::new(LanguageId::Css));
+        worker.live = worker.disk.clone();
+        std::fs::create_dir_all(worker.cache_dir())?;
+        let legacy = worker.cache_dir().join("index_css.json");
+        std::fs::write(&legacy, "invalid legacy data must never be deserialized")?;
+        worker.load()?;
+        assert!(legacy.exists());
+        worker.reconcile(&AtomicBool::new(false), &|_| {})?;
+        assert!(!legacy.exists());
+        assert!(worker.cache_dir().join("index_css_v6.json").exists());
+        assert!(Arc::ptr_eq(&worker.disk, &worker.live));
+        let IndexEvent::CssSnapshot(snapshot, _) = worker.snapshot() else {
+            return Err("CSS snapshot expected".into());
+        };
+        assert!(Arc::ptr_eq(&snapshot, &worker.live));
+        worker.command(
+            IndexCommand::Overlay {
+                path: path.clone(),
+                revision: 1,
+                text: ropey::Rope::from_str(".edited{}"),
+            },
+            &AtomicBool::new(false),
+            &|_| {},
+        )?;
+        assert_eq!(snapshot.css_classes().count(), 2);
+        assert_eq!(worker.live.css_classes().count(), 1);
+        assert_eq!(worker.disk.css_classes().count(), 2);
+        worker.command(IndexCommand::Close(path), &AtomicBool::new(false), &|_| {})?;
+        assert!(Arc::ptr_eq(&worker.disk, &worker.live));
+        Ok(())
+    }
+
+    #[test]
+    fn minified_css_and_php_previews_are_bounded_with_exact_navigation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let css = format!(
+            "{}{}",
+            "/*Ж🦀*/".repeat(10000),
+            ".target{ color: red; }".repeat(1000)
+        );
+        let path = Path::new("a.css");
+        let mut worker = Worker::new(PathBuf::new());
+        worker.disk = Arc::new(SymbolIndex::new(LanguageId::Css));
+        let facts = worker.extract(path, &css)?;
+        assert_eq!(facts.class_occurrences.len(), 1000);
+        for occurrence in &facts.class_occurrences {
+            let location = &occurrence.location;
+            assert!(location.preview.len() <= 512);
+            assert_eq!(
+                css.get(location.byte..location.byte + location.length),
+                Some("target")
+            );
+            assert_eq!(
+                location
+                    .preview
+                    .get(location.preview_offset..location.preview_offset + location.length),
+                Some("target")
+            );
+        }
+        let cloned = facts.clone();
+        for (a, b) in facts
+            .class_occurrences
+            .iter()
+            .zip(&cloned.class_occurrences)
+        {
+            assert!(Arc::ptr_eq(&a.location.preview, &b.location.preview));
+        }
+        assert!(serde_json::to_vec(&facts)?.len() < 1024 * 1024);
+        let php = format!(
+            "<?php /*{}*/ class Target {{}} new Target;",
+            "Ж🦀".repeat(10000)
+        );
+        let facts = crate::php_symbols::parse(Path::new("a.php"), &php)?;
+        assert_eq!(facts.references.len(), 1);
+        for (_, location) in &facts.references {
+            assert!(location.preview.len() <= 512);
+            assert_eq!(
+                php.get(location.byte..location.byte + location.length),
+                location
+                    .preview
+                    .get(location.preview_offset..location.preview_offset + location.length)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn css_class_links_follow_php_overlays_cache_close_and_removal()
     -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
@@ -593,7 +718,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut php = Worker::new(dir.path().into());
         let mut css = Worker::new(dir.path().into());
-        css.disk = SymbolIndex::new(LanguageId::Css);
+        css.disk = Arc::new(SymbolIndex::new(LanguageId::Css));
         css.live = css.disk.clone();
         php.reconcile(&stop, &|_| {})?;
         css.reconcile(&stop, &|_| {})?;
@@ -654,7 +779,7 @@ mod tests {
         std::fs::write(dir.path().join("wrong.php"), [0xff, 0xfe])?;
         let make_worker = || {
             let mut worker = Worker::new(dir.path().into());
-            worker.disk = SymbolIndex::new(LanguageId::Css);
+            worker.disk = Arc::new(SymbolIndex::new(LanguageId::Css));
             worker.live = worker.disk.clone();
             worker.enabled_languages = BTreeSet::from([LanguageId::Css]);
             worker
@@ -671,8 +796,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Card", "card"]
         );
-        assert!(dir.path().join(".nozhik/cache/index_css.json").exists());
-        assert!(!dir.path().join(".nozhik/cache/index_php.json").exists());
+        assert!(dir.path().join(".nozhik/cache/index_css_v6.json").exists());
+        assert!(!dir.path().join(".nozhik/cache/index_php_v6.json").exists());
         worker.command(
             IndexCommand::Overlay {
                 path: path.clone(),
@@ -883,10 +1008,10 @@ mod tests {
                 .iter()
                 .all(|total| *total == 0 || *total == 4)
         );
-        let cache_path = worker.cache_dir().join("index_php.json");
+        let cache_path = worker.cache_dir().join("index_php_v6.json");
         let contents = std::fs::read(&cache_path)?;
         let modified = cache_path.metadata()?.modified()?;
-        for path in ["a.html", "a.php", ".nozhik/cache/index_php.json"] {
+        for path in ["a.html", "a.php", ".nozhik/cache/index_php_v6.json"] {
             assert!(!worker.command(
                 IndexCommand::Changed(dir.path().join(path)),
                 &stop,
@@ -926,7 +1051,7 @@ mod tests {
         let mut worker = Worker::new(dir.path().into());
         worker.enabled_languages.clear();
         std::fs::create_dir_all(worker.cache_dir())?;
-        let cache_path = worker.cache_dir().join("index_php.json");
+        let cache_path = worker.cache_dir().join("index_php_v6.json");
         std::fs::write(&cache_path, "invalid cache that must not be read")?;
         std::fs::write(dir.path().join("bad.php"), [0xff, 0xfe])?;
         worker.load()?;
@@ -1412,7 +1537,7 @@ mod tests {
             Some(4)
         );
         restored.persist()?;
-        let cache_path = restored.cache_dir().join("index_php.json");
+        let cache_path = restored.cache_dir().join("index_php_v6.json");
         let mut cache: serde_json::Value =
             serde_json::from_reader(std::fs::File::open(&cache_path)?)?;
         cache["version"] = serde_json::json!(2);

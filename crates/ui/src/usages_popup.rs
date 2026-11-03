@@ -237,9 +237,7 @@ impl UsagesPopup {
                                     ),
                                 );
                                 let mut job = egui::text::LayoutJob::default();
-                                let start = usize::try_from(location.column)
-                                    .unwrap_or(0)
-                                    .min(location.preview.len());
+                                let start = location.preview_offset.min(location.preview.len());
                                 let end = (start + location.length).min(location.preview.len());
                                 if let (Some(before), Some(name), Some(after)) = (
                                     location.preview.get(..start),
@@ -299,6 +297,7 @@ mod tests {
                     line: u32::try_from(i).unwrap_or(0),
                     column: 7,
                     preview: "$car-> run();".into(),
+                    preview_offset: 7,
                 })
                 .collect(),
             selected: 0,

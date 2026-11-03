@@ -154,33 +154,47 @@ fn escape_identifier(name: &str) -> String {
 /// Captures exact source coordinates without UTF-16 conversion or file I/O.
 #[must_use]
 pub fn location(path: &Path, source: &str, range: Range<usize>) -> ReferenceLocation {
-    let start = source[..range.start].rfind('\n').map_or(0, |i| i + 1);
-    let end = source[range.start..]
-        .find('\n')
-        .map_or(source.len(), |i| range.start + i);
-    ReferenceLocation {
-        path: path.into(),
-        byte: range.start,
-        length: range.len(),
-        line: u32::try_from(
-            source[..range.start]
-                .bytes()
-                .filter(|b| *b == b'\n')
-                .count(),
-        )
-        .unwrap_or(u32::MAX),
-        column: u32::try_from(range.start - start).unwrap_or(u32::MAX),
-        preview: source[start..end].trim_end_matches('\r').into(),
+    Locations::new(source).at(path, range)
+}
+struct Locations<'a> {
+    source: &'a str,
+    lines: Vec<usize>,
+}
+impl<'a> Locations<'a> {
+    fn new(source: &'a str) -> Self {
+        let lines = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        Self { source, lines }
+    }
+    fn at(&self, path: &Path, range: Range<usize>) -> ReferenceLocation {
+        let line = self
+            .lines
+            .partition_point(|start| *start <= range.start)
+            .saturating_sub(1);
+        let start = self.lines.get(line).copied().unwrap_or(0);
+        let (preview, preview_offset) =
+            crate::symbol_index::reference_preview(self.source, range.start);
+        ReferenceLocation {
+            path: path.into(),
+            byte: range.start,
+            length: range.len(),
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            column: u32::try_from(range.start - start).unwrap_or(u32::MAX),
+            preview,
+            preview_offset,
+        }
     }
 }
 /// Adds CSS selector facts while preserving the existing selector API.
 pub fn selectors(path: &Path, source: &str, facts: &mut FileSymbols) {
+    let locations = Locations::new(source);
     facts.class_occurrences = facts
         .css_classes
         .iter()
         .map(|c| ClassOccurrence {
             name: c.name.clone(),
-            location: location(path, source, c.range.clone()),
+            location: locations.at(path, c.range.clone()),
             declaration: true,
         })
         .collect();
@@ -219,6 +233,7 @@ pub(crate) fn php_markup(
     markup_classes(path, source, &markup, facts);
 }
 fn markup_classes(path: &Path, source: &str, markup: &str, facts: &mut FileSymbols) {
+    let locations = Locations::new(source);
     let bytes = markup.as_bytes();
     let lower = markup.to_ascii_lowercase();
     let mut i = 0;
@@ -290,7 +305,7 @@ fn markup_classes(path: &Path, source: &str, markup: &str, facts: &mut FileSymbo
                         if !name.is_empty() && !name.contains('&') {
                             facts.class_occurrences.push(ClassOccurrence {
                                 name: name.into(),
-                                location: location(path, source, at..at + name.len()),
+                                location: locations.at(path, at..at + name.len()),
                                 declaration: false,
                             });
                         }

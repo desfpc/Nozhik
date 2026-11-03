@@ -74,7 +74,6 @@ pub struct LanguageUi {
     pub(crate) indexer: Option<nozhik_language_support::project_indexer::ProjectIndexer>,
     index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     indexed_revisions: HashMap<PathBuf, u64>,
-    css_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     class_index: Option<std::sync::Arc<nozhik_language_support::css_symbols::ClassIndex>>,
     class_revisions: HashMap<PathBuf, u64>,
     overlay_sent: HashMap<PathBuf, u64>,
@@ -746,9 +745,8 @@ impl crate::NozhikUi {
                         self.language.class_index = Some(index);
                         self.language.class_revisions = revisions;
                     }
-                    IndexEvent::CssSnapshot(index, _) => {
-                        self.language.css_index = Some(index);
-                    }
+                    // CSS navigation/completion use the shared class catalog.
+                    IndexEvent::CssSnapshot(_, _) => {}
                     IndexEvent::Progress(done, total) => {
                         self.language.indexing =
                             (done != total || total == 0).then_some((done, total));
@@ -1595,7 +1593,7 @@ mod tests {
         assert!(!shell.language.invalidate_dialog);
         wait(&mut shell)?;
         assert!(!sentinel.exists());
-        assert!(dir.path().join(".nozhik/cache/index_php.json").is_file());
+        assert!(dir.path().join(".nozhik/cache/index_php_v6.json").is_file());
         Ok(())
     }
 

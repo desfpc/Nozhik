@@ -107,6 +107,8 @@ pub struct Artifact {
 pub enum Task {
     /// Load one editable table definition.
     LoadTable(String),
+    /// Create a new table using the shared preview plan.
+    CreateTable(Box<crate::table_design::Definition>),
     /// Apply a table draft after checking its original snapshot.
     ModifyTable(
         Box<crate::table_design::Definition>,
@@ -304,6 +306,14 @@ impl Connection {
             Task::LoadTable(table) => Ok(Output::Table(Box::new(
                 cancellable(cancel, self.table_definition(schema, &table)).await?,
             ))),
+            Task::CreateTable(new) => {
+                if new.schema != schema {
+                    return Err(Error::Invalid("Table schema changed".into()));
+                }
+                Ok(Output::Table(Box::new(
+                    self.create_table(&new, cancel).await?,
+                )))
+            }
             Task::ModifyTable(old, new) => {
                 if old.schema != schema {
                     return Err(Error::Invalid("Table schema changed".into()));

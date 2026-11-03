@@ -3006,3 +3006,39 @@ focused CSS tests и финальный Clippy прошли. Workspace release b
 Python bytecode packaging script и семь untracked Finder files. Размер проекта —
 384 MiB; актуальный macOS-комплект и legal materials сохранены. Windows-кэш
 не создавался. Финальные git status и diff --check проверены.
+
+### БД: создание таблиц из дерева объектов (v0.1.25, 2026-11-03)
+
+Узел tables подключённой схемы получил контекстное меню + New Table. Открывается
+прежнее окно Modify Table с новым черновиком: те же свойства, колонки, keys,
+индексы, триггеры, комментарии и grants. Порядок новых PostgreSQL-колонок можно
+менять до создания. Preview и Apply/OK используют creation_sql и CreateTable
+на штатном database worker; запросы CREATE не заменяют существующие объекты.
+После Apply загружается snapshot, окно переходит к обычному редактированию,
+дерево обновляется без переименования или инвалидирования других таблиц.
+Cancel не сохраняет черновик. После неудачной попытки создания доступен Reload
+для перечитывания таблицы, если MySQL успел применить часть DDL.
+
+SQLite/PostgreSQL создаются в транзакции; MySQL устанавливает engine/collation
+и ключи AUTO_INCREMENT при CREATE. Генерация объектов и дополнительных свойств
+переиспользует прежний planner. Новых зависимостей нет. Версия workspace,
+Cargo.lock, интерфейса и bundle — 0.1.25, следующая доработка — 0.1.26.
+
+Проверки: полный native workspace/all-features test последовательно — 271 passed,
+0 failed, 9 existing optional tests ignored. Новый backend regression проверяет
+SQL PostgreSQL/MySQL, SQLite CREATE/индекс/STRICT, duplicate name, rollback при
+ошибке индекса и предварительную cancellation. Pointer-driven headless UI с реальным
+worker проверяет + New Table → форму → CREATE preview → Apply → snapshot/tree,
+OK без повторного CREATE и Cancel; тот же тест повторно прошёл после финальной
+правки refresh. Native Clippy workspace/all-targets/all-features с -D warnings,
+rustfmt, workspace release build и git diff --check прошли. Первичный sandbox
+прогон блокировал localhost/process fixtures; полный прогон с системным доступом
+успешен. Native GUI вручную и live PostgreSQL/MySQL, Windows build/Clippy,
+commit и push не выполнялись.
+
+Штатный update-binaries.py обновил macOS ARM64 executable и подписанный app archive;
+--check подтвердил fingerprint исходников и SHA-256 payload. Проверены bundle
+0.1.25, целостность ZIP и точное совпадение четырёх legal sidecars с Resources/Legal.
+После проверок cargo clean удалил 8.9 GiB; удалены временные логи задачи и untracked
+Finder files. Размер проекта после очистки — 385 MiB; готовый macOS-комплект сохранён.
+Windows-кэш не создавался. Финальные git status и diff --check проверены.

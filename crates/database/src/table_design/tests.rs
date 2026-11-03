@@ -391,3 +391,93 @@ async fn edit_existing_objects(db: &Connection, schema: &str) -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn create_table_plans_and_atomic_sqlite_execution() -> TestResult {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let db = Connection::connect(
+            &ConnectionProfile {
+                name: "create fixture".into(),
+                ..ConnectionProfile::default()
+            },
+            None,
+            None,
+        )
+        .await?;
+        let token = CancellationToken::new();
+        let mut draft = Definition {
+            driver: DbDriverType::Sqlite,
+            schema: "main".into(),
+            name: "new \"table".into(),
+            strict: true,
+            elements: vec![
+                added_column(1, "id"),
+                element(
+                    2,
+                    "value",
+                    Properties::Column(Column {
+                        data_type: "TEXT".into(),
+                        default_sql: "'initial'".into(),
+                        ..Column::default()
+                    }),
+                ),
+                element(
+                    3,
+                    "by_value",
+                    Properties::Index(Index {
+                        columns: vec![IndexPart {
+                            expression: "value".into(),
+                            ..IndexPart::default()
+                        }],
+                        ..Index::default()
+                    }),
+                ),
+            ],
+            ..Definition::default()
+        };
+        let preview = creation_sql(&draft)?;
+        assert!(preview.contains("CREATE TABLE \"main\".\"new \"\"table\""));
+        assert!(preview.contains("STRICT"));
+        let Output::Table(created) = db
+            .schema_task("main", Task::CreateTable(Box::new(draft.clone())), &token)
+            .await?
+        else {
+            return Err("table expected".into());
+        };
+        assert!(created.elements.iter().any(|e| e.name == "by_value"));
+        assert_eq!(migration_sql(&created, &created)?, "");
+        assert!(db.create_table(&draft, &token).await.is_err());
+        draft.name = "rolled_back".into();
+        // Duplicate global index name fails after CREATE TABLE; the transaction must roll back.
+        assert!(db.create_table(&draft, &token).await.is_err());
+        assert!(db.table_definition("main", "rolled_back").await.is_err());
+        draft
+            .elements
+            .retain(|e| !matches!(e.data, Properties::Index(_)));
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(db.create_table(&draft, &cancelled).await.is_err());
+        assert!(db.table_definition("main", "rolled_back").await.is_err());
+        draft.elements.clear();
+        assert!(creation_sql(&draft).is_err());
+        db.close().await;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })?;
+    for driver in [DbDriverType::Postgres, DbDriverType::Mysql] {
+        let draft = Definition {
+            driver,
+            schema: "schema".into(),
+            name: "created".into(),
+            comment: "table comment".into(),
+            elements: vec![added_column(1, "id")],
+            ..Definition::default()
+        };
+        let sql = creation_sql(&draft)?;
+        assert!(sql.contains("CREATE TABLE"));
+        assert!(sql.contains("table comment"));
+        assert!(!sql.contains("ADD COLUMN"));
+        assert!(!sql.contains("DROP TABLE"));
+    }
+    Ok(())
+}

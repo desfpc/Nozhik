@@ -11,7 +11,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-fn q(d: DbDriverType, s: &str) -> String {
+pub(super) fn q(d: DbDriverType, s: &str) -> String {
     quote_identifier(d, s)
 }
 fn text(d: DbDriverType, s: &str) -> String {
@@ -84,7 +84,7 @@ fn parts(d: DbDriverType, columns: &[IndexPart]) -> Result<String> {
         .collect::<Result<Vec<_>>>()
         .map(|s| s.join(", "))
 }
-fn column(d: DbDriverType, e: &Element) -> Result<String> {
+pub(super) fn column(d: DbDriverType, e: &Element) -> Result<String> {
     let Properties::Column(c) = &e.data else {
         return Err(invalid("Column expected"));
     };
@@ -161,7 +161,7 @@ fn column(d: DbDriverType, e: &Element) -> Result<String> {
     clippy::too_many_lines,
     reason = "Constraint categories share identifier quoting, ordered columns and deferrability"
 )]
-fn key(d: DbDriverType, e: &Element) -> Result<String> {
+pub(super) fn key(d: DbDriverType, e: &Element) -> Result<String> {
     let Properties::Key(k) = &e.data else {
         return Err(invalid("Key expected"));
     };
@@ -281,7 +281,7 @@ fn key(d: DbDriverType, e: &Element) -> Result<String> {
     }
     Ok(s)
 }
-fn index(def: &Definition, e: &Element, alter: bool) -> Result<String> {
+pub(super) fn index(def: &Definition, e: &Element, alter: bool) -> Result<String> {
     let Properties::Index(i) = &e.data else {
         return Err(invalid("Index expected"));
     };
@@ -353,7 +353,7 @@ fn index(def: &Definition, e: &Element, alter: bool) -> Result<String> {
     clippy::too_many_lines,
     reason = "Trigger creation must retain engine-specific modes, constraint timing and activation"
 )]
-fn trigger(def: &Definition, e: &Element) -> Result<Vec<String>> {
+pub(super) fn trigger(def: &Definition, e: &Element) -> Result<Vec<String>> {
     let Properties::Trigger(t) = &e.data else {
         return Err(invalid("Trigger expected"));
     };
@@ -462,13 +462,13 @@ fn trigger(def: &Definition, e: &Element) -> Result<Vec<String>> {
     }
     Ok(out)
 }
-const fn mysql_mode() -> &'static str {
+pub(super) const fn mysql_mode() -> &'static str {
     "SET SQL_MODE='STRICT_ALL_TABLES,NO_AUTO_VALUE_ON_ZERO,NO_BACKSLASH_ESCAPES'"
 }
 fn changed(old: &Element, new: &Element) -> bool {
     old.name != new.name || old.data != new.data
 }
-fn validate(old: &Definition, new: &Definition) -> Result<()> {
+pub(super) fn validate(old: &Definition, new: &Definition) -> Result<()> {
     if old.driver != new.driver || old.schema != new.schema {
         return Err(invalid(
             "The connection/schema of a table edit cannot change",
@@ -602,8 +602,8 @@ fn validate_dependencies(old: &Definition, new: &Definition) -> Result<()> {
     }
     Ok(())
 }
-struct Plan {
-    steps: Vec<String>,
+pub(super) struct Plan {
+    pub(super) steps: Vec<String>,
     rebuild: bool,
 }
 /// Generate the exact SQL preview for a table draft.
@@ -764,7 +764,7 @@ fn grants(old: &Definition, new: &Definition, steps: &mut Vec<String>) -> Result
     clippy::too_many_lines,
     reason = "One ALTER statement must order mutually dependent key, column and table changes"
 )]
-fn mysql_plan(old: &Definition, new: &Definition) -> Result<Plan> {
+pub(super) fn mysql_plan(old: &Definition, new: &Definition) -> Result<Plan> {
     let d = new.driver;
     let mut steps = Vec::new();
     let mut clauses = Vec::new();
@@ -900,7 +900,7 @@ fn mysql_plan(old: &Definition, new: &Definition) -> Result<Plan> {
     clippy::too_many_lines,
     reason = "Transactional DDL phases must order drops, renames, column changes and dependent objects"
 )]
-fn postgres_plan(old: &Definition, new: &Definition) -> Result<Plan> {
+pub(super) fn postgres_plan(old: &Definition, new: &Definition) -> Result<Plan> {
     let d = new.driver;
     let target = old.qualified_name();
     let mut steps = Vec::new();

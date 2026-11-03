@@ -205,7 +205,7 @@ impl Tree<'_> {
                 continue;
             }
             let id = ui.id().with((&profile.name, &schema.name, name));
-            self.branch(
+            let response = self.branch(
                 ui,
                 id,
                 depth,
@@ -302,6 +302,27 @@ impl Tree<'_> {
                     }
                 },
             );
+            if !views {
+                response.context_menu(|ui| {
+                    if ui.button("+ New Table").clicked() {
+                        let mut name = "new_table".to_owned();
+                        while schema
+                            .tables
+                            .iter()
+                            .any(|t| t.name.eq_ignore_ascii_case(&name))
+                        {
+                            name.push('_');
+                        }
+                        self.actions.push(Action::Table(
+                            profile.clone(),
+                            schema.name.clone(),
+                            name,
+                            super::designer::Action::Create,
+                        ));
+                        ui.close();
+                    }
+                });
+            }
         }
     }
     fn details(

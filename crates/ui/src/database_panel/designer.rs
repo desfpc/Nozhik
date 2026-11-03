@@ -5,13 +5,14 @@ use nozhik_database::{
     schema::{Output, Task},
     table_design::{
         Column, Definition, Element, Index, IndexPart, Key, KeyKind, Properties, TableGrant,
-        Trigger, migration_sql,
+        Trigger, creation_sql, migration_sql,
     },
 };
 mod forms;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Action {
     Modify,
+    Create,
     Ddl,
     Export,
 }
@@ -25,6 +26,7 @@ pub(super) struct Dialog {
     next_id: u64,
     pending: Option<(u64, CancellationToken, bool)>,
     close_after: bool,
+    creation_attempted: bool,
     error: String,
     message: String,
 }
@@ -52,7 +54,7 @@ impl NozhikUi {
         if self.database.modal_open() {
             return;
         }
-        if action != Action::Modify {
+        if !matches!(action, Action::Modify | Action::Create) {
             self.table_export_action(
                 ctx,
                 profile,
@@ -66,32 +68,43 @@ impl NozhikUi {
             );
             return;
         }
-        let blocked = self.database.tabs.iter().any(|t| {
-            t.connection == profile.name
-                && ((t.schema == schema && t.table.as_ref().is_some_and(|e| e.info.name == table))
-                    || t.result_editors.iter().any(|e| e.info.name == table))
-                && (t.is_dirty() || t.pending.is_some() || t.metadata_loading)
-        });
+        let blocked = action == Action::Modify
+            && self.database.tabs.iter().any(|t| {
+                t.connection == profile.name
+                    && ((t.schema == schema
+                        && t.table.as_ref().is_some_and(|e| e.info.name == table))
+                        || t.result_editors.iter().any(|e| e.info.name == table))
+                    && (t.is_dirty() || t.pending.is_some() || t.metadata_loading)
+            });
         if blocked {
             self.database.error =
                 "Submit or revert table edits and wait for loading before modifying its definition"
                     .into();
             return;
         }
+        let draft = (action == Action::Create).then(|| Definition {
+            driver: profile.driver,
+            schema: schema.clone(),
+            name: table.clone(),
+            ..Definition::default()
+        });
         self.database.table_designer = Some(Dialog {
             profile,
             schema,
             target: table.clone(),
             original: None,
-            draft: None,
+            draft,
             selected: 0,
             next_id: 1,
             pending: None,
             close_after: false,
+            creation_attempted: false,
             error: String::new(),
             message: String::new(),
         });
-        self.queue_table_design(Task::LoadTable(table), false);
+        if action == Action::Modify {
+            self.queue_table_design(Task::LoadTable(table), false);
+        }
         ctx.request_repaint();
     }
     fn queue_table_design(&mut self, task: Task, applying: bool) {
@@ -113,6 +126,12 @@ impl NozhikUi {
             cancel: token.clone(),
         }) {
             if let Some(d) = &mut self.database.table_designer {
+                if applying && d.original.is_none() {
+                    d.creation_attempted = true;
+                    if let Some(draft) = &d.draft {
+                        d.target.clone_from(&draft.name);
+                    }
+                }
                 d.pending = Some((id, token, applying));
                 d.error.clear();
                 d.message.clear();
@@ -145,8 +164,14 @@ impl NozhikUi {
                         d.schema.clone(),
                         d.target.clone(),
                         def.name.clone(),
+                        d.original.is_none(),
                     ));
-                    d.message = "Table definition updated".into();
+                    d.message = if d.original.is_none() {
+                        "Table created"
+                    } else {
+                        "Table definition updated"
+                    }
+                    .into();
                     close = d.close_after;
                 }
                 d.target.clone_from(&def.name);
@@ -159,7 +184,10 @@ impl NozhikUi {
             Err(e) => {
                 d.error = e.to_string();
                 d.close_after = false;
-                if applying {
+                if applying && d.original.is_none() {
+                    d.message = "If the table was partially created, use Reload from Server before editing it.".into();
+                }
+                if applying && d.original.is_some() {
                     if let Some(table) = self
                         .database
                         .trees
@@ -181,8 +209,12 @@ impl NozhikUi {
                 }
             }
         }
-        if let Some((connection, schema, old, new)) = refresh {
-            self.refresh_designed_table(&connection, &schema, &old, &new);
+        if let Some((connection, schema, old, new, created)) = refresh {
+            if created {
+                self.database.queue(Command::Inspect(connection));
+            } else {
+                self.refresh_designed_table(&connection, &schema, &old, &new);
+            }
         }
         if close {
             self.database.table_designer = None;
@@ -263,6 +295,9 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
     let busy = d.pending.is_some();
     ui.set_width((ctx.screen_rect().width() - 60.0).clamp(600.0, 1180.0));
     ui.heading("Modify Table");
+    if d.original.is_none() && d.draft.is_some() {
+        ui.label("Create new table");
+    }
     ui.label(format!("{} / {} / {}", d.profile.name, d.schema, d.target));
     ui.separator();
     if let Some(draft) = &mut d.draft {
@@ -329,8 +364,20 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
             });
         ui.separator();
         ui.label("SQL preview — commands to apply");
-        if let Some(original) = &d.original {
-            match migration_sql(original, draft) {
+        {
+            let sql = d.original.as_ref().map_or_else(
+                || creation_sql(draft),
+                |original| migration_sql(original, draft),
+            );
+            let task = || {
+                d.original.as_ref().map_or_else(
+                    || Task::CreateTable(Box::new(draft.clone())),
+                    |original| {
+                        Task::ModifyTable(Box::new(original.clone()), Box::new(draft.clone()))
+                    },
+                )
+            };
+            match sql {
                 Ok(sql) => {
                     super::schema::sql_preview_height(
                         ui,
@@ -343,26 +390,14 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
                             .clicked()
                         {
                             d.close_after = false;
-                            controls.request = Some((
-                                Task::ModifyTable(
-                                    Box::new(original.clone()),
-                                    Box::new(draft.clone()),
-                                ),
-                                true,
-                            ));
+                            controls.request = Some((task(), true));
                         }
                         if ui.add_enabled(!busy, egui::Button::new("OK")).clicked() {
                             if sql.is_empty() {
                                 controls.close = true;
                             } else {
                                 d.close_after = true;
-                                controls.request = Some((
-                                    Task::ModifyTable(
-                                        Box::new(original.clone()),
-                                        Box::new(draft.clone()),
-                                    ),
-                                    true,
-                                ));
+                                controls.request = Some((task(), true));
                             }
                         }
                     });
@@ -394,7 +429,10 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
     }
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!busy, egui::Button::new("Reload from Server"))
+            .add_enabled(
+                !busy && (d.original.is_some() || d.creation_attempted),
+                egui::Button::new("Reload from Server"),
+            )
             .clicked()
         {
             controls.request = Some((Task::LoadTable(d.target.clone()), false));
@@ -447,7 +485,7 @@ fn draw_tree(
         duplicate = ui
             .add_enabled(*selected != 0, egui::Button::new("Duplicate"))
             .clicked();
-        let can_move = draft.driver != DbDriverType::Postgres
+        let can_move = (original.is_none() || draft.driver != DbDriverType::Postgres)
             && draft
                 .elements
                 .iter()
@@ -711,6 +749,57 @@ mod tests {
         click_label(&mut shell, &ctx, "Design UI")?;
         click_label(&mut shell, &ctx, "main")?;
         click_label(&mut shell, &ctx, "tables")?;
+        connection_menu(&mut shell, &ctx, "tables")?;
+        click_label(&mut shell, &ctx, "+ New Table")?;
+        assert!(
+            shell
+                .database
+                .table_designer
+                .as_ref()
+                .is_some_and(|d| d.original.is_none() && d.draft.is_some())
+        );
+        replace_cell(&mut shell, &ctx, "new_table", "created_in_ui")?;
+        click_label(&mut shell, &ctx, "+")?;
+        click_label(&mut shell, &ctx, "Column")?;
+        let preview = frame(&mut shell, &ctx, vec![]);
+        assert!(has(&preview, "CREATE TABLE"));
+        click_label(&mut shell, &ctx, "Apply")?;
+        wait(&mut shell, &ctx, |s| {
+            s.database
+                .table_designer
+                .as_ref()
+                .is_some_and(|d| d.pending.is_none())
+        })?;
+        let dialog = shell
+            .database
+            .table_designer
+            .as_ref()
+            .ok_or("create dialog")?;
+        assert_eq!(dialog.error, "");
+        assert!(
+            dialog
+                .original
+                .as_ref()
+                .is_some_and(|d| d.name == "created_in_ui")
+        );
+        click_label(&mut shell, &ctx, "OK")?;
+        wait(&mut shell, &ctx, |s| {
+            s.database.trees["Design UI"].schemas[0]
+                .tables
+                .iter()
+                .any(|t| t.name == "created_in_ui")
+        })?;
+        // Cancel leaves a draft entirely local.
+        connection_menu(&mut shell, &ctx, "tables")?;
+        click_label(&mut shell, &ctx, "+ New Table")?;
+        click_label(&mut shell, &ctx, "Cancel")?;
+        assert!(shell.database.table_designer.is_none());
+        assert!(
+            !shell.database.trees["Design UI"].schemas[0]
+                .tables
+                .iter()
+                .any(|t| t.name == "new_table")
+        );
         connection_menu(&mut shell, &ctx, "items")?;
         click_label(&mut shell, &ctx, "Modify Table")?;
         wait(&mut shell, &ctx, |s| {

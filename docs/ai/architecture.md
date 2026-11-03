@@ -1626,3 +1626,16 @@ CSS selectors open all class occurrences; markup opens one declaration directly
 or a declaration chooser. CSS lists use egui Modal and the shared UsagesPopup row/
 filter/keyboard renderer. Standard properties have no class navigation. PHP usages
 keep their existing window/optional viewport behavior.
+
+
+## New table designer (v0.1.25)
+
+The connected tables folder routes + New Table into the existing Modify Table modal.
+A creation draft has no original snapshot; creation_sql validates and renders native
+CREATE TABLE plus indexes/triggers/options/comments/grants using the same object
+renderers as migration_sql. schema::Task::CreateTable executes that exact preview
+on the database worker, without IF NOT EXISTS or destructive replacement. SQLite
+and PostgreSQL use transactions; MySQL can retain partially committed DDL. Reload
+after a creation attempt reads the target if it exists. Successful Apply installs
+the catalog snapshot as the baseline for subsequent modifications and refreshes
+the catalog without renaming or invalidating other open tables. Cancel drops the draft.

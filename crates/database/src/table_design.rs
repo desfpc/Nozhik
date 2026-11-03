@@ -1,6 +1,8 @@
 //! Editable table snapshots and dialect-specific DDL migrations.
 use crate::{DbDriverType, Error, Result, connection::quote_identifier};
 mod catalog;
+mod create;
+pub use create::creation_sql;
 mod plan;
 mod sql;
 pub use plan::migration_sql;

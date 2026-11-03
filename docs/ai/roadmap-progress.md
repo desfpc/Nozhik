@@ -3263,3 +3263,58 @@ materials. После проверок cargo clean удалил 9.4 GiB; вре�
 очистки — 376 MiB; готовые бинарники/legal materials сохранены. Windows-кэш
 не создавался. Предыдущие незакоммиченные Docker-изменения сохранены.
 Финальные git status и git diff --check проверены.
+
+### Локальная LLM-консоль (v0.1.31, 2026-11-03)
+
+Новая кнопка LLM console (робот) рядом с Terminal открывает отдельную локальную
+PTY-панель проекта с независимыми вкладками. После запуска grok/codex Unix worker
+определяет точный executable/PID foreground-процесса; macOS также проверяет
+foreground-группу для npm/node-обёрток. Вывод и OSC title не используются для
+распознавания. На Windows панель пока работает как обычный терминал: backend
+автоопределения/контекста не подключён. Удалённые SSH/Docker агенты исключены.
+
+Распознанный агент получает Open files / Selection / Attach file и локальный
+drag-and-drop в область панели. Открытые текстовые буферы передаются UTF-8-снимками,
+включая несохранённые изменения, с mapping к исходным путям/revision. SFTP/binary
+вкладки исключены. Выделения сохраняют текст, исходный путь, revision, half-open
+byte offsets и 1-based UTF-8 byte line/column; смена фокуса не меняет cursors.
+Копии вложений со стабильными именами и snapshots принадлежат отдельному worker
+и приватному TempDir. Пределы: 20 MiB/file, 16 файлов/drop, 256 MiB/panel,
+64 KiB/selection paste. При закрытии проекта/IDE worker удаляет временные копии
+после остановки терминалов; hide/reopen сохраняет сессии и контекст.
+
+Изображения идут отдельным bracketed paste локального пути: CLI распознаёт
+нативное вложение. Другие файлы идут ссылкой с просьбой прочитать их средствами
+агента. Enter не добавляется. Асинхронный ответ связан с tab ID и agent PID/type;
+при смене вкладки/процесса он отклоняется. Control worker повторно проверяет
+foreground и bracketed paste, writer проверяет процесс непосредственно после
+ранее поставленных клавиатурных байтов. Терминальные control characters в
+контексте отклоняются. Нет новых пакетов, API-интеграции или хранения credentials.
+
+Проверки: native workspace/all-features — 296 passed, 0 failed, 10 прежних optional
+ignored. Регрессии проверяют PTY-распознавание, реальную вставку и stale PID reject,
+точные Unicode/reverse-selection координаты, несохранённые snapshots без записи
+в исходник, lifetime копий, size/control limits, scoped enabled drag-and-drop,
+реальные rail clicks LLM/Terminal/Problems. Native Clippy workspace/all-targets/
+all-features с -D warnings, rustfmt и git diff --check прошли. Первый sandbox
+прогон блокировал localhost fixtures; полный повтор с системным доступом прошёл.
+
+Установленный Codex 0.166.0 проверен в настоящем PTY: тестовый PNG стал [Image #1]
+в черновике без отправки модели. Grok 1.0.67 распознан как foreground executable,
+но его TUI потребовал browser login: авторизация и запрос модели не выполнялись.
+Механизм Grok image-path paste проверен по официальным upstream исходникам.
+Тестовый вход остановлен. Ручная native GUI-проверка Nozhik, Windows build/Clippy,
+commit и push не выполнялись. Версия workspace/Cargo.lock — 0.1.31, следующая 0.1.32.
+
+Workspace release build и штатный update-binaries.py прошли. Обновлён macOS ARM64
+комплект; --check подтвердил source fingerprint/SHA-256. Проверены bundle 0.1.31,
+целостность обоих ZIP, codesign --verify --deep --strict и совпадение всех четырёх
+embedded legal sidecars. После проверок cargo clean удалил 8.9 GiB; удалены логи
+задачи, скачанные upstream references, PTY smoke artifacts, packaging bytecode и
+восемь untracked Finder files. Тестовые процессы Grok/Python завершены. Размер
+проекта после очистки — 376 MiB; готовые бинарники/legal materials сохранены.
+Windows-кэш не создавался, Windows-бинарники не обновлялись. Финальные git status
+и git diff --check проверены.
+
+Пользователь вручную проверил LLM-консоль с Grok Build и подтвердил корректную
+работу всего функционала: контекст редактора, файлы и скриншоты.

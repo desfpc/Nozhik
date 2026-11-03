@@ -397,3 +397,48 @@ fn external_transport_uses_ansi_grid_resize_input_and_close() -> TestResult {
     assert!(closed.load(Ordering::Acquire));
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn local_agent_detection_paste_and_stale_process_rejection() -> TestResult {
+    use crate::agent::{ForegroundAgent, LocalAgent};
+    let dir = tempfile::tempdir()?;
+    let executable = dir.path().join("codex");
+    std::os::unix::fs::symlink("/bin/cat", &executable)?;
+    let mut options = SessionOptions::new(dir.path().into());
+    options.monitor_agent = true;
+    options.shell = Some(ShellCommand {
+        program: executable.into_os_string(),
+        args: vec![],
+    });
+    let mut manager = TerminalManager::new(Arc::new(|| {}));
+    let id = manager.create(options)?;
+    let session = manager.session(id).ok_or("missing local session")?;
+    wait_for(|| session.snapshot().is_some_and(|s| s.agent.is_some()))?;
+    let agent = session
+        .snapshot()
+        .and_then(|s| s.agent)
+        .ok_or("agent not detected")?;
+    assert_eq!(agent.agent, LocalAgent::Codex);
+    // The cat fixture echoes an application mode request and the received paste.
+    session.write(b"\x1b[?2004h\n".to_vec())?;
+    wait_for(|| {
+        session
+            .snapshot()
+            .and_then(|s| s.grid)
+            .is_some_and(|g| g.bracketed_paste)
+    })?;
+    session.paste_to_agent(agent, "LLM_CONTEXT\n")?;
+    wait_for(|| text(session).contains("LLM_CONTEXT"))?;
+    let stale = ForegroundAgent {
+        pid: agent.pid.saturating_add(1),
+        ..agent
+    };
+    session.paste_to_agent(stale, "MUST_NOT_INSERT\n")?;
+    wait_for(|| {
+        manager.drain().any(|e| matches!(e, TerminalEvent::Error { message, .. } if message.contains("LLM changed")))
+    })?;
+    assert!(!text(manager.session(id).ok_or("session closed")?).contains("MUST_NOT_INSERT"));
+    manager.shutdown();
+    Ok(())
+}

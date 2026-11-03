@@ -61,6 +61,8 @@ pub struct SessionOptions {
     pub cwd: PathBuf,
     /// Explicit command, or platform shell discovery.
     pub shell: Option<ShellCommand>,
+    /// Enable local foreground-agent monitoring for an LLM console.
+    pub monitor_agent: bool,
     /// Initial rows (1..=200).
     pub rows: u16,
     /// Initial columns (1..=500).
@@ -73,6 +75,7 @@ impl SessionOptions {
         Self {
             cwd,
             shell: None,
+            monitor_agent: false,
             rows: 24,
             cols: 80,
         }

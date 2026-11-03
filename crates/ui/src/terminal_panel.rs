@@ -9,6 +9,7 @@ use std::{collections::HashMap, path::Path};
 pub const TERMINAL_LABEL: &str = "⌘ Terminal";
 pub struct TerminalPanel {
     manager: TerminalManager,
+    llm: bool,
     active: Option<TerminalSessionId>,
     snapshots: HashMap<TerminalSessionId, SessionSnapshot>,
     view: TerminalView,
@@ -23,6 +24,7 @@ impl TerminalPanel {
     pub fn new(ctx: &egui::Context) -> Self {
         let ctx = ctx.clone();
         Self {
+            llm: false,
             manager: TerminalManager::new(std::sync::Arc::new(move || ctx.request_repaint())),
             active: None,
             snapshots: HashMap::new(),
@@ -34,6 +36,34 @@ impl TerminalPanel {
             #[cfg(test)]
             actions_rect: None,
         }
+    }
+    pub fn llm(ctx: &egui::Context) -> Self {
+        let mut panel = Self::new(ctx);
+        panel.llm = true;
+        panel
+    }
+    pub fn active_agent(
+        &self,
+    ) -> Option<(TerminalSessionId, nozhik_terminal::agent::ForegroundAgent)> {
+        let id = self.active?;
+        Some((id, self.snapshots.get(&id)?.agent?))
+    }
+    pub fn paste_context(
+        &mut self,
+        id: TerminalSessionId,
+        agent: nozhik_terminal::agent::ForegroundAgent,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.active != Some(id) || self.active_agent() != Some((id, agent)) {
+            return Err("Active LLM session changed; add the context again".into());
+        }
+        self.manager
+            .session(id)
+            .ok_or("LLM session closed")?
+            .paste_to_agent(agent, text)
+            .map_err(|e| e.to_string())?;
+        self.focus = true;
+        Ok(())
     }
     pub fn tick(&mut self) -> Option<String> {
         let mut message = None;
@@ -96,7 +126,9 @@ impl TerminalPanel {
         Ok(())
     }
     pub(crate) fn create(&mut self, root: &Path) -> Option<String> {
-        match self.manager.create(SessionOptions::new(root.into())) {
+        let mut options = SessionOptions::new(root.into());
+        options.monitor_agent = self.llm;
+        match self.manager.create(options) {
             Ok(id) => {
                 self.active = Some(id);
                 self.focus = true;
@@ -168,7 +200,9 @@ impl TerminalPanel {
                 ui.visuals_mut().clip_rect_margin = 0.0;
                 ui.horizontal(|ui| {
                     ui.set_height(34.0);
-                    ui.label(egui::RichText::new("Terminal").strong());
+                    ui.label(
+                        egui::RichText::new(if self.llm { "LLM" } else { "Terminal" }).strong(),
+                    );
                     ui.add_space(12.0);
                     let width = (ui.available_width() - 64.0).max(1.0);
                     egui::ScrollArea::horizontal()

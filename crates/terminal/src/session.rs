@@ -36,10 +36,17 @@ pub struct SessionSnapshot {
     pub grid: Option<Arc<TerminalGrid>>,
     /// Current lifecycle state.
     pub state: SessionState,
+    /// Recognized local foreground CLI; absent for shells and external transports.
+    pub agent: Option<crate::agent::ForegroundAgent>,
+}
+enum Input {
+    Bytes(Vec<u8>),
+    Agent(crate::agent::ForegroundAgent, Vec<u8>),
 }
 enum Control {
     Resize(u16, u16),
     Scroll(i32),
+    AgentPaste(crate::agent::ForegroundAgent, Vec<u8>),
 }
 struct Shared {
     emulator: Mutex<Emulator>,
@@ -62,7 +69,7 @@ pub struct TerminalSession {
     id: TerminalSessionId,
     options: SessionOptions,
     shared: Arc<Shared>,
-    input: mpsc::SyncSender<Vec<u8>>,
+    input: mpsc::SyncSender<Input>,
     control: mpsc::SyncSender<Control>,
     done: mpsc::Receiver<()>,
 }
@@ -100,6 +107,7 @@ impl TerminalSession {
             snapshot: Mutex::new(SessionSnapshot {
                 grid: None,
                 state: SessionState::Starting,
+                agent: None,
             }),
             stop: AtomicBool::new(false),
             live: AtomicBool::new(false),
@@ -111,6 +119,7 @@ impl TerminalSession {
         let (finished, done) = mpsc::channel();
         let state = shared.clone();
         let worker_options = options.clone();
+        let assisted_input = input.clone();
         std::thread::spawn(move || {
             let result = if let Some(transport) = transport {
                 external_worker(id, transport, &state, &wake, &events, &writes, &commands)
@@ -122,6 +131,7 @@ impl TerminalSession {
                     &wake,
                     &events,
                     writes,
+                    &assisted_input,
                     &commands,
                 )
             };
@@ -178,9 +188,21 @@ impl TerminalSession {
                 "terminal input batch exceeds 64 KiB".into(),
             ));
         }
-        self.input.try_send(bytes).map_err(queue_error)?;
+        self.input
+            .try_send(Input::Bytes(bytes))
+            .map_err(queue_error)?;
         self.shared.live.store(true, Ordering::Release);
         Ok(())
+    }
+    /// Pastes context into the same local foreground agent, without pressing Enter.
+    /// The worker revalidates process identity and bracketed-paste support.
+    /// # Errors
+    /// Rejects invalid text, closed sessions and full control queues.
+    pub fn paste_to_agent(&self, agent: crate::agent::ForegroundAgent, text: &str) -> Result<()> {
+        let bytes = crate::agent::paste_bytes(text)?;
+        self.control
+            .try_send(Control::AgentPaste(agent, bytes))
+            .map_err(queue_error)
     }
     /// Schedules PTY and emulator resize. Invalid values leave the session unchanged.
     /// # Errors
@@ -241,7 +263,8 @@ fn worker(
     shared: &Arc<Shared>,
     wake: &Wakeup,
     events: &mpsc::Sender<TerminalEvent>,
-    writes: mpsc::Receiver<Vec<u8>>,
+    writes: mpsc::Receiver<Input>,
+    assisted_input: &mpsc::SyncSender<Input>,
     commands: &mpsc::Receiver<Control>,
 ) -> Result<()> {
     if shared.stop.load(Ordering::Acquire) {
@@ -285,6 +308,7 @@ fn worker(
     let pid = child.process_id();
     shared.state(SessionState::Running(pid));
     report(events, wake, TerminalEvent::Started { id, pid });
+    let mut agent_checked = None::<Instant>;
     let result = loop {
         if shared.stop.load(Ordering::Acquire) {
             terminate(&*master, &mut *child);
@@ -315,6 +339,21 @@ fn worker(
                 break Err(error.into());
             }
         }
+        if options.monitor_agent
+            && agent_checked.is_none_or(|time| time.elapsed() >= Duration::from_millis(750))
+        {
+            let agent = crate::agent::foreground(&*master);
+            let changed = {
+                let mut snapshot = shared.snapshot.lock();
+                let changed = snapshot.agent != agent;
+                snapshot.agent = agent;
+                changed
+            };
+            if changed {
+                wake();
+            }
+            agent_checked = Some(Instant::now());
+        }
         if shared.live.swap(false, Ordering::AcqRel) {
             let mut emulator = shared.emulator.lock();
             emulator.live();
@@ -323,6 +362,30 @@ fn worker(
             wake();
         }
         match commands.recv_timeout(Duration::from_millis(20)) {
+            Ok(Control::AgentPaste(expected, bytes)) => {
+                let valid = options.monitor_agent
+                    && crate::agent::foreground(&*master) == Some(expected)
+                    && shared
+                        .snapshot
+                        .lock()
+                        .grid
+                        .as_ref()
+                        .is_some_and(|g| g.bracketed_paste);
+                let error = if valid {
+                    assisted_input
+                        .try_send(Input::Agent(expected, bytes))
+                        .err()
+                        .map(|e| queue_error(e).to_string())
+                } else {
+                    Some(
+                        "LLM changed or is not accepting bracketed paste; context was not inserted"
+                            .into(),
+                    )
+                };
+                if let Some(message) = error {
+                    report(events, wake, TerminalEvent::Error { id, message });
+                }
+            }
             Ok(Control::Resize(rows, cols)) => {
                 if let Err(error) = master.resize(pty::size(rows, cols)) {
                     report(
@@ -454,7 +517,7 @@ fn read_output(
 fn write_input(
     id: TerminalSessionId,
     mut writer: Box<dyn Write + Send>,
-    input: &mpsc::Receiver<Vec<u8>>,
+    input: &mpsc::Receiver<Input>,
     replies: &mpsc::Receiver<Vec<u8>>,
     shared: &Shared,
     wake: &Wakeup,
@@ -464,10 +527,29 @@ fn write_input(
         let batch = replies
             .try_recv()
             .ok()
+            .map(Input::Bytes)
             .or_else(|| input.recv_timeout(Duration::from_millis(10)).ok());
-        if let Some(bytes) = batch
-            && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush())
-        {
+        let bytes = match batch {
+            Some(Input::Bytes(bytes)) => bytes,
+            Some(Input::Agent(expected, bytes)) if crate::agent::still_foreground(expected) => {
+                shared.live.store(true, Ordering::Release);
+                bytes
+            }
+            Some(Input::Agent(_, _)) => {
+                report(
+                    events,
+                    wake,
+                    TerminalEvent::Error {
+                        id,
+                        message: "LLM is no longer in the foreground; context was not inserted"
+                            .into(),
+                    },
+                );
+                continue;
+            }
+            None => continue,
+        };
+        if let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush()) {
             if !shared.stop.load(Ordering::Acquire) {
                 report(
                     events,
@@ -493,7 +575,7 @@ fn external_worker(
     shared: &Shared,
     wake: &Wakeup,
     events: &mpsc::Sender<TerminalEvent>,
-    writes: &mpsc::Receiver<Vec<u8>>,
+    writes: &mpsc::Receiver<Input>,
     commands: &mpsc::Receiver<Control>,
 ) -> Result<()> {
     use crate::external::ExternalOutput;
@@ -505,11 +587,23 @@ fn external_worker(
                 shared.state(SessionState::Closed);
                 return Ok(());
             }
-            for bytes in writes.try_iter().take(64) {
-                transport.write(bytes)?;
+            for input in writes.try_iter().take(64) {
+                if let Input::Bytes(bytes) = input {
+                    transport.write(bytes)?;
+                }
             }
             for command in commands.try_iter().take(128) {
                 match command {
+                    Control::AgentPaste(_, _) => {
+                        report(
+                            events,
+                            wake,
+                            TerminalEvent::Error {
+                                id,
+                                message: "LLM context is local-only".into(),
+                            },
+                        );
+                    }
                     Control::Resize(rows, cols) => {
                         transport.resize(rows, cols)?;
                         let mut emulator = shared.emulator.lock();

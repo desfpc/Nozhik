@@ -317,6 +317,14 @@ impl NozhikUi {
                     }
                 }
                 "ui.cut" | "ui.copy" | "ui.paste" => {
+                    if self.bottom == Some(crate::llm_panel::LLM_LABEL)
+                        && self
+                            .llm
+                            .as_mut()
+                            .is_some_and(|panel| panel.clipboard_action(ctx, &action))
+                    {
+                        continue;
+                    }
                     if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
                         && self
                             .terminal
@@ -742,6 +750,9 @@ impl NozhikUi {
         self.recent_projects.finish();
         self.shutdown_language();
         if let Some(panel) = &mut self.terminal {
+            panel.shutdown();
+        }
+        if let Some(panel) = &mut self.llm {
             panel.shutdown();
         }
         self.docker.shutdown();

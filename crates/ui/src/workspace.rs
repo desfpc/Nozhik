@@ -264,6 +264,9 @@ impl Workspace {
             if let Some(terminal) = &mut project.terminal {
                 terminal.tick();
             }
+            if let Some(llm) = &mut project.llm {
+                llm.tick();
+            }
             project.workspace.background = false;
         }
     }

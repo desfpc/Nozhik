@@ -142,7 +142,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "eframe",
@@ -3078,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ai-completion"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "nix 0.28.0",
  "reqwest",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-buffer"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "nozhik-core",
  "nozhik-event-bus",
@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-config"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "directories",
  "nozhik-core",
@@ -3117,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-core"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-database"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "chrono",
  "futures-util",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-docker"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "ignore",
  "nix 0.28.0",
@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-event-bus"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "nozhik-core",
  "thiserror 2.0.21",
@@ -3169,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-fs-model"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "fuzzy-matcher",
  "git2",
@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-language-support"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "csscolorparser",
  "ignore",
@@ -3205,7 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-plugin-host"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "directories",
  "nozhik-event-bus",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-remote-ssh"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "directories",
  "keyring",
@@ -3236,7 +3236,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-terminal"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "nix 0.28.0",
  "parking_lot",
@@ -3248,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ui"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "eframe",
  "egui",
@@ -3285,7 +3285,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-vcs"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "git2",
  "tempfile",

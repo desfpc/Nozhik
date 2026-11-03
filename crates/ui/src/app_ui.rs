@@ -301,7 +301,24 @@ impl NozhikUi {
                 .show(ctx, |ui| {
                     // Keep sparse tool contents anchored at the chosen dock height.
                     ui.set_min_height(ui.available_height());
-                    if label == crate::terminal_panel::TERMINAL_LABEL {
+                    if label == crate::llm_panel::LLM_LABEL {
+                        let enabled = !self.global_modal() && !self.search.open;
+                        let panel = self
+                            .llm
+                            .get_or_insert_with(|| crate::llm_panel::LlmPanel::new(ctx));
+                        let root = self.project.as_ref().map(|p| p.root_path.as_path());
+                        if panel.show(
+                            ui,
+                            root,
+                            f32::from(self.config.font_size),
+                            enabled,
+                            &self.documents,
+                            self.active,
+                            &self.remote.documents,
+                        ) {
+                            self.bottom = None;
+                        }
+                    } else if label == crate::terminal_panel::TERMINAL_LABEL {
                         let panel = self
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
@@ -336,6 +353,11 @@ impl NozhikUi {
         }
         if self.bottom != Some(crate::terminal_panel::TERMINAL_LABEL)
             && let Some(panel) = &mut self.terminal
+        {
+            panel.hidden();
+        }
+        if self.bottom != Some(crate::llm_panel::LLM_LABEL)
+            && let Some(panel) = &mut self.llm
         {
             panel.hidden();
         }
@@ -379,6 +401,7 @@ impl NozhikUi {
                             crate::terminal_panel::TERMINAL_LABEL,
                             "Terminal",
                         ),
+                        (Icon::Llm, crate::llm_panel::LLM_LABEL, "LLM console"),
                         (Icon::Problems, "! Problems", "Problems"),
                     ] {
                         if tool_icons::button(ui, icon, self.bottom == Some(label), title).clicked()
@@ -388,6 +411,11 @@ impl NozhikUi {
                             } else {
                                 Some(label)
                             };
+                            if self.bottom == Some(crate::llm_panel::LLM_LABEL)
+                                && let Some(panel) = &mut self.llm
+                            {
+                                panel.focus();
+                            }
                             if self.bottom == Some(crate::terminal_panel::TERMINAL_LABEL)
                                 && let Some(panel) = &mut self.terminal
                             {
@@ -642,6 +670,9 @@ impl NozhikUi {
         {
             self.status = message;
         }
+        if let Some(panel) = &mut self.llm {
+            panel.tick();
+        }
         self.vcs.configure_commit_ai(&self.config);
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
         let git_files = self.vcs.take_open_paths();
@@ -828,10 +859,13 @@ mod tests {
             assert_eq!(rail.width(), 36.0);
             assert_eq!(rail.bottom(), rect("status")?.top());
             let terminal = rail.left_bottom() + vec2(18.0, -18.0);
-            let problems = terminal - vec2(0.0, 32.0);
+            let llm = terminal - vec2(0.0, 32.0);
+            let problems = terminal - vec2(0.0, 64.0);
             // Actual pointer input exercises open, switch, collapse and reopen.
             for (position, expected) in [
                 (terminal, Some(crate::terminal_panel::TERMINAL_LABEL)),
+                (llm, Some(crate::llm_panel::LLM_LABEL)),
+                (llm, None),
                 (problems, Some("! Problems")),
                 (problems, None),
                 (terminal, Some(crate::terminal_panel::TERMINAL_LABEL)),

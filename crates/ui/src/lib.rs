@@ -17,6 +17,7 @@ pub mod editor_view;
 mod integration;
 mod language;
 mod layout;
+mod llm_panel;
 mod menu_bar;
 mod plugins;
 mod project;
@@ -110,6 +111,7 @@ pub struct NozhikUi {
     remote: remote_panel::RemoteUi,
     docker: docker_panel::DockerUi,
     terminal: Option<terminal_panel::TerminalPanel>,
+    llm: Option<llm_panel::LlmPanel>,
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
     plugins_open: bool,
@@ -191,6 +193,7 @@ impl NozhikUi {
             remote: remote_panel::RemoteUi::default(),
             docker: docker_panel::DockerUi::default(),
             terminal: None,
+            llm: None,
             language: language::LanguageUi::default(),
             plugins,
             plugins_open: false,

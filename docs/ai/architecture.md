@@ -1724,3 +1724,37 @@ Rope snapshots and edits, not complete independent file copies per keystroke. Gi
 tracks staged/committed/worktree states and cannot replace editor Undo. This change
 preserves explicit save and dirty/revision gates; per-keystroke disk writes would
 also trigger filesystem/Git work and split typing undo groups via mark_saved.
+
+
+### Local LLM console (v0.1.31)
+
+NozhikUi owns a separate optional LlmPanel per project. It composes TerminalPanel
+in agent-monitoring mode, preserving ordinary terminal/SSH/Docker behavior and
+independent tabs. Lazy startup, hide/reopen, inactive-project ticking, clipboard
+routing and bounded terminal shutdown use the existing PTY lifecycle.
+
+terminal::agent identifies exact Codex/Grok executables using bounded background
+ps queries. Unix checks PTY foreground identity; macOS queries the foreground
+group to support npm/node wrappers. Other Unix platforms currently recognize a
+direct foreground executable. Windows monitoring is not wired; its LLM panel
+retains terminal input without assisted-context controls. No output/title matching,
+remote discovery, MCP server, model API or credentials are introduced.
+
+SessionSnapshot carries an optional ForegroundAgent (type + native PID).
+AgentPaste passes through the control worker (foreground identity and bracketed
+paste check), then the writer rechecks the selected process's foreground/group
+identity after earlier input batches. Context batches are atomic <=64 KiB with
+explicit bracket delimiters, no Enter and rejected terminal control characters.
+External transports reject assisted paste. Worker errors follow TerminalEvent.
+
+LlmPanel's bounded preparation mailbox receives immutable Rope snapshots or local
+paths. Its worker owns a private TempDir, stages file attachments with ASCII names
+and serializes editor snapshots without modifying source files. Open-file context
+maps originals/revisions to snapshots; selection includes 1-based UTF-8 byte
+coordinates and half-open byte ranges. UI excludes SFTP and binary documents.
+Results retain terminal ID and agent PID/type; switching tabs or replacing the
+agent rejects stale work. File preparation/storage are bounded; lifetime is the
+project panel, surviving hide/reopen and ending after terminal shutdown. Image
+paths use CLI-native bracketed-paste attachment recognition, verified for Codex;
+Grok's same route is documented in upstream paste.rs. Native model/file-format
+support remains the responsibility of the installed CLI.

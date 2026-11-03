@@ -1,4 +1,5 @@
 //! UI-independent PTY sessions, VT100 emulation and nonblocking session handles.
+pub mod agent;
 pub mod external;
 pub mod grid;
 pub mod manager;

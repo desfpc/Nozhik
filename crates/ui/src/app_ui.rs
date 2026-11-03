@@ -691,6 +691,7 @@ impl NozhikUi {
         }
         self.welcome.clone.show(ctx);
         self.index_dialogs(ctx);
+        self.project_entry_dialog(ctx);
         if !self.integration.actions.is_empty() {
             ctx.request_repaint();
         }

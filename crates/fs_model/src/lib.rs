@@ -1,4 +1,5 @@
 //! Filesystem model and a serial background command worker. No UI dependencies.
+mod entries;
 pub mod fuzzy;
 pub mod tree;
 pub mod watcher;
@@ -84,6 +85,17 @@ pub enum Command {
         /// A single portable directory name.
         name: String,
     },
+    /// Create one named child inside an existing project directory.
+    CreateEntry {
+        /// Existing destination directory.
+        parent: PathBuf,
+        /// Single file or directory name.
+        name: String,
+        /// Whether to create a directory instead of an empty file.
+        directory: bool,
+    },
+    /// Reveal a project entry in the OS file manager.
+    ShowInFileManager(PathBuf),
     /// Load one directory's children.
     LoadDir(PathBuf),
     /// Refresh index and previously loaded directories.
@@ -119,6 +131,15 @@ pub enum Reply {
     ProjectCreated(ProjectTree),
     /// Project creation failed; the UI may keep its form open.
     ProjectCreationError(String),
+    /// Entry creation completed; files should open in the editor.
+    EntryCreated {
+        /// Created absolute path.
+        path: PathBuf,
+        /// Whether the entry is a directory.
+        directory: bool,
+    },
+    /// Entry creation failed, retaining the input dialog.
+    EntryCreationError(String),
     /// New tree snapshot.
     Tree(ProjectTree),
     /// Refreshed index and loaded directories after filesystem invalidation.
@@ -173,6 +194,7 @@ impl FileSystem {
             };
             while let Ok(command) = requests.recv() {
                 let creating = matches!(command, Command::CreateProject { .. });
+                let entry = matches!(command, Command::CreateEntry { .. });
                 match worker.execute(command) {
                     Ok(replies) => {
                         for reply in replies {
@@ -184,6 +206,8 @@ impl FileSystem {
                     Err(error) => {
                         let reply = if creating {
                             Reply::ProjectCreationError(error.to_string())
+                        } else if entry {
+                            Reply::EntryCreationError(error.to_string())
                         } else {
                             Reply::Error(error.to_string())
                         };
@@ -282,6 +306,17 @@ impl Worker {
                 Reply::ProjectOpened(tree)
             }
             Command::CreateProject { parent, name } => return self.create_project(&parent, &name),
+            Command::CreateEntry {
+                parent,
+                name,
+                directory,
+            } => {
+                return self.create_entry(&parent, &name, directory);
+            }
+            Command::ShowInFileManager(path) => {
+                entries::show_in_file_manager(&path)?;
+                return Ok(Vec::new());
+            }
             Command::LoadDir(path) => {
                 let Some(tree) = &mut self.tree else {
                     return Ok(Vec::new());
@@ -375,6 +410,67 @@ fn read_text(path: &std::path::Path) -> Result<String, FsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_entries_are_exclusive_validated_and_refresh_lazy_parent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let worker = FileSystem::start(EventBus::new(16)?);
+        let next = || {
+            worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(5))
+        };
+        assert!(worker.send(Command::OpenProject(dir.path().into())));
+        let Reply::ProjectOpened(tree) = next()? else {
+            return Err("Expected project".into());
+        };
+        let root = tree.root_path;
+        for (name, directory) in [("Новая папка", true), ("hello world.txt", false)] {
+            assert!(worker.send(Command::CreateEntry {
+                parent: root.clone(),
+                name: name.into(),
+                directory
+            }));
+            assert!(
+                matches!(next()?, Reply::EntryCreated { path, directory: actual } if path == root.join(name) && actual == directory)
+            );
+            assert!(
+                matches!(next()?, Reply::Tree(tree) if tree.directories[&root].children.as_ref().is_some_and(|children| children.iter().any(|node| node.path() == root.join(name))))
+            );
+        }
+        let file = root.join("hello world.txt");
+        std::fs::write(&file, "keep")?;
+        for (parent, name, directory) in [
+            (root.clone(), "hello world.txt", false),
+            (root.clone(), "Новая папка", true),
+            (root.clone(), "../escape", false),
+            (root.clone(), "", true),
+            (root.clone(), "CON.txt", false),
+            (root.join("missing"), "x", false),
+            (
+                root.parent().ok_or("missing parent")?.to_path_buf(),
+                "escape",
+                true,
+            ),
+        ] {
+            assert!(worker.send(Command::CreateEntry {
+                parent,
+                name: name.into(),
+                directory
+            }));
+            assert!(matches!(next()?, Reply::EntryCreationError(_)));
+        }
+        assert_eq!(std::fs::read_to_string(file)?, "keep");
+        assert!(worker.send(Command::CreateEntry {
+            parent: root.join("Новая папка"),
+            name: "nested.rs".into(),
+            directory: false
+        }));
+        assert!(matches!(next()?, Reply::EntryCreated { .. }));
+        assert!(matches!(next()?, Reply::Tree(_)));
+        Ok(())
+    }
+
     #[test]
     fn create_project_exclusive_and_open_path_modes() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;

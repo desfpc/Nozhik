@@ -1441,7 +1441,7 @@ press/release target, unchanged caret/text and ordinary unknown-name clicks.
 Geometry tests cover Unicode/FQN/static members, variables, punctuation, gutter,
 trailing area and platform modifier selection. Native fmt, workspace Clippy
 all-targets/all-features with -D warnings, release workspace build and
- git diff --check passed. The sandbox run stopped at existing local TCP tests
+git diff --check passed. The sandbox run stopped at existing local TCP tests
 with PermissionDenied; the full unrestricted run passed. Browser launch and
 native GUI appearance were not manually exercised; headless tests inspect the
 navigation target without launching a browser. Windows/Linux were not run.
@@ -1614,7 +1614,7 @@ small viewports with the existing Close/control visibility regression.
 Final native verification: full workspace/all-features run outside sandbox —
 165 passed, 0 failed, 5 existing system/live tests ignored. fmt, workspace native
 Clippy all-targets/all-features with -D warnings, release workspace build and
- git diff --check passed. The first expanded viewport test found that introductory
+git diff --check passed. The first expanded viewport test found that introductory
 text pushed the PHP control below the compact viewport; moving explanatory text
 below the language toggles fixed it, and the full run passed. No manual native GUI
 smoke was run for this iteration; real pointer actions/settings persistence and
@@ -3141,3 +3141,39 @@ After binary verification cargo clean removed 10.6 GiB; task logs, packaging
 bytecode and seven untracked Finder files were removed. Project size is 386 MiB;
 the current macOS package and legal materials remain. No Windows target cache
 was created. Final git status and diff --check were inspected.
+
+### Контекстное меню дерева проекта (v0.1.28, 2026-11-03)
+
+Правый клик по файлу или директории, включая корень проекта, открывает
+Show in File Manager. macOS использует Finder с выделением цели (open -R),
+Windows — Explorer /select, Linux — xdg-open родительской директории.
+Для директорий доступны New Folder / New File с вводом одного имени;
+новый файл сразу открывается через прежний асинхронный read/editor путь.
+Создание автоматически раскрывает родителя, обновляет дерево, поиск и Git.
+
+CreateEntry выполняется на serial filesystem worker: валидация имени,
+canonical parent внутри проекта и эксклюзивное создание без перезаписи.
+EntryCreationError сохраняет имя и ошибку в project-local модальном окне,
+возвращает фокус к вводу и не затрагивает save state. Повторное создание
+заблокировано на время запроса. После успешной мутации ошибка перечитывания
+дерева не превращается в предложение повторить создание. Новых зависимостей нет.
+Workspace/Cargo.lock/UI/bundle — 0.1.28, следующая доработка — 0.1.29.
+
+Проверки: полный native workspace/all-features последовательно — 285 passed,
+0 failed, 10 optional tests ignored. Backend regression проверяет Unicode/пробелы,
+дубликаты с сохранением содержимого, недопустимые имена, выход за пределы проекта,
+отсутствующий и ленивый родитель. Headless UI через реальные pointer/text events
+проверяет разные меню файлов/директорий и создание файла с открытием и папки.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt и
+git diff --check прошли. Sandbox ограничивал localhost/process fixtures;
+полный повторный прогон с системным доступом прошёл. Native GUI и выделение
+в Finder вручную, Windows build/Clippy, commit и push не выполнялись.
+
+Workspace release build и штатный update-binaries.py прошли. macOS ARM64
+executable и подписанный app archive обновлены; --check подтвердил fingerprint
+исходников и SHA-256 payload. Проверены bundle 0.1.28, ZIP integrity,
+codesign --verify --deep --strict и совпадение embedded legal materials.
+После проверки cargo clean удалил 8.3 GiB; удалены логи задачи, packaging bytecode
+и шесть untracked Finder files. Размер проекта после очистки — 376 MiB;
+готовый macOS-комплект сохранён. Windows-кэш не создавался.
+Финальные git status и git diff --check проверены.

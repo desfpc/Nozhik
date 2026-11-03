@@ -1686,3 +1686,13 @@ a validated `docker exec -it -- ID /bin/sh` invocation to TerminalPanel's existi
 PTY SessionOptions/ShellCommand, with a `[Docker: name]` tab. Docker console tabs
 retain exited output (including missing-shell errors); other terminal behavior is
 unchanged. Each NozhikUi project owns its own worker/selection and CLI cancellation.
+
+### Project tree context actions (v0.1.28)
+
+Tree row context menus queue filesystem commands; CreateEntry validates a single
+portable name and canonical project parent on the serial worker, then uses exclusive
+create. EntryCreated/EntryCreationError are separate from save errors. Success
+closes the project-local modal, reloads the parent and opens new files through the
+existing editor read path. A refresh error after creation cannot retry the mutation.
+ShowInFileManager runs direct OS argv on the worker (macOS open -R, Windows
+Explorer /select, Linux xdg-open of the parent); no shell or new dependency.

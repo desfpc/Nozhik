@@ -12,12 +12,22 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub struct ProjectControls {
+    creation: Option<EntryDialog>,
     recursive: Option<PathBuf>,
     reveal: Option<PathBuf>,
     #[cfg(test)]
     buttons: Vec<egui::Rect>,
     #[cfg(test)]
     rows: std::collections::HashMap<PathBuf, egui::Rect>,
+}
+
+struct EntryDialog {
+    parent: PathBuf,
+    directory: bool,
+    name: String,
+    focus: bool,
+    pending: bool,
+    error: Option<String>,
 }
 
 impl NozhikUi {
@@ -107,6 +117,27 @@ impl NozhikUi {
         let replies: Vec<_> = self.fs.drain().collect();
         for reply in replies {
             match reply {
+                Reply::EntryCreated { path, directory } => {
+                    self.project_controls.creation = None;
+                    if let Some(parent) = path.parent() {
+                        self.expanded.insert(parent.to_path_buf());
+                    }
+                    self.selected_file = Some(path.clone());
+                    self.search.invalidate();
+                    self.refresh_project();
+                    self.vcs.invalidate();
+                    if !directory {
+                        self.open_file(path);
+                    }
+                }
+                Reply::EntryCreationError(error) => {
+                    if let Some(dialog) = &mut self.project_controls.creation {
+                        dialog.pending = false;
+                        dialog.focus = true;
+                        dialog.error = Some(error.clone());
+                    }
+                    self.status = error;
+                }
                 Reply::Refreshed(tree) => {
                     self.accept_project_tree(tree);
                     let again = self.refresh == RefreshState::Again;
@@ -419,6 +450,19 @@ impl NozhikUi {
                 self.queue(Command::LoadDir(path));
             }
         }
+        if let Some(path) = actions.show {
+            self.queue(Command::ShowInFileManager(path));
+        }
+        if let Some((parent, directory)) = actions.create {
+            self.project_controls.creation = Some(EntryDialog {
+                parent,
+                directory,
+                name: String::new(),
+                focus: true,
+                pending: false,
+                error: None,
+            });
+        }
         if let Some(path) = actions.open {
             self.open_file(path);
         }
@@ -428,6 +472,8 @@ impl NozhikUi {
 struct TreeActions {
     loads: Vec<PathBuf>,
     open: Option<PathBuf>,
+    show: Option<PathBuf>,
+    create: Option<(PathBuf, bool)>,
 }
 
 fn tree_row(
@@ -454,6 +500,7 @@ fn tree_row(
     );
     #[cfg(test)]
     controls.rows.insert(path.to_path_buf(), row.rect);
+    entry_menu(&row, path, true, selected, actions);
     if row.clicked() || (row.has_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
         *selected = Some(path.to_path_buf());
         row.request_focus();
@@ -492,6 +539,7 @@ fn tree_row(
                     );
                     #[cfg(test)]
                     controls.rows.insert(file.path.clone(), row.rect);
+                    entry_menu(&row, &file.path, false, selected, actions);
                     if controls.reveal.as_ref() == Some(&file.path) {
                         row.scroll_to_me(Some(egui::Align::Center));
                         controls.reveal = None;
@@ -510,6 +558,93 @@ fn tree_row(
             }
         }
     });
+}
+
+fn entry_menu(
+    row: &egui::Response,
+    path: &Path,
+    directory: bool,
+    selected: &mut Option<PathBuf>,
+    actions: &mut TreeActions,
+) {
+    if row.secondary_clicked() {
+        *selected = Some(path.to_path_buf());
+    }
+    row.context_menu(|ui| {
+        if ui.button("Show in File Manager").clicked() {
+            actions.show = Some(path.to_path_buf());
+            ui.close();
+        }
+        if directory {
+            ui.separator();
+            for (label, directory) in [("New Folder", true), ("New File", false)] {
+                if ui.button(label).clicked() {
+                    actions.create = Some((path.to_path_buf(), directory));
+                    ui.close();
+                }
+            }
+        }
+    });
+}
+
+impl NozhikUi {
+    pub(crate) fn project_entry_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.project_controls.creation else {
+            return;
+        };
+        let mut accept = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::new("project_entry_dialog")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading(if dialog.directory {
+                "New Folder"
+            } else {
+                "New File"
+            });
+            ui.label(format!("In: {}", dialog.parent.display()));
+            ui.label(if dialog.directory {
+                "Folder name"
+            } else {
+                "File name (including extension)"
+            });
+            let input = ui.add_enabled(
+                !dialog.pending,
+                egui::TextEdit::singleline(&mut dialog.name),
+            );
+            if dialog.focus {
+                input.request_focus();
+                dialog.focus = false;
+            }
+            if let Some(error) = &dialog.error {
+                ui.colored_label(crate::theme::ERROR, error);
+            }
+            ui.horizontal(|ui| {
+                accept = ui
+                    .add_enabled(!dialog.pending, egui::Button::new("Create"))
+                    .clicked()
+                    || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+                cancel = ui
+                    .add_enabled(!dialog.pending, egui::Button::new("Cancel"))
+                    .clicked();
+                if dialog.pending {
+                    ui.spinner();
+                }
+            });
+        });
+        if accept && !dialog.pending {
+            dialog.pending = self.fs.send(Command::CreateEntry {
+                parent: dialog.parent.clone(),
+                name: dialog.name.clone(),
+                directory: dialog.directory,
+            });
+            if !dialog.pending {
+                dialog.error = Some("Filesystem worker stopped".into());
+            }
+        }
+        if (cancel || modal.should_close()) && !dialog.pending {
+            self.project_controls.creation = None;
+        }
+    }
 }
 
 fn project_button(ui: &mut egui::Ui, icon: usize, label: &str, enabled: bool) -> egui::Response {
@@ -619,6 +754,109 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn tree_context_menu_creates_and_opens_file() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let bus = EventBus::new(128)?;
+        let settings = ConfigManager::from_path(root.join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        shell.open_project(root.clone());
+        until(&mut shell, |s| s.project.is_some())?;
+        let context = egui::Context::default();
+        let draw = |shell: &mut NozhikUi, events| {
+            context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| shell.project_panel(ui));
+                    shell.project_entry_dialog(ctx);
+                },
+            )
+        };
+        let click = |shell: &mut NozhikUi, pos, button| {
+            for pressed in [true, false] {
+                let _ = draw(
+                    shell,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        };
+        let label = |output: &egui::FullOutput, text: &str| {
+            output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(t) = &shape.shape {
+                    (t.galley.text() == text).then(|| t.visual_bounding_rect().center())
+                } else {
+                    None
+                }
+            })
+        };
+        let _ = draw(&mut shell, vec![]);
+        let position = shell.project_controls.rows[&root].center();
+        click(&mut shell, position, egui::PointerButton::Secondary);
+        let output = draw(&mut shell, vec![]);
+        assert!(label(&output, "Show in File Manager").is_some());
+        assert!(label(&output, "New Folder").is_some());
+        let position = label(&output, "New File").ok_or("Missing New File")?;
+        click(&mut shell, position, egui::PointerButton::Primary);
+        let _ = draw(&mut shell, vec![]);
+        assert!(shell.project_controls.creation.is_some());
+        let _ = draw(&mut shell, vec![egui::Event::Text("new.txt".into())]);
+        let output = draw(&mut shell, vec![]);
+        click(
+            &mut shell,
+            label(&output, "Create").ok_or("Missing Create")?,
+            egui::PointerButton::Primary,
+        );
+        until(&mut shell, |s| {
+            s.documents.iter().any(|d| d.path == root.join("new.txt"))
+        })?;
+        assert_eq!(std::fs::read_to_string(root.join("new.txt"))?, "");
+        assert!(shell.project_controls.creation.is_none());
+        let _ = draw(&mut shell, vec![]);
+        let position = shell.project_controls.rows[&root.join("new.txt")].center();
+        click(&mut shell, position, egui::PointerButton::Secondary);
+        let output = draw(&mut shell, vec![]);
+        assert!(label(&output, "Show in File Manager").is_some());
+        assert!(label(&output, "New Folder").is_none());
+        assert!(label(&output, "New File").is_none());
+        // Switch the context target to the root and create a folder through the same form.
+        let position = shell.project_controls.rows[&root].center();
+        click(&mut shell, position, egui::PointerButton::Secondary);
+        let output = draw(&mut shell, vec![]);
+        click(
+            &mut shell,
+            label(&output, "New Folder").ok_or("Missing New Folder")?,
+            egui::PointerButton::Primary,
+        );
+        let _ = draw(&mut shell, vec![]);
+        let _ = draw(&mut shell, vec![egui::Event::Text("Новая папка".into())]);
+        let output = draw(&mut shell, vec![]);
+        click(
+            &mut shell,
+            label(&output, "Create").ok_or("Missing Create")?,
+            egui::PointerButton::Primary,
+        );
+        until(&mut shell, |s| s.project_controls.creation.is_none())?;
+        assert!(root.join("Новая папка").is_dir());
+        assert_eq!(shell.documents.len(), 1);
+        Ok(())
     }
 
     #[test]

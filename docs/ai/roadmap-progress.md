@@ -2850,3 +2850,57 @@ workspace release build прошли. Windows build/Clippy, commit и push не 
 После проверки выполнен cargo clean (11.4 GiB), удалены пять untracked Finder files
 и временные файлы/логи задачи. Размер проекта после очистки — 381 MiB;
 актуальный macOS-комплект сохранён, Windows-кэш не создавался.
+
+
+### Редактор таблиц, DDL/экспорт и загрузка вкладки (v0.1.22, 2026-11-03)
+
+Меню таблицы содержит Modify Table, Generate DDL to Clipboard и Export Data to File.
+Модальное окно следует референсам: дерево объектов слева, редактируемые свойства
+справа, подсвеченный SQL-preview снизу. Изменения остаются черновиком до Apply/OK.
+Поддержаны table properties, columns/default/generated/identity/sequence options,
+primary/unique/foreign/check/exclusion keys, самостоятельные indexes, triggers,
+комментарии и явные grants с учётом диалекта. Новые IDs монотонны; удаление и
+добавление одноимённого объекта не смешивает его с исходным. Constraint-backed
+indexes представлены ключами. Несохранённые данные и активная загрузка блокируют
+структурное редактирование. Stale catalog отклоняется до Apply; Reload перечитывает
+структуру, включая частично применённый MySQL DDL после ошибки.
+
+Один migration planner формирует preview и исполняемый SQL. PostgreSQL использует
+транзакцию и native ALTER, MySQL/MariaDB — объединённый ALTER без неявного усечения
+значений и с сохранением trigger DEFINER/creation SQL_MODE (включая пустой mode).
+SQLite native rename отделён от транзакционной перестройки; сохраняются обычные
+rowids, AUTOINCREMENT high-water mark, данные и неизменённые native clauses.
+Перед commit проверяются FK и dependent views; cancel/error восстанавливает session
+pragmas/progress handler. Автоматического CASCADE нет. Ограничения virtual tables,
+partition-layout и порядка существующих PostgreSQL columns описаны в README.
+
+Table-only SQL/CSV использует существующий встроенный exporter и штатный picker,
+без внешних программ. Catalog filters исключают чужие tables/routines/events;
+PostgreSQL сохраняет same-schema descendants, owned sequences, функции триггеров,
+комментарии ключей/индексов/триггеров и ACL. Внешние зависимости остаются внешними.
+Whole-schema dump сохраняет прежнюю область. Generate DDL использует тот же exporter.
+
+Двойной клик немедленно создаёт вкладку с metadata-loader, затем data-loader.
+BufferId связывает ответ с вкладкой; закрытие до ответа и переключение вкладок
+не приводят к повторному открытию или смене фокуса. Ошибки/отключение снимают
+loader; Retry повторяет metadata request. Refresh catalog перезапускает актуальные
+pending describes. Успешный Apply обновляет дерево и чистые вкладки таблицы.
+
+Проверки: native workspace/all-features — 262 passed, 0 failed, 9 ignored.
+Два optional live regression отдельно прошли на временных PostgreSQL 14.4 и MariaDB:
+изменение существующих keys/FK/indexes/identity, storage/collation, deferred constraint
+trigger, пустой trigger SQL_MODE, table/schema dump/drop/restore и scope isolation.
+SQLite проверки включают 100 000 строк, cancellation/rollback, зависимости и counters.
+Pointer-driven headless UI проверяет реальные меню, изменение формы/Apply/export,
+ранний loader, закрытие pending tab, сохранение фокуса и размеры окна 700 px.
+Native GUI вручную не запускался. Clippy workspace/all-targets/all-features с
+-D warnings и rustfmt прошли. Новых зависимостей нет. Версия всех workspace packages
+и Cargo.lock — 0.1.22, следующая доработка — 0.1.23. Commit/push не выполнялись.
+
+Workspace release build и штатный update-binaries.py завершены; macOS ARM64
+executable и подписанный app archive обновлены. --check подтвердил source fingerprint
+и SHA-256. Проверены bundle version 0.1.22, целостность ZIP и четыре legal sidecars.
+Windows build/Clippy не запускались. Два временных контейнера удалены вместе с tmpfs;
+пользовательские БД и настройки не менялись. Cargo clean удалил 11.9 GiB;
+удалены временные логи и пять untracked .DS_Store. Итоговый размер проекта — 383 MiB,
+готовый macOS-комплект сохранён. Финальные git status и diff --check проверены.

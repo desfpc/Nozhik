@@ -62,6 +62,8 @@ pub struct ExportOptions {
     pub format: Format,
     /// Optional relation; CSV requires one, SQL exports the whole schema.
     pub table: String,
+    /// Restrict SQL/DDL to the named table.
+    pub only_table: bool,
     /// Include definitions with SQL data.
     pub ddl: bool,
     /// Include generated/computed columns in CSV (SQL dump tools handle these themselves).
@@ -82,6 +84,7 @@ impl Default for ExportOptions {
         Self {
             format: Format::Sql,
             table: String::new(),
+            only_table: false,
             ddl: true,
             generated: true,
             column_header: true,
@@ -102,10 +105,19 @@ pub struct Artifact {
 }
 /// Background schema action.
 pub enum Task {
+    /// Load one editable table definition.
+    LoadTable(String),
+    /// Apply a table draft after checking its original snapshot.
+    ModifyTable(
+        Box<crate::table_design::Definition>,
+        Box<crate::table_design::Definition>,
+    ),
     /// Fetch current settings.
     Settings,
     /// Apply the exact validated diff shown in the preview.
     Modify(Box<Settings>, Box<Settings>),
+    /// Create DDL only for the selected table.
+    TableDdl(String),
     /// Create a complete schema DDL artifact.
     Ddl,
     /// Create a complete export artifact.
@@ -119,6 +131,8 @@ pub enum Task {
 }
 /// Background schema result.
 pub enum Output {
+    /// Editable table snapshot.
+    Table(Box<crate::table_design::Definition>),
     /// Current editable values.
     Settings(Settings),
     /// Complete export plus bounded preview.
@@ -273,6 +287,10 @@ impl Connection {
     /// Execute a cancellable schema operation on this connection's transport.
     /// # Errors
     /// Reports SQL, filesystem, catalog, serialization or validation failures.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Typed dispatch keeps cancellation and artifact ownership in one match"
+    )]
     pub async fn schema_task(
         &self,
         schema: &str,
@@ -283,6 +301,17 @@ impl Connection {
             return Err(Error::Cancelled);
         }
         match task {
+            Task::LoadTable(table) => Ok(Output::Table(Box::new(
+                cancellable(cancel, self.table_definition(schema, &table)).await?,
+            ))),
+            Task::ModifyTable(old, new) => {
+                if old.schema != schema {
+                    return Err(Error::Invalid("Table schema changed".into()));
+                }
+                Ok(Output::Table(Box::new(
+                    self.modify_table(&old, &new, cancel).await?,
+                )))
+            }
             Task::Settings => Ok(Output::Settings(
                 cancellable(cancel, self.schema_settings(schema)).await?,
             )),
@@ -320,6 +349,16 @@ impl Connection {
                 self.execute_schema_script(sql.trim_start_matches('\u{feff}'), schema, cancel)
                     .await?;
                 Ok(Output::Done("SQL script completed".into()))
+            }
+            Task::TableDdl(table) => {
+                let options = ExportOptions {
+                    table,
+                    only_table: true,
+                    ..ExportOptions::default()
+                };
+                Ok(Output::Artifact(Arc::new(
+                    cancellable(cancel, self.dump(schema, Some(&options), true)).await?,
+                )))
             }
             Task::Ddl => Ok(Output::Artifact(Arc::new(
                 cancellable(cancel, self.dump(schema, None, true)).await?,
@@ -399,7 +438,7 @@ impl Connection {
         }
         Ok(settings)
     }
-    async fn execute_schema_script(
+    pub(crate) async fn execute_schema_script(
         &self,
         sql: &str,
         schema: &str,
@@ -506,6 +545,10 @@ impl Connection {
             Pool::Postgres(_) => self.postgres_dump(schema, options, ddl_only).await,
         }
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Schema/table export shares one SQLite snapshot and ordered restoration stream"
+    )]
     async fn sqlite_dump(
         &self,
         schema: &str,
@@ -521,7 +564,23 @@ impl Connection {
         connection.lock_handle().await?.remove_progress_handler();
         let mut transaction = sqlx::Connection::begin(&mut *connection).await?;
         let q = quote_identifier(self.driver, schema);
-        let (objects, rowid_tables) = sqlite_dump_catalog(&mut transaction, &q, ddl_only).await?;
+        let target = options.filter(|o| o.only_table).map(|o| o.table.as_str());
+        let (mut objects, rowid_tables) =
+            sqlite_dump_catalog(&mut transaction, &q, ddl_only, target).await?;
+        if let Some(table) = target {
+            let names = sqlx::query_scalar::<_, String>(&format!(
+                "SELECT name FROM {q}.sqlite_master WHERE tbl_name=?"
+            ))
+            .bind(table)
+            .fetch_all(&mut *transaction)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+            objects.retain(|(_, name, _)| names.contains(name));
+            if objects.is_empty() {
+                return Err(Error::Invalid("Table no longer exists".into()));
+            }
+        }
         let ddl = options.is_none_or(|o| o.ddl);
         out.write_all(b"PRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n")
             .await?;
@@ -578,7 +637,27 @@ impl Connection {
                     out.write_all(format!("{definition};\n").as_bytes()).await?;
                 }
             }
-            sqlite_restore_state(&mut transaction, &mut out, &q, !ddl_only).await?;
+            if let Some(table) = target {
+                if !ddl_only
+                    && objects
+                        .iter()
+                        .any(|(_, _, sql)| sql.to_ascii_uppercase().contains("AUTOINCREMENT"))
+                {
+                    let literal =
+                        crate::changes::literal(self.driver, &DbValue::Text(table.into()))?;
+                    if let Some(seq) = sqlx::query_scalar::<_, i64>(&format!(
+                        "SELECT seq FROM {q}.sqlite_sequence WHERE name=?"
+                    ))
+                    .bind(table)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    {
+                        out.write_all(format!("DELETE FROM sqlite_sequence WHERE name={literal};\nINSERT INTO sqlite_sequence(name,seq) VALUES({literal},{seq});\n").as_bytes()).await?;
+                    }
+                }
+            } else {
+                sqlite_restore_state(&mut transaction, &mut out, &q, !ddl_only).await?;
+            }
         }
         out.write_all(b"COMMIT;\nPRAGMA foreign_keys=ON;\n").await?;
         out.flush().await?;
@@ -727,8 +806,9 @@ async fn sqlite_dump_catalog(
     connection: &mut sqlx::SqliteConnection,
     q: &str,
     ddl_only: bool,
+    target: Option<&str>,
 ) -> Result<(SqliteObjects, std::collections::HashSet<String>)> {
-    let objects: Vec<(String, String, String)> = sqlx::query_as(&format!("SELECT type,name,sql FROM {q}.sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END,name")).fetch_all(&mut *connection).await?;
+    let objects: Vec<(String, String, String)> = sqlx::query_as(&format!("SELECT type,name,sql FROM {q}.sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND (? IS NULL OR tbl_name=?) ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END,name")).bind(target).bind(target).fetch_all(&mut *connection).await?;
     let tables = sqlx::query(&format!("PRAGMA {q}.table_list"))
         .fetch_all(&mut *connection)
         .await?;

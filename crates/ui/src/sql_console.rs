@@ -5,8 +5,14 @@ use nozhik_database::{CancellationToken, ConnectionProfile, DatabaseSchemaTree};
 use nozhik_language_support::highlighter::HighlightSpan;
 use std::ops::Range;
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent console mode, invalidation, loading and lifecycle flags"
+)]
 pub struct SqlConsole {
     pub table: Option<crate::table_editor::TableEditor>,
+    pub metadata_loading: bool,
+    pub retry_metadata: bool,
     pub ddl: bool,
     pub connection_invalid: bool,
     pub path: Option<std::path::PathBuf>,
@@ -35,6 +41,8 @@ impl SqlConsole {
     pub fn new(id: u64, connection: String, schema: String, sql: &str, title: String) -> Self {
         Self {
             table: None,
+            metadata_loading: false,
+            retry_metadata: false,
             ddl: false,
             connection_invalid: false,
             path: None,
@@ -63,7 +71,7 @@ impl SqlConsole {
     pub fn is_dirty(&self) -> bool {
         self.table.as_ref().map_or_else(
             || self.buffer.is_dirty() || self.data_dirty(),
-            |t| t.dirty() || self.pending.is_some(),
+            crate::table_editor::TableEditor::dirty,
         )
     }
     /// Returns a request only after toolbar/shortcut execution.
@@ -78,11 +86,46 @@ impl SqlConsole {
         tree: Option<&DatabaseSchemaTree>,
         enabled: bool,
     ) -> Option<String> {
+        if self.metadata_loading || self.table.as_ref().is_some_and(|t| !t.info.details_loaded) {
+            self.focus_id = None;
+            self.editor_id = None;
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    if !self.error.is_empty() {
+                        ui.colored_label(crate::theme::ERROR, &self.error);
+                    }
+                    if self.metadata_loading && !self.connection_invalid {
+                        ui.spinner();
+                        ui.label("Loading table metadata…");
+                    } else if ui
+                        .add_enabled(enabled, egui::Button::new("Retry loading table"))
+                        .clicked()
+                    {
+                        self.retry_metadata = true;
+                    }
+                });
+            });
+            return None;
+        }
         if let Some(table) = &mut self.table {
             self.focus_id = None;
             self.editor_id = None;
             if !self.error.is_empty() {
                 ui.colored_label(crate::theme::ERROR, &self.error);
+            }
+            if table.changes.is_none()
+                && let Some((_, cancel)) = &self.pending
+            {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                        ui.label("Loading table data…");
+                        if ui.button("Cancel loading").clicked() {
+                            cancel.cancel();
+                        }
+                    });
+                });
+                return None;
             }
             table.show(ui, self.pending.is_some(), enabled);
             return None;

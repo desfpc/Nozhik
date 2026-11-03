@@ -1536,3 +1536,29 @@ MySQL DELIMITER обрабатывается вне строк/коммента�
 cleanup/ROLLBACK; экспорт/settings сбрасывают старый progress handler при новом acquire.
 Server connections после scripts/dumps retire, чтобы не переносить USE/search_path/
 SQL_MODE/transaction state между вкладками. Cancel не откатывает committed DDL/DML.
+
+
+### Table designer (v0.1.22)
+
+`database::table_design` owns dialect-aware Definition/Element snapshots, native
+catalog parsing and migration_sql shared by preview and execution. LoadTable,
+ModifyTable and TableDdl use existing SchemaTask queues and cancellation. Apply
+rechecks source metadata; SQLite additionally rechecks under BEGIN IMMEDIATE.
+PostgreSQL changes run in a transaction; MySQL combines compatible ALTER clauses
+but DDL commits remain server-defined. SQLite rebuild preserves data/rowids/counters,
+checks FKs and dependent views, and restores session pragmas even on cancellation.
+Do not roll back an existing user transaction when our BEGIN did not succeed.
+Native unmodified clauses are retained; no implicit CASCADE or external utilities.
+
+UI designer keeps original/draft and stable monotonically allocated element IDs.
+Left tree, right selected form and bottom SQL preview are bounded child regions;
+worker results use request IDs and modal/project gates. Successful mutations
+invalidate metadata and reload clean table tabs; failure invalidates potentially
+partial results. Table export reuses Artifact/options with explicit only_table,
+filtering catalogs before unrelated object checks; schema exports keep full scope.
+
+Opening a table allocates its BufferId before Describe. Metadata/data loading are
+separate states; replies update only the still-existing matching buffer, preserving
+focus. Closing a read-only pending tab cancels work without a dirty confirmation.
+Metadata errors clear loading and permit retry; catalog refresh restarts pending
+requests against fresh metadata without reopening closed tabs.

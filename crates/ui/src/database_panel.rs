@@ -8,6 +8,7 @@ use nozhik_remote_ssh::{SshSession, credentials::Secret};
 use std::{collections::HashMap, sync::Arc};
 use zeroize::Zeroize;
 
+mod designer;
 mod schema;
 mod tree;
 
@@ -20,6 +21,7 @@ pub struct DatabaseUi {
     pub tabs: Vec<SqlConsole>,
     pub active: Option<usize>,
     schema_dialog: Option<schema::Dialog>,
+    table_designer: Option<designer::Dialog>,
     form: Option<Form>,
     login: Option<ConnectionProfile>,
     password: String,
@@ -37,6 +39,7 @@ struct PendingTable {
     schema: String,
     table: String,
     open: bool,
+    open_tab: Option<nozhik_core::BufferId>,
 }
 struct Pending {
     profile: ConnectionProfile,
@@ -78,7 +81,10 @@ impl DatabaseUi {
         self.error.clear();
     }
     pub const fn modal_open(&self) -> bool {
-        self.form.is_some() || self.login.is_some() || self.schema_dialog.is_some()
+        self.form.is_some()
+            || self.login.is_some()
+            || self.schema_dialog.is_some()
+            || self.table_designer.is_some()
     }
     pub fn table_modal(&self) -> bool {
         self.active
@@ -88,6 +94,7 @@ impl DatabaseUi {
     }
     pub fn shutdown(&mut self) {
         self.schema_dialog = None;
+        self.table_designer = None;
         if let Some(worker) = self.worker.take() {
             worker.shutdown();
         }
@@ -179,6 +186,7 @@ impl NozhikUi {
                             if let Some((_, token)) = tab.pending.take() {
                                 token.cancel();
                             }
+                            tab.metadata_loading = false;
                             tab.connection_invalid = true;
                             tab.error="Connection settings changed. Reopen the table/console to use the updated connection. Pending edits have been retained.".into();
                         }
@@ -192,7 +200,18 @@ impl NozhikUi {
                     self.database.error.clear();
                     self.status = "Database connection updated; reconnect to apply settings".into();
                 }
-                Reply::SchemaTask(id, result) => self.schema_task_reply(ctx, id, result),
+                Reply::SchemaTask(id, result) => {
+                    if self
+                        .database
+                        .table_designer
+                        .as_ref()
+                        .is_some_and(|d| d.accepts(id))
+                    {
+                        self.table_designer_reply(id, result);
+                    } else {
+                        self.schema_task_reply(ctx, id, result);
+                    }
+                }
                 Reply::Table(id, result) => self.database_table_reply(id, result),
                 Reply::Profiles(profiles) => {
                     self.database.profiles = profiles;
@@ -212,15 +231,57 @@ impl NozhikUi {
                 }
                 Reply::Error(error) => self.database.error = error,
                 Reply::Disconnected(name) => {
+                    for tab in &mut self.database.tabs {
+                        if tab.connection == name && tab.metadata_loading {
+                            tab.metadata_loading = false;
+                            tab.error = "Connection disconnected while loading the table".into();
+                        }
+                    }
                     self.database.trees.remove(&name);
                     self.database.tables_pending.retain(|_, p| p.name != name);
                     self.database.table_errors.retain(|(n, _, _), _| n != &name);
                 }
                 Reply::Schema(name, result) => match result {
                     Ok(tree) => {
+                        let pending = self
+                            .database
+                            .tables_pending
+                            .values()
+                            .filter(|p| p.name == name)
+                            .filter_map(|p| {
+                                p.open_tab.map(|id| (id, p.schema.clone(), p.table.clone()))
+                            })
+                            .collect::<Vec<_>>();
                         self.database.tables_pending.retain(|_, p| p.name != name);
                         self.database.table_errors.retain(|(n, _, _), _| n != &name);
-                        self.database.trees.insert(name, tree);
+                        self.database.trees.insert(name.clone(), tree);
+                        let active = self.database.active;
+                        for (id, schema, table) in pending {
+                            if !self.database.tabs.iter().any(|t| {
+                                t.buffer.snapshot().buffer_id == id && !t.connection_invalid
+                            }) {
+                                continue;
+                            }
+                            let info = self
+                                .database
+                                .trees
+                                .get(&name)
+                                .and_then(|t| t.schemas.iter().find(|s| s.name == schema))
+                                .and_then(|s| s.tables.iter().find(|t| t.name == table))
+                                .cloned();
+                            if let Some(info) = info {
+                                self.request_database_table(name.clone(), schema, info, true, true);
+                            } else if let Some(tab) = self
+                                .database
+                                .tabs
+                                .iter_mut()
+                                .find(|t| t.buffer.snapshot().buffer_id == id)
+                            {
+                                tab.metadata_loading = false;
+                                tab.error = "Table no longer exists after metadata refresh".into();
+                            }
+                        }
+                        self.database.active = active;
                     }
                     Err(e) => self.database.error = e.to_string(),
                 },
@@ -319,6 +380,7 @@ impl NozhikUi {
         if !self.workspace.background && !self.remote.modal_open() {
             self.database_dialogs(ctx);
             self.schema_dialog(ctx);
+            self.table_designer_dialog(ctx);
         }
     }
     fn start_database_connection(
@@ -414,6 +476,9 @@ impl NozhikUi {
                 tree::Action::Schema(profile, schema, action) => {
                     self.schema_action(ui.ctx(), profile, schema, action);
                 }
+                tree::Action::Table(profile, schema, table, action) => {
+                    self.table_context_action(ui.ctx(), profile, schema, table, action);
+                }
                 tree::Action::Connect(profile) => connect = Some(profile),
                 tree::Action::Password(profile) => self.database.login = Some(profile),
                 tree::Action::Edit(profile) => edit = Some(profile),
@@ -455,11 +520,7 @@ impl NozhikUi {
             self.new_sql_console(name, schema, "SELECT 1;", "SQL Console".into());
         }
         if let Some((profile, schema, table)) = open {
-            if table.details_loaded {
-                self.open_database_table(profile, schema, table);
-            } else {
-                self.request_database_table(profile.name, schema, table, true, true);
-            }
+            self.open_database_table(profile, schema, table);
         }
     }
     fn open_database_table(
@@ -477,22 +538,19 @@ impl NozhikUi {
             self.database.active = Some(index);
             return;
         }
+        let loading = !table.details_loaded;
         let title = table.name.clone();
-        let editor = crate::table_editor::TableEditor::new(profile.driver, table);
-        let sql = match editor.page_sql(&schema) {
-            Ok(sql) => sql,
-            Err(error) => {
-                self.database.error = error.to_string();
-                return;
+        let editor = crate::table_editor::TableEditor::new(profile.driver, table.clone());
+        self.new_sql_console(profile.name.clone(), schema.clone(), "", title);
+        if let Some(index) = self.database.active {
+            self.database.tabs[index].metadata_loading = loading;
+            self.database.tabs[index].table = Some(editor);
+            if loading {
+                self.request_database_table(profile.name, schema, table, true, true);
+            } else {
+                self.reload_database_table(index);
             }
-        };
-        self.new_sql_console(profile.name, schema, &sql, title);
-        if let Some(index) = self.database.active
-            && let Some(tab) = self.database.tabs.get_mut(index)
-        {
-            tab.table = Some(editor);
         }
-        self.execute_database_sql(sql);
     }
 
     fn edit_database_connection(&mut self, profile: ConnectionProfile) {
@@ -512,6 +570,39 @@ impl NozhikUi {
         open: bool,
         retry: bool,
     ) {
+        let open_tab = if open {
+            let existing = self.database.tabs.iter().position(|t| {
+                !t.connection_invalid
+                    && t.connection == name
+                    && t.schema == schema
+                    && t.table.as_ref().is_some_and(|v| v.info.name == table.name)
+            });
+            let index = if let Some(index) = existing {
+                index
+            } else {
+                let Some(driver) = self
+                    .database
+                    .profiles
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| p.driver)
+                else {
+                    return;
+                };
+                self.new_sql_console(name.clone(), schema.clone(), "", table.name.clone());
+                let Some(index) = self.database.active else {
+                    return;
+                };
+                self.database.tabs[index].table =
+                    Some(crate::table_editor::TableEditor::new(driver, table.clone()));
+                index
+            };
+            self.database.active = Some(index);
+            self.database.tabs[index].metadata_loading = true;
+            Some(self.database.tabs[index].buffer.snapshot().buffer_id)
+        } else {
+            None
+        };
         if let Some(pending) = self
             .database
             .tables_pending
@@ -519,6 +610,9 @@ impl NozhikUi {
             .find(|p| p.name == name && p.schema == schema && p.table == table.name)
         {
             pending.open |= open;
+            if open_tab.is_some() {
+                pending.open_tab = open_tab;
+            }
             return;
         }
         let key = (name.clone(), schema.clone(), table.name.clone());
@@ -527,6 +621,21 @@ impl NozhikUi {
         }
         if self.database.table_errors.contains_key(&key) || !self.database.trees.contains_key(&name)
         {
+            if let Some(tab_id) = open_tab
+                && let Some(tab) = self
+                    .database
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.buffer.snapshot().buffer_id == tab_id)
+            {
+                tab.metadata_loading = false;
+                tab.error = self
+                    .database
+                    .table_errors
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| "Connection offline; reconnect before retrying".into());
+            }
             return;
         }
         let id = self.database.request_id();
@@ -544,8 +653,18 @@ impl NozhikUi {
                     schema,
                     table: table.name,
                     open,
+                    open_tab,
                 },
             );
+        } else if let Some(tab_id) = open_tab
+            && let Some(tab) = self
+                .database
+                .tabs
+                .iter_mut()
+                .find(|t| t.buffer.snapshot().buffer_id == tab_id)
+        {
+            tab.metadata_loading = false;
+            tab.error.clone_from(&self.database.error);
         }
     }
     fn database_table_reply(
@@ -599,15 +718,13 @@ impl NozhikUi {
                     pending.schema.clone(),
                     pending.table,
                 ));
-                if pending.open
-                    && let Some(profile) = self
-                        .database
-                        .profiles
-                        .iter()
-                        .find(|p| p.name == pending.name)
-                        .cloned()
+                if let Some(tab_id) = pending.open_tab
+                    && let Some(index) = self.database.tabs.iter().position(|t| {
+                        t.buffer.snapshot().buffer_id == tab_id && !t.connection_invalid
+                    })
                 {
-                    self.open_database_table(profile, pending.schema, info);
+                    self.database.tabs[index].metadata_loading = false;
+                    self.reload_database_table(index);
                 }
             }
             Err(e) => {
@@ -615,6 +732,16 @@ impl NozhikUi {
                 self.database
                     .table_errors
                     .insert((pending.name, pending.schema, pending.table), error.clone());
+                if let Some(tab_id) = pending.open_tab
+                    && let Some(tab) = self
+                        .database
+                        .tabs
+                        .iter_mut()
+                        .find(|t| t.buffer.snapshot().buffer_id == tab_id)
+                {
+                    tab.metadata_loading = false;
+                    tab.error.clone_from(&error);
+                }
                 if pending.open {
                     self.database.error = error.clone();
                 }
@@ -671,12 +798,22 @@ impl NozhikUi {
                 tree,
                 enabled && !tab.connection_invalid,
             );
+            let retry = if std::mem::take(&mut tab.retry_metadata) {
+                tab.table
+                    .as_ref()
+                    .map(|t| (tab.connection.clone(), tab.schema.clone(), t.info.clone()))
+            } else {
+                None
+            };
             let action = tab.active_table_mut().and_then(|t| t.action.take());
             self.editor_focus = tab.focus_id;
             self.integration.last_editor = tab.editor_id;
             let mut layout = self.layout.value;
             layout.sql = tab.split;
             self.layout.set(layout);
+            if let Some((name, schema, info)) = retry {
+                self.request_database_table(name, schema, info, true, true);
+            }
             if let Some(sql) = request {
                 self.execute_database_sql(sql);
             }
@@ -1343,7 +1480,7 @@ mod table_tests {
         }
         Ok(())
     }
-    fn replace_cell(
+    pub(super) fn replace_cell(
         shell: &mut NozhikUi,
         ctx: &egui::Context,
         old: &str,

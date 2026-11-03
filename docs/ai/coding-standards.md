@@ -181,3 +181,15 @@ certificate/SSH trust checks enabled. Settings read/save/test stay on the Git wo
 connection tests must not change refs, index, worktree or persist candidate settings.
 Successful clone credentials travel with that project's open request and must not
 become global state. Blank fields may retain only a matching session credential.
+
+
+### Table structure editing
+
+Keep dialect SQL generation in database::table_design; preview and Apply must use
+one migration plan. Retain native clauses on unchanged objects and compare a fresh
+catalog snapshot before modifying. Never silently drop dependent objects or use
+CASCADE. SQLite rebuild must restore progress handlers/session pragmas on every
+exit, validate dependent views/FKs before commit and preserve rowids/counters.
+Keep selected-table export catalog filters separate from whole-schema scope.
+Table-loading replies are BufferId-bound and must never change focus or reopen a
+closed tab. Read-only pending loads do not count as unsaved data edits.

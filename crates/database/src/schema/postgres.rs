@@ -24,6 +24,10 @@ async fn write(out: &mut Writer, sql: &str) -> Result<()> {
 // Extension members are recreated by CREATE EXTENSION, never independently.
 const RELATIONS: &str = "SELECT c.oid::bigint AS id,c.relname::text AS name,c.relkind::text AS kind,c.relpersistence::text AS persistence,c.relispartition, pg_get_expr(c.relpartbound,c.oid,true) AS bound,pg_get_partkeydef(c.oid) AS partition_key,COALESCE(array_to_string(c.reloptions,', '),'') AS options, c.relrowsecurity,c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f') AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY c.oid";
 impl Connection {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Ordered schema/table snapshot, DDL and data phases share one transaction"
+    )]
     pub(super) async fn postgres_dump(
         &self,
         schema: &str,
@@ -34,6 +38,7 @@ impl Connection {
             return Err(Error::Invalid("PostgreSQL required".into()));
         };
         let ddl = options.is_none_or(|o| o.ddl);
+        let target = options.filter(|o| o.only_table).map(|o| o.table.as_str());
         let file = temporary().await?;
         let mut out = Writer::new(tokio::fs::File::from_std(file.reopen()?));
         let mut connection = pool.acquire().await?;
@@ -49,35 +54,70 @@ impl Connection {
             return Err(Error::Invalid("Schema no longer exists".into()));
         }
         out.write_all(b"-- Nozhik SQL export (PostgreSQL)\nSET standard_conforming_strings=on;\nSET client_encoding='UTF8';\nSET check_function_bodies=false;\nSET TIME ZONE 'UTC';\nSET DateStyle='ISO';\n").await?;
-        let relations = sqlx::query(RELATIONS)
+        let mut relations = sqlx::query(RELATIONS)
             .bind(schema)
             .fetch_all(&mut *tx)
             .await?;
-        let sequences = sequence_rows(&mut tx, schema).await?;
+        let mut sequences = sequence_rows(&mut tx, schema).await?;
+        if let Some(table) = target {
+            let ids: Vec<i64>=sqlx::query_scalar("WITH RECURSIVE tree(id) AS (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 UNION SELECT i.inhrelid FROM pg_inherits i JOIN tree t ON t.id=i.inhparent) SELECT id::bigint FROM tree").bind(schema).bind(table).fetch_all(&mut *tx).await?;
+            relations.retain(|r| r.try_get::<i64, _>("id").is_ok_and(|id| ids.contains(&id)));
+            if relations.is_empty() {
+                return Err(Error::Invalid("Table no longer exists".into()));
+            }
+            if relations.len() != ids.len() {
+                return Err(Error::Invalid(
+                    "Cross-schema inherited/partitioned tables require a wider schema export"
+                        .into(),
+                ));
+            }
+            let owned: Vec<i64>=sqlx::query_scalar("SELECT objid::bigint FROM pg_depend WHERE classid='pg_class'::regclass AND refclassid='pg_class'::regclass AND refobjid::bigint=ANY($1) AND deptype IN ('a','i')").bind(&ids).fetch_all(&mut *tx).await?;
+            sequences.retain(|r| {
+                r.try_get::<i64, _>("id")
+                    .is_ok_and(|id| owned.contains(&id))
+            });
+        }
         if ddl {
-            write(
-                &mut out,
-                &format!("CREATE SCHEMA IF NOT EXISTS {}", q(schema)),
-            )
-            .await?;
+            if target.is_none() {
+                write(
+                    &mut out,
+                    &format!("CREATE SCHEMA IF NOT EXISTS {}", q(schema)),
+                )
+                .await?;
+                write(
+                    &mut out,
+                    &format!("SET search_path TO {},pg_catalog", q(schema)),
+                )
+                .await?;
+                check_supported(&mut tx, schema).await?;
+                extensions(&mut tx, &mut out, schema).await?;
+                collations(&mut tx, &mut out, schema).await?;
+                types(&mut tx, &mut out, schema).await?;
+            }
             write(
                 &mut out,
                 &format!("SET search_path TO {},pg_catalog", q(schema)),
             )
             .await?;
-            check_supported(&mut tx, schema).await?;
-            extensions(&mut tx, &mut out, schema).await?;
-            collations(&mut tx, &mut out, schema).await?;
-            types(&mut tx, &mut out, schema).await?;
             for row in &sequences {
                 if row.try_get::<bool, _>("identity")? {
                     continue;
                 }
                 write(&mut out,&format!("CREATE SEQUENCE {}.{} AS {} INCREMENT BY {} MINVALUE {} MAXVALUE {} START WITH {} CACHE {} {}",q(schema),q(&row.try_get::<String,_>("name")?),row.try_get::<String,_>("kind")?,row.try_get::<i64,_>("seqincrement")?,row.try_get::<i64,_>("seqmin")?,row.try_get::<i64,_>("seqmax")?,row.try_get::<i64,_>("seqstart")?,row.try_get::<i64,_>("seqcache")?,if row.try_get::<bool,_>("seqcycle")? {"CYCLE"} else {"NO CYCLE"})).await?;
             }
-            functions(&mut tx, &mut out, schema, false).await?;
+            if target.is_none() {
+                functions(&mut tx, &mut out, schema, false).await?;
+            }
             tables(&mut tx, &mut out, schema, &relations).await?;
-            functions(&mut tx, &mut out, schema, true).await?;
+            if target.is_none() {
+                functions(&mut tx, &mut out, schema, true).await?;
+            } else {
+                let ids = relations
+                    .iter()
+                    .map(|r| r.try_get::<i64, _>("id"))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                for definition in sqlx::query_scalar::<_,String>("SELECT DISTINCT pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace WHERE t.tgrelid::bigint=ANY($1) AND NOT t.tgisinternal AND n.nspname NOT LIKE 'pg_%' AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')").bind(&ids).fetch_all(&mut *tx).await? {write(&mut out,definition.trim_end_matches([';','\n'])).await?;}
+            }
         }
         if !ddl_only {
             write(&mut out, "BEGIN").await?;
@@ -119,7 +159,19 @@ impl Connection {
         if ddl {
             views(&mut tx, &mut out, schema, &relations, !ddl_only).await?;
             post_data(&mut tx, &mut out, schema, &relations).await?;
-            ownership(&mut tx, &mut out, schema, &sequences).await?;
+            let names = relations
+                .iter()
+                .chain(&sequences)
+                .map(|r| r.try_get::<String, _>("name"))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ownership(
+                &mut tx,
+                &mut out,
+                schema,
+                &sequences,
+                target.map(|_| names.as_slice()),
+            )
+            .await?;
         }
         out.flush().await?;
         tx.commit().await?;
@@ -276,6 +328,10 @@ async fn tables(
                 .is_ok_and(|k| ["r", "p", "f"].contains(&k.as_str()))
         })
         .collect::<Vec<_>>();
+    let selected = relations
+        .iter()
+        .map(|r| r.try_get::<i64, _>("id"))
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
     let mut emitted = std::collections::HashSet::<i64>::new();
     while !waiting.is_empty() {
         let before = waiting.len();
@@ -289,7 +345,7 @@ async fn tables(
             let parents:Vec<(i64,String,String)>=sqlx::query_as("SELECT p.oid::bigint,n.nspname::text,p.relname::text FROM pg_inherits i JOIN pg_class p ON p.oid=i.inhparent JOIN pg_namespace n ON n.oid=p.relnamespace WHERE i.inhrelid=$1::bigint::oid ORDER BY i.inhseqno").bind(id).fetch_all(&mut *c).await?;
             if parents
                 .iter()
-                .any(|(id, s, _)| s == schema && !emitted.contains(id))
+                .any(|(id, s, _)| s == schema && selected.contains(id) && !emitted.contains(id))
             {
                 next.push(row);
                 continue;
@@ -466,24 +522,28 @@ async fn post_data(
     schema: &str,
     relations: &[sqlx::postgres::PgRow],
 ) -> Result<()> {
+    let names = relations
+        .iter()
+        .map(|r| r.try_get::<String, _>("name"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     // Constraints follow all tables and rows, so cycles and alphabetical FK order work.
-    for row in sqlx::query("SELECT c.relname::text AS name,k.conname::text,pg_get_constraintdef(k.oid,true) AS definition FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND k.conislocal AND k.conparentid=0 AND k.contype<>'n' AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY CASE WHEN k.contype='f' THEN 1 ELSE 0 END,k.oid").bind(schema).fetch_all(&mut *c).await? {
+    for row in sqlx::query("SELECT c.relname::text AS name,k.conname::text,pg_get_constraintdef(k.oid,true) AS definition FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2) AND k.conislocal AND k.conparentid=0 AND k.contype IN ('p','u','f','c','x') AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY CASE WHEN k.contype='f' THEN 1 ELSE 0 END,k.oid").bind(schema).bind(&names).fetch_all(&mut *c).await? {
         write(out,&format!("ALTER TABLE {}.{} ADD CONSTRAINT {} {}",q(schema),q(&row.try_get::<String,_>("name")?),q(&row.try_get::<String,_>("conname")?),row.try_get::<String,_>("definition")?)).await?;
     }
-    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conindid=i.indexrelid) AND NOT EXISTS(SELECT 1 FROM pg_inherits h WHERE h.inhrelid=i.indexrelid) AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=t.oid AND d.deptype='e') ORDER BY i.indexrelid").bind(schema).fetch_all(&mut *c).await? {write(out,&definition).await?;}
-    for row in sqlx::query("SELECT t.tgname::text,c.relname::text,pg_get_triggerdef(t.oid,true) AS definition,t.tgenabled::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND NOT t.tgisinternal AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_trigger'::regclass AND d.objid=t.oid AND d.deptype='e') ORDER BY t.oid").bind(schema).fetch_all(&mut *c).await? {
+    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2) AND NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conindid=i.indexrelid) AND NOT EXISTS(SELECT 1 FROM pg_inherits h WHERE h.inhrelid=i.indexrelid) AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=t.oid AND d.deptype='e') ORDER BY i.indexrelid").bind(schema).bind(&names).fetch_all(&mut *c).await? {write(out,&definition).await?;}
+    for row in sqlx::query("SELECT t.tgname::text,c.relname::text,pg_get_triggerdef(t.oid,true) AS definition,t.tgenabled::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2) AND NOT t.tgisinternal AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_trigger'::regclass AND d.objid=t.oid AND d.deptype='e') ORDER BY t.oid").bind(schema).bind(&names).fetch_all(&mut *c).await? {
         write(out,&row.try_get::<String,_>("definition")?).await?;
         let enabled:String=row.try_get("tgenabled")?;let action=match enabled.as_str(){"D"=>"DISABLE", "R"=>"ENABLE REPLICA", "A"=>"ENABLE ALWAYS",_=>"ENABLE"};
         write(out,&format!("ALTER TABLE {}.{} {action} TRIGGER {}",q(schema),q(&row.try_get::<String,_>("relname")?),q(&row.try_get::<String,_>("tgname")?))).await?;
     }
-    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_ruledef(r.oid,true) FROM pg_rewrite r JOIN pg_class c ON c.oid=r.ev_class JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND r.rulename<>'_RETURN' ORDER BY r.oid").bind(schema).fetch_all(&mut *c).await? {write(out,definition.trim_end_matches(';')).await?;}
-    for row in sqlx::query("SELECT c.relname::text,p.polname::text,p.polpermissive,p.polcmd::text,ARRAY(SELECT CASE WHEN role_id=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(role_id)) END FROM unnest(p.polroles) role_id) AS roles,pg_get_expr(p.polqual,p.polrelid) AS using_expr,pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 ORDER BY p.oid").bind(schema).fetch_all(&mut *c).await? {
+    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_ruledef(r.oid,true) FROM pg_rewrite r JOIN pg_class c ON c.oid=r.ev_class JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2) AND r.rulename<>'_RETURN' ORDER BY r.oid").bind(schema).bind(&names).fetch_all(&mut *c).await? {write(out,definition.trim_end_matches(';')).await?;}
+    for row in sqlx::query("SELECT c.relname::text,p.polname::text,p.polpermissive,p.polcmd::text,ARRAY(SELECT CASE WHEN role_id=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(role_id)) END FROM unnest(p.polroles) role_id) AS roles,pg_get_expr(p.polqual,p.polrelid) AS using_expr,pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2) ORDER BY p.oid").bind(schema).bind(&names).fetch_all(&mut *c).await? {
         let command=match row.try_get::<String,_>("polcmd")?.as_str(){"r"=>"SELECT","a"=>"INSERT","w"=>"UPDATE","d"=>"DELETE",_=>"ALL"};
         let mut sql=format!("CREATE POLICY {} ON {}.{} AS {} FOR {command} TO {}",q(&row.try_get::<String,_>("polname")?),q(schema),q(&row.try_get::<String,_>("relname")?),if row.try_get::<bool,_>("polpermissive")?{"PERMISSIVE"}else{"RESTRICTIVE"},row.try_get::<Vec<String>,_>("roles")?.join(", "));
         if let Some(expr)=row.try_get::<Option<String>,_>("using_expr")?{write!(sql, " USING ({expr})").ok();}
         if let Some(expr)=row.try_get::<Option<String>,_>("check_expr")?{write!(sql, " WITH CHECK ({expr})").ok();}write(out,&sql).await?;
     }
-    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_statisticsobjdef(s.oid) FROM pg_statistic_ext s JOIN pg_namespace n ON n.oid=s.stxnamespace WHERE n.nspname=$1 ORDER BY s.oid").bind(schema).fetch_all(&mut *c).await? {write(out,&definition).await?;}
+    for definition in sqlx::query_scalar::<_,String>("SELECT pg_get_statisticsobjdef(s.oid) FROM pg_statistic_ext s JOIN pg_namespace n ON n.oid=s.stxnamespace WHERE n.nspname=$1 AND s.stxrelid IN (SELECT oid FROM pg_class WHERE relname=ANY($2) AND relnamespace=n.oid) ORDER BY s.oid").bind(schema).bind(&names).fetch_all(&mut *c).await? {write(out,&definition).await?;}
     for row in relations {
         let full = format!("{}.{}", q(schema), q(&row.try_get::<String, _>("name")?));
         if row.try_get::<bool, _>("relrowsecurity")? {
@@ -497,6 +557,7 @@ async fn post_data(
             write(out, &format!("ALTER TABLE {full} FORCE ROW LEVEL SECURITY")).await?;
         }
     }
+    for statement in sqlx::query_scalar::<_,String>("SELECT format('COMMENT ON INDEX %I.%I IS %L',n.nspname,x.relname,obj_description(x.oid,'pg_class')) FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2) AND obj_description(x.oid,'pg_class') IS NOT NULL UNION ALL SELECT format('COMMENT ON CONSTRAINT %I ON %I.%I IS %L',k.conname,n.nspname,t.relname,obj_description(k.oid,'pg_constraint')) FROM pg_constraint k JOIN pg_class t ON t.oid=k.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2) AND obj_description(k.oid,'pg_constraint') IS NOT NULL UNION ALL SELECT format('COMMENT ON TRIGGER %I ON %I.%I IS %L',g.tgname,n.nspname,t.relname,obj_description(g.oid,'pg_trigger')) FROM pg_trigger g JOIN pg_class t ON t.oid=g.tgrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2) AND NOT g.tgisinternal AND obj_description(g.oid,'pg_trigger') IS NOT NULL").bind(schema).bind(&names).fetch_all(&mut *c).await? {write(out,&statement).await?;}
     Ok(())
 }
 async fn ownership(
@@ -504,6 +565,7 @@ async fn ownership(
     out: &mut Writer,
     schema: &str,
     sequences: &[sqlx::postgres::PgRow],
+    target: Option<&[String]>,
 ) -> Result<()> {
     for row in sequences {
         if row.try_get::<bool, _>("identity")? {
@@ -512,7 +574,10 @@ async fn ownership(
         let id: i64 = row.try_get("id")?;
         for (ns,table,column) in sqlx::query_as::<_,(String,String,String)>("SELECT n.nspname::text,t.relname::text,a.attname::text FROM pg_depend d JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace n ON n.oid=t.relnamespace JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=d.refobjsubid WHERE d.classid='pg_class'::regclass AND d.objid=$1::bigint::oid AND d.deptype='a'").bind(id).fetch_all(&mut *c).await?{write(out,&format!("ALTER SEQUENCE {}.{} OWNED BY {}.{}.{}",q(schema),q(&row.try_get::<String,_>("name")?),q(&ns),q(&table),q(&column))).await?;}
     }
-    metadata::emit(c, out, schema).await?;
+    metadata::emit(c, out, schema, target).await?;
+    if target.is_some() {
+        return Ok(());
+    }
     let row=sqlx::query("SELECT pg_get_userbyid(nspowner) AS owner,obj_description(oid,'pg_namespace') AS comment FROM pg_namespace WHERE nspname=$1").bind(schema).fetch_one(&mut *c).await?;
     if let Some(comment) = row.try_get::<Option<String>, _>("comment")? {
         write(

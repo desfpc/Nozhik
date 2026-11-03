@@ -21,6 +21,7 @@ impl Connection {
             return Err(Error::Invalid("MySQL required".into()));
         };
         let ddl = options.is_none_or(|o| o.ddl);
+        let target = options.filter(|o| o.only_table).map(|o| o.table.as_str());
         let file = temporary().await?;
         let mut out = Writer::new(tokio::fs::File::from_std(file.reopen()?));
         let mut connection = pool.acquire().await?;
@@ -30,7 +31,7 @@ impl Connection {
         let mut tx = connection.begin().await?;
         // Session settings make zero dates, auto-increment zero and escapes restorable.
         out.write_all(b"-- Nozhik SQL export (MySQL/MariaDB)\nSET @NOZHIK_OLD_FK=@@FOREIGN_KEY_CHECKS, @NOZHIK_OLD_MODE=@@SQL_MODE, @NOZHIK_OLD_TZ=@@TIME_ZONE;\nSET FOREIGN_KEY_CHECKS=0;\nSET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\nSET NAMES utf8mb4;\nSET TIME_ZONE='+00:00';\n").await?;
-        if ddl {
+        if ddl && target.is_none() {
             let row = sqlx::query(&format!("SHOW CREATE DATABASE {}", q(schema)))
                 .fetch_one(&mut *tx)
                 .await?;
@@ -39,7 +40,13 @@ impl Connection {
         }
         out.write_all(format!("USE {};\n", q(schema)).as_bytes())
             .await?;
-        let relations: Vec<(String,String)> = sqlx::query_as("SELECT CAST(TABLE_NAME AS CHAR), CAST(TABLE_TYPE AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME").bind(schema).fetch_all(&mut *tx).await?;
+        let mut relations: Vec<(String,String)> = sqlx::query_as("SELECT CAST(TABLE_NAME AS CHAR), CAST(TABLE_TYPE AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME").bind(schema).fetch_all(&mut *tx).await?;
+        if let Some(table) = target {
+            relations.retain(|(name, _)| name == table);
+            if relations.is_empty() {
+                return Err(Error::Invalid("Table no longer exists".into()));
+            }
+        }
         if ddl {
             for (name, kind) in &relations {
                 if kind == "VIEW" {
@@ -69,7 +76,7 @@ impl Connection {
                 }
             }
             // Routines precede data (defaults may use stored functions).
-            let routines: Vec<(String,String)> = sqlx::query_as("SELECT CAST(ROUTINE_NAME AS CHAR), CAST(ROUTINE_TYPE AS CHAR) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=? ORDER BY ROUTINE_NAME").bind(schema).fetch_all(&mut *tx).await?;
+            let routines: Vec<(String,String)> = sqlx::query_as("SELECT CAST(ROUTINE_NAME AS CHAR), CAST(ROUTINE_TYPE AS CHAR) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=? AND ? IS NULL ORDER BY ROUTINE_NAME").bind(schema).bind(target).fetch_all(&mut *tx).await?;
             for (name, kind) in routines {
                 if !["FUNCTION", "PROCEDURE"].contains(&kind.as_str()) {
                     return Err(Error::Invalid(format!("Unsupported routine type: {kind}")));
@@ -167,7 +174,7 @@ impl Connection {
                 } else {
                     "EVENT_SCHEMA"
                 };
-                let names: Vec<String> = sqlx::query_scalar(&format!("SELECT CAST({column} AS CHAR) FROM information_schema.{catalog} WHERE {schema_column}=? ORDER BY {column}")).bind(schema).fetch_all(&mut *tx).await?;
+                let names: Vec<String> = sqlx::query_scalar(&format!("SELECT CAST({column} AS CHAR) FROM information_schema.{catalog} WHERE {schema_column}=?{} ORDER BY {column}",if kind=="TRIGGER" {" AND (? IS NULL OR EVENT_OBJECT_TABLE=?)"} else {" AND ? IS NULL AND ? IS NULL"})).bind(schema).bind(target).bind(target).fetch_all(&mut *tx).await?;
                 for name in names {
                     let row =
                         sqlx::query(&format!("SHOW CREATE {kind} {}.{}", q(schema), q(&name)))

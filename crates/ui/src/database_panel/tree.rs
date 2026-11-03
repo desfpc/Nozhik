@@ -15,6 +15,7 @@ const INDENT: f32 = 19.0;
 
 pub(super) enum Action {
     Schema(ConnectionProfile, String, super::schema::Action),
+    Table(ConnectionProfile, String, String, super::designer::Action),
     Connect(ConnectionProfile),
     Password(ConnectionProfile),
     Edit(ConnectionProfile),
@@ -186,6 +187,10 @@ impl Tree<'_> {
         state.show_body_unindented(ui, |ui| body(self, ui));
         response
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One relation branch routes lazy metadata, opening and contextual table actions"
+    )]
     fn tables(
         &mut self,
         ui: &mut Ui,
@@ -256,6 +261,28 @@ impl Tree<'_> {
                             ));
                         }
                         response.context_menu(|ui| {
+                            for (label, action) in [
+                                ("Modify Table", super::designer::Action::Modify),
+                                ("Generate DDL to Clipboard", super::designer::Action::Ddl),
+                                ("Export Data to File", super::designer::Action::Export),
+                            ] {
+                                if ui
+                                    .add_enabled(
+                                        !table.is_view || action != super::designer::Action::Modify,
+                                        egui::Button::new(label),
+                                    )
+                                    .clicked()
+                                {
+                                    tree.actions.push(Action::Table(
+                                        profile.clone(),
+                                        schema.name.clone(),
+                                        table.name.clone(),
+                                        action,
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
                             if ui.button("Open Table (First 500 rows)").clicked() {
                                 tree.actions.push(Action::Open(
                                     profile.clone(),

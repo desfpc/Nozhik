@@ -2,15 +2,30 @@
 use super::{Pg, Result, Writer, q, text, write};
 use sqlx::Row;
 
-pub(super) async fn emit(c: &mut Pg, out: &mut Writer, schema: &str) -> Result<()> {
-    relations(c, out, schema).await?;
-    routines(c, out, schema).await?;
+pub(super) async fn emit(
+    c: &mut Pg,
+    out: &mut Writer,
+    schema: &str,
+    target: Option<&[String]>,
+) -> Result<()> {
+    relations(c, out, schema, target).await?;
+    if let Some(names) = target {
+        let functions:Vec<i64>=sqlx::query_scalar("SELECT DISTINCT p.oid::bigint FROM pg_trigger g JOIN pg_proc p ON p.oid=g.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_class t ON t.oid=g.tgrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace WHERE ns.nspname=$1 AND t.relname=ANY($2) AND NOT g.tgisinternal AND n.nspname NOT LIKE 'pg_%' AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')").bind(schema).bind(names).fetch_all(&mut *c).await?;
+        routines(c, out, schema, Some(&functions)).await?;
+        return Ok(());
+    }
+    routines(c, out, schema, None).await?;
     types(c, out, schema).await?;
     defaults(c, out, schema).await?;
     Ok(())
 }
-async fn relations(c: &mut Pg, out: &mut Writer, schema: &str) -> Result<()> {
-    let rows=sqlx::query("SELECT c.oid::bigint AS id,c.relname::text AS name,c.relkind::text AS kind,pg_get_userbyid(c.relowner) AS owner,obj_description(c.oid,'pg_class') AS comment,c.relacl IS NOT NULL AS has_acl,EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='i') AS identity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','S') AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY CASE WHEN c.relkind='S' THEN 1 ELSE 0 END,c.oid").bind(schema).fetch_all(&mut *c).await?;
+async fn relations(
+    c: &mut Pg,
+    out: &mut Writer,
+    schema: &str,
+    target: Option<&[String]>,
+) -> Result<()> {
+    let rows=sqlx::query("SELECT c.oid::bigint AS id,c.relname::text AS name,c.relkind::text AS kind,pg_get_userbyid(c.relowner) AS owner,obj_description(c.oid,'pg_class') AS comment,c.relacl IS NOT NULL AS has_acl,EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='i') AS identity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND ($2::text[] IS NULL OR c.relname=ANY($2)) AND c.relkind IN ('r','p','v','m','S') AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY CASE WHEN c.relkind='S' THEN 1 ELSE 0 END,c.oid").bind(schema).bind(target).fetch_all(&mut *c).await?;
     for row in rows {
         let id: i64 = row.try_get("id")?;
         let name: String = row.try_get("name")?;
@@ -61,9 +76,14 @@ async fn relations(c: &mut Pg, out: &mut Writer, schema: &str) -> Result<()> {
     }
     Ok(())
 }
-async fn routines(c: &mut Pg, out: &mut Writer, schema: &str) -> Result<()> {
-    for row in sqlx::query("SELECT p.oid::bigint AS id,p.proname::text AS name,p.prokind::text AS kind,pg_get_function_identity_arguments(p.oid) AS arguments,pg_get_userbyid(p.proowner) AS owner,obj_description(p.oid,'pg_proc') AS comment,p.proacl IS NOT NULL AS has_acl FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1 AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e') ORDER BY p.oid").bind(schema).fetch_all(&mut *c).await? {
-        let kind=if row.try_get::<String,_>("kind")?=="p"{"PROCEDURE"}else{"FUNCTION"};let full=format!("{}.{}({})",q(schema),q(&row.try_get::<String,_>("name")?),row.try_get::<String,_>("arguments")?);
+async fn routines(
+    c: &mut Pg,
+    out: &mut Writer,
+    schema: &str,
+    selected: Option<&[i64]>,
+) -> Result<()> {
+    for row in sqlx::query("SELECT n.nspname::text AS namespace,p.oid::bigint AS id,p.proname::text AS name,p.prokind::text AS kind,pg_get_function_identity_arguments(p.oid) AS arguments,pg_get_userbyid(p.proowner) AS owner,obj_description(p.oid,'pg_proc') AS comment,p.proacl IS NOT NULL AS has_acl FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (($2::bigint[] IS NULL AND n.nspname=$1) OR p.oid::bigint=ANY($2)) AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e') ORDER BY p.oid").bind(schema).bind(selected).fetch_all(&mut *c).await? {
+        let kind=if row.try_get::<String,_>("kind")?=="p"{"PROCEDURE"}else{"FUNCTION"};let full=format!("{}.{}({})",q(&row.try_get::<String,_>("namespace")?),q(&row.try_get::<String,_>("name")?),row.try_get::<String,_>("arguments")?);
         if let Some(comment)=row.try_get::<Option<String>,_>("comment")?{write(out,&format!("COMMENT ON {kind} {full} IS {}",text(&comment))).await?;}
         if row.try_get::<bool,_>("has_acl")?{write(out,&format!("REVOKE ALL ON {kind} {full} FROM PUBLIC")).await?;for acl in sqlx::query("SELECT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS role,a.privilege_type,a.is_grantable FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a WHERE p.oid=$1::bigint::oid ORDER BY 1,2").bind(row.try_get::<i64,_>("id")?).fetch_all(&mut *c).await?{grant(out,&acl,&format!("{kind} {full}")).await?;}}
         write(out,&format!("ALTER {kind} {full} OWNER TO {}",q(&row.try_get::<String,_>("owner")?))).await?;

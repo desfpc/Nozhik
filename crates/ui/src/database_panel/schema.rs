@@ -30,6 +30,7 @@ enum After {
 pub(super) struct Dialog {
     profile: ConnectionProfile,
     schema: String,
+    table: Option<String>,
     action: Action,
     original: Option<Settings>,
     draft: Settings,
@@ -40,6 +41,12 @@ pub(super) struct Dialog {
     error: String,
     message: String,
     output: String,
+}
+#[cfg(test)]
+impl Dialog {
+    pub(super) const fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
 }
 impl Drop for Dialog {
     fn drop(&mut self) {
@@ -55,6 +62,26 @@ impl NozhikUi {
         profile: ConnectionProfile,
         schema: String,
         action: Action,
+    ) {
+        self.start_schema_action(ctx, profile, schema, action, None);
+    }
+    pub(super) fn table_export_action(
+        &mut self,
+        ctx: &egui::Context,
+        profile: ConnectionProfile,
+        schema: String,
+        table: String,
+        action: Action,
+    ) {
+        self.start_schema_action(ctx, profile, schema, action, Some(table));
+    }
+    fn start_schema_action(
+        &mut self,
+        ctx: &egui::Context,
+        profile: ConnectionProfile,
+        schema: String,
+        action: Action,
+        table: Option<String>,
     ) {
         if self.database.modal_open() {
             return;
@@ -88,14 +115,20 @@ impl NozhikUi {
                     .collect()
             })
             .unwrap_or_default();
+        let options = ExportOptions {
+            only_table: table.is_some(),
+            table: table.clone().unwrap_or_default(),
+            ..ExportOptions::default()
+        };
         self.database.schema_dialog = Some(Dialog {
             profile,
             schema,
+            table: table.clone(),
             action,
             original: None,
             draft: Settings::default(),
-            options: ExportOptions::default(),
-            tables,
+            options,
+            tables: table.clone().map_or(tables, |t| vec![t]),
             artifact: None,
             pending: None,
             error: String::new(),
@@ -104,7 +137,9 @@ impl NozhikUi {
         });
         match action {
             Action::Modify => self.queue_schema_task(Task::Settings, After::Load),
-            Action::Ddl => self.queue_schema_task(Task::Ddl, After::Clipboard),
+            Action::Ddl => {
+                self.queue_schema_task(table.map_or(Task::Ddl, Task::TableDdl), After::Clipboard);
+            }
             Action::Run => {
                 if let Some(path) = path {
                     self.queue_schema_task(Task::RunFile(path), After::Run);
@@ -165,6 +200,7 @@ impl NozhikUi {
         let mut close = false;
         match result {
             Err(e) => dialog.error = e.to_string(),
+            Ok(Output::Table(_)) => dialog.error = "Unexpected table result".into(),
             Ok(Output::Settings(settings)) => {
                 dialog.draft = settings.clone();
                 dialog.original = Some(settings);
@@ -174,7 +210,12 @@ impl NozhikUi {
                 dialog.message = "Copied to clipboard".into();
                 if dialog.action == Action::Ddl {
                     close = true;
-                    self.status = "Schema DDL copied to clipboard".into();
+                    self.status = if dialog.table.is_some() {
+                        "Table DDL copied to clipboard"
+                    } else {
+                        "Schema DDL copied to clipboard"
+                    }
+                    .into();
                 }
             }
             Ok(Output::Artifact(artifact)) => {
@@ -219,7 +260,7 @@ impl NozhikUi {
         let modal = egui::Modal::new(egui::Id::new("schema_actions")).show(ctx, |ui| {
             ui.set_width(900.0_f32.min(ctx.screen_rect().width() - 60.0));
             ui.heading(match dialog.action { Action::Modify => "Modify Schema", Action::Export => "Export Data", Action::Ddl => "Generate DDL to Clipboard", Action::Run => "Run SQL Script", Action::Console => "SQL Console" });
-            ui.label(format!("{} / {}", dialog.profile.name, dialog.schema));
+            ui.label(format!("{} / {}{}", dialog.profile.name, dialog.schema,dialog.table.as_ref().map_or(String::new(),|t|format!(" / {t}"))));
             ui.separator();
             if dialog.action == Action::Modify && let Some(original) = &dialog.original {
                 egui::ScrollArea::vertical().id_salt("schema_settings").max_height(300.0).show(ui, |ui| {
@@ -243,8 +284,8 @@ impl NozhikUi {
                     if before != dialog.options { dialog.artifact = None; dialog.message.clear(); }
                     left.separator(); left.label("Output file:");
                     left.label(if dialog.output.is_empty() { "Choose with Export to File…" } else { &dialog.output });
-                    if dialog.options.format == Format::Sql && dialog.profile.driver != DbDriverType::Sqlite { left.small("SQL exports the entire schema. Generated columns are computed when the data is restored."); }
-                    left.small("CSV exports the selected table. Choose SQL for the entire schema.");
+                    if dialog.options.format == Format::Sql && dialog.profile.driver != DbDriverType::Sqlite { left.small(if dialog.table.is_some() {"Generated columns are computed when the data is restored."} else {"SQL exports the entire schema. Generated columns are computed when the data is restored."}); }
+                    left.small(if dialog.table.is_some(){"Exports only this table, without other tables or schema settings."}else{"CSV exports the selected table. Choose SQL for the entire schema."});
                     if left.add_enabled(!busy, egui::Button::new("Update Preview")).clicked() { request = Some((Task::Export(dialog.options.clone()), After::Preview)); }
                     columns[1].label("Export preview:");
                     sql_preview(&mut columns[1], dialog.artifact.as_ref().map_or("Generate a preview or export directly.", |a| a.preview.as_str()));
@@ -273,7 +314,7 @@ impl NozhikUi {
             let stem = if dialog.options.format == Format::Csv {
                 &dialog.options.table
             } else {
-                &dialog.schema
+                dialog.table.as_ref().unwrap_or(&dialog.schema)
             };
             let safe_stem: String = stem
                 .chars()
@@ -310,19 +351,31 @@ impl NozhikUi {
         }
     }
 }
-fn sql_preview(ui: &mut egui::Ui, sql: &str) {
-    let mut text = sql.to_owned();
+pub(super) fn sql_preview(ui: &mut egui::Ui, sql: &str) {
+    sql_preview_height(ui, sql, 280.0);
+}
+pub(super) fn sql_preview_height(ui: &mut egui::Ui, sql: &str, height: f32) {
+    let mut job = egui::text::LayoutJob::default();
+    for (range, token) in crate::sql_console::tokens(sql) {
+        if let Some(text) = sql.get(range) {
+            job.append(
+                text,
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: token.map_or(crate::theme::TEXT, crate::theme::syntax_color),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    job.wrap.max_width = f32::INFINITY;
     egui::ScrollArea::both()
         .id_salt("schema_sql_preview")
-        .max_height(280.0)
+        .max_height(height)
         .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut text)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(12)
-                    .interactive(false),
-            );
+            ui.set_min_height(height.min(140.0));
+            ui.add(egui::Label::new(job).selectable(true));
         });
 }
 fn settings_form(ui: &mut egui::Ui, driver: DbDriverType, draft: &mut Settings) {

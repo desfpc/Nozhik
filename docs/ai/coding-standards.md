@@ -49,6 +49,8 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
 - language_support: tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
+- docker: tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix-only nix signals; no UI/runtime dependency.
+  File traversal, AST extraction and Docker CLI I/O belong to its project worker.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
 - remote_ssh: russh/keys, russh-sftp, tokio, keyring (native OS stores), zeroize,
@@ -222,3 +224,17 @@ scalar content, quotes, comments, anchors and aliases. Verify the complete AST a
 scalar/token signatures after whitespace edits, including range formatting.
 Never infer the intended hierarchy of malformed YAML. Indentation uses spaces;
 clipboard paste must preserve its original bytes and Enter copies current indent.
+
+
+### Docker
+
+Use direct CLI argv, never constructed shell commands. Evaluate selected Compose
+files using Compose itself; do not hand-interpret interpolation/includes/overrides.
+Verify project + canonical working-directory labels before container mutations and
+address immutable validated IDs. A foreign project-name collision must fail closed.
+Never implicitly remove containers/volumes. Run markers require exact buffer revision
+and saved configuration; keep discovery independent of YAML semantic indexing.
+Bound CLI output and time, support cancellation, and preserve stdout/stderr logs.
+Console commands use the existing PTY infrastructure and carry the container name
+in their tab. Tests must use a mock CLI or an explicitly isolated disposable project
+with no user mounts/ports; never mutate existing user containers to verify behavior.

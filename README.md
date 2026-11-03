@@ -6,7 +6,7 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**v0.1.26. Этап 9 реализован.** Четырнадцать крейтов,
+**v0.1.27. Этап 9 реализован.** Пятнадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
@@ -43,8 +43,8 @@ host key libgit2; неизвестный/недоверенный сервер �
 После клонирования проект автоматически открывается в IDE.
 
 Версия — `[workspace.package].version` в `Cargo.toml`, общая для интерфейса,
-Cargo packages и macOS bundle. Текущая версия — **0.1.26**; следующая доработка/коммит
-должна увеличить patch до **0.1.27** (правило закреплено в `AGENTS.md`).
+Cargo packages и macOS bundle. Текущая версия — **0.1.27**; следующая доработка/коммит
+должна увеличить patch до **0.1.28** (правило закреплено в `AGENTS.md`).
 
 ## Несколько проектов
 
@@ -151,7 +151,7 @@ cargo build --workspace --release
 Стрелки обозначают зависимости; `app` — единственная точка сборки систем.
 
 ```text
-app ──► nozhik-ui ──► nozhik-database, nozhik-remote-ssh, nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
+app ──► nozhik-ui ──► nozhik-database, nozhik-docker, nozhik-remote-ssh, nozhik-terminal, nozhik-language-support, nozhik-plugin-host, nozhik-vcs, nozhik-fs-model, nozhik-buffer, nozhik-core, nozhik-config, nozhik-event-bus
 app ──► nozhik-config ──► nozhik-event-bus ──► nozhik-core
      └────────────────────────► nozhik-event-bus
                      nozhik-config ────────────────► nozhik-core
@@ -163,6 +163,7 @@ nozhik-language-support ──► tree-sitter/php, lsp-types, tokio, ropey, serd
 nozhik-remote-ssh ──► russh (ring/Rust crypto), russh-sftp, tokio, serde, tempfile
 nozhik-database ──► sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls), nozhik-remote-ssh, keyring
 nozhik-terminal ──► portable-pty, vt100 (vte), parking_lot, nix (Unix signals)
+nozhik-docker ──► tree-sitter/yaml, ignore, serde_json, nix (Unix signals)
 ```
 
 ```text
@@ -179,6 +180,7 @@ crates/
   database/    # SQL pools, SSH forwarding, typed results, catalog metadata, worker
   remote_ssh/  # SSH, host key pinning, SFTP cache, loopback tunnels
   terminal/    # PTY/ConPTY, VT100 grid/scrollback, asynchronous sessions
+  docker/      # Compose discovery, project-scoped CLI controls and snapshots
   ui/         # egui shell, theme, TextEditorView, Search Everywhere
   app/        # eframe на главном потоке, Tokio workers
 docs/ai/
@@ -704,6 +706,48 @@ foreground process group. Явно отсоединённые пользоват
 набора xterm-расширений. Сетка не переформатирует историю как reflow-терминалы;
 при resize применяются правила vt100. OSC clipboard и открытие ссылок не выполняются.
 
+
+## Docker Compose
+
+Нужны установленный Docker CLI с Compose plugin (`docker compose`) и запущенный
+Docker Engine (Docker Desktop, OrbStack или совместимый engine). На macOS также
+проверяются стандартные пути Docker CLI для запуска IDE из Finder.
+
+IDE автоматически находит `compose.yaml`, `compose.yml`, `docker-compose.yaml`,
+`docker-compose.yml` и dotted variants вроде `docker-compose.prod.yml` в проекте.
+Расширения распознаются без учёта регистра. Симлинки и каталоги `.git`, `.nozhik`,
+`target`, `node_modules`, `vendor` не обходятся. Docker-файлы получают иконку кита
+в дереве и вкладках; кнопка Docker между Database и Notifications активна при
+наличии Compose-файлов. Это отдельное обнаружение файлов, без YAML-индекса.
+
+В gutter у `services:` находится запуск всех сервисов, у ключа сервиса — запуск
+этого сервиса с его зависимостями (`compose up --detach`). Несохранённые файлы
+выбранной конфигурации нужно сначала сохранить. Ошибочный YAML не получает
+кнопок запуска. Действия привязаны к точным BufferId/revision.
+
+Панель Docker показывает сервисы и контейнеры выбранной конфигурации, включая
+остановленные и ещё не созданные. Стандартный base автоматически объединяется
+с conventional override того же семейства; выбранный prod/test/другой variant —
+с base, без автоматического подключения остальных variants. Порядок `-f` показан
+под кнопками. Compose сам разрешает `.env`, переменные, includes и project name.
+Это локальное управление через текущий Docker context, без встроенного daemon.
+
+Доступны запуск всех/одного сервиса, запуск существующего контейнера, остановка
+одного/всех контейнеров и Refresh. Удаление контейнеров/томов не выполняется.
+Имена проекта недостаточны для доступа: контейнеры дополнительно проверяются по
+Compose working-directory label. Коллизия project name с другим каталогом
+блокирует операции; задайте уникальное top-level `name:`. Цели операций — immutable
+container IDs. Ошибки CLI/engine и отмена показываются в панели; Cancel прекращает
+ожидание CLI, состояние уже отправленной Docker операции следует проверить Refresh.
+
+Клик по контейнеру открывает Info с ID/image/status/mounts/labels и вкладку Logs:
+последние 500 строк stdout/stderr с timestamps, обновление каждые три секунды,
+пока окно открыто. Open console открывает интерактивный `docker exec -it … /bin/sh`
+в нижнем PTY-терминале IDE, в отдельной вкладке `[Docker: <container>]`.
+Контейнер должен работать и содержать `/bin/sh`; ошибки отсутствующего shell
+остаются видимыми в завершившейся вкладке. Закрытие консоли не останавливает
+контейнер. Docker-операции и discovery выполняются worker, независимо от PHP/YAML
+language opt-in; фоновые статусы обновляются только при видимой Docker-панели/окне.
 
 ## Удалённая разработка: SSH, SFTP и туннели
 

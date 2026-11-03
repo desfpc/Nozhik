@@ -12,6 +12,7 @@
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP/CSS/YAML incremental syntax, local formatting, PHP/CSS project indexes, PHP stdio LSP | tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -1654,3 +1655,34 @@ to the complete document. Partial structural selections fail atomically.
 YAML has a shared two-space built-in profile for both suffixes; tabs are rejected.
 Enter copies leading indentation; paste is verbatim to preserve scalar contents.
 The existing BufferId/revision/style gates and single-transaction Undo apply.
+
+
+## Docker Compose integration (v0.1.27)
+
+`docker` is UI/runtime-independent. Its project worker discovers conventional Compose
+filenames without following symlinks or scanning dependency/build caches. No language
+index is created. Immutable Document snapshots yield AST-based services/key-line run
+markers; UI gates them by path, BufferId and revision, independently of YAML opt-in.
+
+`docker compose config --format json` evaluates the exact ordered file selection.
+The worker retains only names/images, not service environment data. Standard bases
+combine with conventional override; explicitly selected variants combine with base.
+`docker ps --all` filters the evaluated Compose project label, then inspect verifies
+every container's project/working-directory label against the canonical configuration
+directory. Name collisions with foreign directories fail before mutations. IDs are
+validated hex and used as direct arguments; no shell interpolation is involved.
+
+Snapshot/Up/Start/Stop/StopAll/Logs/Console requests have UI tokens. CLI child stdout
+and stderr are drained concurrently with bounded retained output; commands have
+timeouts and cancellation. Cancel/shutdown terminate the owned CLI process tree (including Compose plugins), never implicitly stop
+containers. Discovery works without invoking Docker; engine queries run only while
+the Docker view is visible or after explicit actions. The UI disallows actions with
+unsaved configuration files. Logs retain the last 500 timestamped stdout/stderr lines.
+
+The Docker tool appears between Database and Notifications and requires a nonempty
+Compose inventory. Editor/tree tabs use a native vector whale icon. Container Info
+shows immutable inspect snapshots; Logs refresh while visible. Console replies pass
+a validated `docker exec -it -- ID /bin/sh` invocation to TerminalPanel's existing
+PTY SessionOptions/ShellCommand, with a `[Docker: name]` tab. Docker console tabs
+retain exited output (including missing-shell errors); other terminal behavior is
+unchanged. Each NozhikUi project owns its own worker/selection and CLI cancellation.

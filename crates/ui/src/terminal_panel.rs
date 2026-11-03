@@ -41,7 +41,13 @@ impl TerminalPanel {
         for event in events {
             match event {
                 TerminalEvent::Exited { id, code } => {
-                    self.remove(id);
+                    if self
+                        .labels
+                        .get(&id)
+                        .is_none_or(|label| !label.starts_with("[Docker: "))
+                    {
+                        self.remove(id);
+                    }
                     message = Some(format!("Terminal {} exited with code {code}", id.0));
                 }
                 TerminalEvent::Error { id, message: error } => {
@@ -67,6 +73,24 @@ impl TerminalPanel {
             .manager
             .create_external(SessionOptions::new(std::path::PathBuf::new()), transport)?;
         self.labels.insert(id, format!("[SSH: {name}]"));
+        self.active = Some(id);
+        self.focus = true;
+        Ok(())
+    }
+    pub(crate) fn create_docker(
+        &mut self,
+        root: &Path,
+        program: std::path::PathBuf,
+        args: Vec<std::ffi::OsString>,
+        name: &str,
+    ) -> nozhik_terminal::Result<()> {
+        let mut options = SessionOptions::new(root.into());
+        options.shell = Some(nozhik_terminal::pty::ShellCommand {
+            program: program.into_os_string(),
+            args,
+        });
+        let id = self.manager.create(options)?;
+        self.labels.insert(id, format!("[Docker: {name}]"));
         self.active = Some(id);
         self.focus = true;
         Ok(())

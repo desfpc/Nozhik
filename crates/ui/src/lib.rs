@@ -11,6 +11,7 @@ mod ai_inline;
 mod css_colors;
 mod database_panel;
 mod diff_view;
+mod docker_panel;
 mod editor_tabs;
 pub mod editor_view;
 mod integration;
@@ -81,6 +82,8 @@ pub enum LeftTool {
     Remote,
     /// Database explorer and connections.
     Database,
+    /// Project Docker Compose containers.
+    Docker,
     /// Notifications placeholder.
     Notifications,
 }
@@ -105,6 +108,7 @@ pub struct NozhikUi {
     native_menu: Option<menu_bar::native::NativeMenu>,
     database: database_panel::DatabaseUi,
     remote: remote_panel::RemoteUi,
+    docker: docker_panel::DockerUi,
     terminal: Option<terminal_panel::TerminalPanel>,
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
@@ -185,6 +189,7 @@ impl NozhikUi {
             native_menu: None,
             database: database_panel::DatabaseUi::default(),
             remote: remote_panel::RemoteUi::default(),
+            docker: docker_panel::DockerUi::default(),
             terminal: None,
             language: language::LanguageUi::default(),
             plugins,

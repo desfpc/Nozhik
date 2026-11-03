@@ -3085,3 +3085,59 @@ executable и подписанный app archive обновлены. --check п�
 Удалены временные файлы/логи задачи, packaging bytecode и untracked Finder file.
 Размер проекта после очистки — 385 MiB; готовый macOS-комплект сохранён.
 Windows-кэш не создавался. Финальные git status и diff --check проверены.
+
+### Docker Compose: containers, logs and consoles (v0.1.27, 2026-11-03)
+
+Added the 15th crate, nozhik-docker: a UI/runtime-independent worker for Compose
+discovery, YAML run markers and direct Docker CLI commands. Conventional names
+and dotted variants support yaml/yml without following symlinks or scanning
+build/dependency caches. Tree/editor tabs use a vector whale icon; the Docker
+rail button sits between Database and Notifications and requires Compose files.
+
+AST gutter markers start all services or one service with dependencies. Exact
+BufferId/revision and saved-configuration gates reject stale/dirty sources.
+YAML semantic indexing and PHP services are not involved. Configuration selection
+combines base + conventional override or base + an explicit variant. Compose
+evaluates .env/includes/project names. CLI argv never passes through a shell.
+Project and canonical working-directory labels isolate every container; foreign
+project-name collisions fail before mutation. Commands target validated hex IDs.
+
+The panel includes declared/not-created services and all scoped containers:
+Up all/service, Start/Stop existing, Stop All, Refresh and Cancel. Containers and
+volumes are never implicitly removed. Info shows ID/image/status/mounts/labels.
+Logs retain 500 timestamped lines with stdout/stderr sharing one ordered pipe,
+refreshed every three seconds while visible. Console uses the existing PTY with
+docker exec -it -- ID /bin/sh in a [Docker: name] tab. Exited Docker tabs retain
+output/errors. Closing a console does not stop the container. Worker CLI output
+and time are bounded. Cancellation terminates the owned CLI process tree,
+including Compose plugins, without signalling daemon/container processes.
+
+No new third-party packages: reuse tree-sitter-yaml, ignore, JSON and Unix nix
+signals. Workspace/Cargo.lock/UI/bundle are 0.1.27; next patch is 0.1.28.
+
+Process-isolated mock tests cover names/variants, AST markers, NDJSON/array JSON,
+scope isolation, lifecycle commands, stdout/stderr ordering, console argv and
+cancellation of a child plugin. Pointer-driven headless UI covers gutter all and
+service clicks, dirty gates, rail enablement, Info/Logs/console, named PTY output
+and keyboard input. Live Docker smoke passed twice on engine 29.4.0 with a cached
+BusyBox image: disposable Compose projects, no ports/mounts/pulls, lifecycle,
+logs and exec. Both projects were removed; docker ps confirmed no test containers
+remain. User containers and images were unchanged.
+
+Rustfmt, native workspace/all-targets/all-features Clippy with -D warnings,
+workspace release build and git diff --check passed. During concurrent release
+compilation, an existing Ollama lifecycle test once exceeded its 3s timeout;
+the sequential rerun without competing compilation passes that test. Native GUI,
+Windows build/Clippy, commit and push were not performed.
+
+The standard update-binaries.py refreshed macOS ARM64 executable and signed app
+archive. --check verified source fingerprint and SHA-256. Bundle 0.1.27, both ZIP
+archives, codesign --verify --deep --strict and all four embedded legal sidecars
+were verified.
+
+Final sequential native workspace/all-features result: 283 passed, 0 failed,
+10 optional tests ignored (including the separately executed Docker smoke).
+After binary verification cargo clean removed 10.6 GiB; task logs, packaging
+bytecode and seven untracked Finder files were removed. Project size is 386 MiB;
+the current macOS package and legal materials remain. No Windows target cache
+was created. Final git status and diff --check were inspected.

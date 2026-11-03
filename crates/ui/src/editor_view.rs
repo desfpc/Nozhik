@@ -17,6 +17,10 @@ pub struct TextEditorView {
     pub(crate) documentation_target:
         Option<nozhik_language_support::doc_provider::DefinitionTarget>,
     css_picker: Option<crate::css_colors::Picker>,
+    pub(crate) docker_gutter: Option<(u64, u64, Vec<nozhik_docker::RunMarker>)>,
+    pub(crate) docker_run: Option<(u64, u64, Option<String>)>,
+    #[cfg(test)]
+    pub(crate) docker_rects: Vec<(nozhik_docker::RunMarker, egui::Rect)>,
     mouse_anchor: Option<(nozhik_core::BufferId, u64, usize)>,
 }
 
@@ -256,7 +260,25 @@ impl TextEditorView {
         let color_count = language
             .as_ref()
             .map_or(0, |state| state.css_gutter_columns);
-        let gutter = (color_count as f32).mul_add(18.0, 66.0);
+        #[cfg(test)]
+        self.docker_rects.clear();
+        let snapshot = buffer.snapshot();
+        let docker_markers = self
+            .docker_gutter
+            .as_ref()
+            .filter(|(buffer, revision, _)| {
+                *buffer == snapshot.buffer_id.0 && *revision == snapshot.revision
+            })
+            .map(|(_, _, markers)| markers.clone())
+            .unwrap_or_default();
+        let gutter = (color_count as f32).mul_add(
+            18.0,
+            if docker_markers.is_empty() {
+                66.0
+            } else {
+                84.0
+            },
+        );
         let mut clicked_color = None;
         let cursors = buffer.cursors().as_slice().to_vec();
         if let Some(state) = language.as_deref_mut() {
@@ -428,6 +450,16 @@ impl TextEditorView {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
                     let origin = rect.min + egui::vec2(gutter, 3.0);
+                    if !synthetic && let Some(marker) = docker_markers.iter().find(|marker| marker.line == line) {
+                        let run_rect = egui::Rect::from_center_size(egui::pos2(rect.left()+65.0,rect.center().y),egui::vec2(20.0,20.0));
+                        #[cfg(test)]
+                        self.docker_rects.push((marker.clone(),run_rect));
+                        let run = ui.interact(run_rect, id.with(("docker_run",line)), if enabled { Sense::click() } else { Sense::hover() });
+                        crate::tool_icons::paint(ui.painter(),run_rect.center(),if marker.service.is_none() { crate::tool_icons::Icon::RunAll } else { crate::tool_icons::Icon::Run },crate::theme::SUCCESS);
+                        if run.hovered() { lens_interaction = true; }
+                        let title = marker.service.as_ref().map_or_else(|| "Start all Compose services".into(), |name| format!("Start Compose service {name}"));
+                        if run.on_hover_text(title).clicked() && enabled { self.docker_run = Some((snapshot.buffer_id.0,snapshot.revision,marker.service.clone())); }
+                    }
                     if !synthetic && let Some(state) = language.as_ref() {
                         let first = state.css_colors.partition_point(|c| c.range.start < start);
                         for (index, color) in state.css_colors[first..].iter().take_while(|c| c.range.start < start + source.len()).enumerate() {

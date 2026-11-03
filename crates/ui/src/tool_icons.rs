@@ -10,11 +10,13 @@ pub enum Icon {
     Git,
     Remote,
     Database,
+    Docker,
     Bell,
     Settings,
     Search,
     Debug,
     Run,
+    RunAll,
 }
 
 impl Widget for Icon {
@@ -41,7 +43,11 @@ pub fn button(ui: &mut Ui, icon: Icon, selected: bool, title: &str) -> Response 
         );
     }
     let color = if ui.is_enabled() {
-        theme::TEXT
+        if matches!(icon, Icon::Docker) {
+            theme::INFO
+        } else {
+            theme::TEXT
+        }
     } else {
         theme::MUTED.gamma_multiply(0.5)
     };
@@ -129,6 +135,47 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 ]);
             }
         }
+        Icon::Docker => {
+            // A whale hull, tail and stacked containers, drawn in the existing icon system.
+            for (x, y) in [
+                (3.0, 5.0),
+                (7.0, 5.0),
+                (11.0, 5.0),
+                (7.0, 1.0),
+                (3.0, 9.0),
+                (7.0, 9.0),
+                (11.0, 9.0),
+            ] {
+                painter.rect_filled(
+                    Rect::from_min_size(point(x, y), Vec2::splat(3.0)),
+                    0.5,
+                    color,
+                );
+            }
+            painter.add(Shape::convex_polygon(
+                vec![
+                    point(1.0, 13.0),
+                    point(14.0, 13.0),
+                    point(14.0, 17.0),
+                    point(9.0, 19.0),
+                    point(5.0, 18.0),
+                    point(2.0, 16.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+            painter.add(Shape::convex_polygon(
+                vec![
+                    point(13.0, 14.0),
+                    point(17.0, 7.0),
+                    point(19.0, 10.0),
+                    point(16.0, 14.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+            painter.circle_filled(point(4.0, 15.0), 0.7, theme::PANEL);
+        }
         Icon::Bell => {
             line(&[
                 (3.0, 15.0),
@@ -164,6 +211,14 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 vec![point(6.0, 3.0), point(16.0, 10.0), point(6.0, 17.0)],
                 stroke,
             ));
+        }
+        Icon::RunAll => {
+            for x in [3.0, 8.0] {
+                painter.add(Shape::closed_line(
+                    vec![point(x, 3.0), point(x + 8.0, 10.0), point(x, 17.0)],
+                    stroke,
+                ));
+            }
         }
         Icon::Debug => {
             painter.rect_stroke(

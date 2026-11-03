@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+nozhik-docker.workspace = true
 reqwest.workspace = true
 webbrowser.workspace = true
 nozhik-ai-completion.workspace = true

@@ -107,7 +107,11 @@ impl NozhikUi {
                     .layout_no_wrap(t.name.clone(), font.clone(), theme::TEXT)
                     .size()
                     .x
-                    + 48.0
+                    + if nozhik_docker::is_compose_file(std::path::Path::new(&t.name)) {
+                        70.0
+                    } else {
+                        48.0
+                    }
             })
             .collect();
         let total: f32 = widths.iter().sum();
@@ -366,8 +370,20 @@ pub fn paint_tab(
             if selected { theme::HOVER } else { theme::PANEL },
         );
     }
+    let docker = nozhik_docker::is_compose_file(std::path::Path::new(name));
+    if docker {
+        crate::tool_icons::paint(
+            painter,
+            pos2(rect.left() + 18.0, rect.center().y),
+            crate::tool_icons::Icon::Docker,
+            theme::INFO,
+        );
+    }
     painter.text(
-        pos2(rect.left() + 12.0, rect.center().y),
+        pos2(
+            rect.left() + if docker { 34.0 } else { 12.0 },
+            rect.center().y,
+        ),
         Align2::LEFT_CENTER,
         name,
         font.clone(),

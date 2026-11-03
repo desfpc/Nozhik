@@ -158,7 +158,16 @@ pub fn row(
             icon_color
         },
     );
-    paint_icon(painter, origin, directory, tag, stroke, fill);
+    if directory.is_none() && nozhik_docker::is_compose_file(path) {
+        crate::tool_icons::paint(
+            painter,
+            origin + Vec2::new(32.0, 0.0),
+            crate::tool_icons::Icon::Docker,
+            theme::INFO,
+        );
+    } else {
+        paint_icon(painter, origin, directory, tag, stroke, fill);
+    }
     painter.galley(
         Pos2::new(origin.x + 49.0, origin.y - text.size().y / 2.0),
         text,

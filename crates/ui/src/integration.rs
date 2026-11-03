@@ -744,6 +744,7 @@ impl NozhikUi {
         if let Some(panel) = &mut self.terminal {
             panel.shutdown();
         }
+        self.docker.shutdown();
         self.database.shutdown();
         self.remote.shutdown();
         self.plugins = None;

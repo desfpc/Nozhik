@@ -218,7 +218,7 @@ impl NozhikUi {
         clippy::too_many_lines,
         reason = "Dock panels share sizing and terminal lifecycle state"
     )]
-    fn panels(&mut self, ctx: &Context) {
+    pub(crate) fn panels(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
             .frame(egui::Frame::new().fill(theme::CHROME).inner_margin(4))
@@ -354,9 +354,17 @@ impl NozhikUi {
                     (Icon::Git, "Git · Changes / History", LeftTool::Commit),
                     (Icon::Remote, "Remote Host / SSH", LeftTool::Remote),
                     (Icon::Database, "Database", LeftTool::Database),
+                    (Icon::Docker, "Docker", LeftTool::Docker),
                     (Icon::Bell, "Notifications", LeftTool::Notifications),
                 ] {
-                    if tool_icons::button(ui, icon, self.left == Some(tool), title).clicked() {
+                    if ui
+                        .add_enabled_ui(
+                            tool != LeftTool::Docker || !self.docker.files.is_empty(),
+                            |ui| tool_icons::button(ui, icon, self.left == Some(tool), title),
+                        )
+                        .inner
+                        .clicked()
+                    {
                         self.left = if self.left == Some(tool) {
                             None
                         } else {
@@ -436,6 +444,7 @@ impl NozhikUi {
                             LeftTool::Project => "Project v",
                             LeftTool::Commit => "Commit",
                             LeftTool::Database => "Database",
+                            LeftTool::Docker => "Docker",
                             LeftTool::Notifications => "Notifications",
                             LeftTool::Remote => "Remote Host / SSH",
                         });
@@ -447,6 +456,8 @@ impl NozhikUi {
                         self.vcs.panel(ui);
                     } else if tool == LeftTool::Remote {
                         self.remote_panel(ui);
+                    } else if tool == LeftTool::Docker {
+                        self.docker_panel(ui);
                     } else if tool == LeftTool::Database {
                         self.database_panel(ui);
                     } else {
@@ -625,6 +636,7 @@ impl NozhikUi {
         self.database_tick(ctx);
         self.receive_remote(ctx);
         self.language_tick(ctx);
+        self.docker_tick(ctx);
         if let Some(panel) = &mut self.terminal
             && let Some(message) = panel.tick()
         {
@@ -646,6 +658,7 @@ impl NozhikUi {
             self.editor.ai.cancel();
         }
         self.editor_area(ctx);
+        self.docker_window(ctx);
         if let Some(manager) = &self.plugins {
             let context = self.action_context();
             if let Err(error) =

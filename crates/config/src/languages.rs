@@ -12,6 +12,8 @@ pub enum LanguageId {
     /// JavaScript and TypeScript (reserved until their language service is available).
     #[serde(rename = "javascript", alias = "JavaScript", alias = "java_script")]
     JavaScript,
+    /// Cascading Style Sheets.
+    Css,
     /// HTML (reserved).
     Html,
     /// YAML (reserved).
@@ -35,6 +37,12 @@ pub struct LanguageSpec {
 pub const PHP_EXTENSIONS: &[&str] = &["php", "phtml"];
 /// Enable a registration only when its parser/service is wired into the application.
 pub const LANGUAGES: &[LanguageSpec] = &[
+    LanguageSpec {
+        id: LanguageId::Css,
+        label: "CSS",
+        extensions: &["css"],
+        available: true,
+    },
     LanguageSpec {
         id: LanguageId::Php,
         label: "PHP",

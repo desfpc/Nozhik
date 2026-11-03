@@ -34,6 +34,11 @@ pub struct EditorLanguage {
     pub triggers: nozhik_language_support::triggers::LanguageTriggerConfig,
     pub project_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     pub project_path: Option<PathBuf>,
+    pub(crate) class_index:
+        Option<std::sync::Arc<nozhik_language_support::css_symbols::ClassIndex>>,
+    pub(crate) class_click: Option<usize>,
+    pub(crate) css_completion_pending: Option<usize>,
+    pub(crate) is_css: bool,
     // Presentation survives worker revision gates; navigation still uses project_index.
     pub(crate) painted_symbols: Vec<nozhik_language_support::symbol_index::SymbolDeclaration>,
     pub(crate) presentation_text: Option<ropey::Rope>,
@@ -48,6 +53,8 @@ pub struct EditorLanguage {
     pub diagnostics: Vec<Diagnostic>,
     pub syntax: Vec<Diagnostic>,
     pub syntax_theme: String,
+    pub(crate) css_colors: Vec<nozhik_language_support::css::ColorOccurrence>,
+    pub(crate) css_gutter_columns: usize,
     pub completions: Vec<CompletionItem>,
     pub selected: usize,
     pub completion_scroll: bool,
@@ -67,6 +74,9 @@ pub struct LanguageUi {
     pub(crate) indexer: Option<nozhik_language_support::project_indexer::ProjectIndexer>,
     index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
     indexed_revisions: HashMap<PathBuf, u64>,
+    css_index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
+    class_index: Option<std::sync::Arc<nozhik_language_support::css_symbols::ClassIndex>>,
+    class_revisions: HashMap<PathBuf, u64>,
     overlay_sent: HashMap<PathBuf, u64>,
     pub(crate) invalidate_dialog: bool,
     pub(crate) indexing: Option<(usize, usize)>,
@@ -175,10 +185,11 @@ impl crate::NozhikUi {
             .enabled_languages
             .as_ref()
             .is_some_and(|previous| previous != &self.config.enabled_languages);
-        let php_enabled = nozhik_config::languages::enabled(
-            &self.config.enabled_languages,
-            nozhik_config::languages::LanguageId::Php,
-        );
+        let support_enabled = self
+            .config
+            .enabled_languages
+            .iter()
+            .any(|id| nozhik_config::languages::enabled(&self.config.enabled_languages, *id));
         if root != self.language.root || policy_changed {
             self.language = LanguageUi {
                 root: root.clone(),
@@ -186,7 +197,7 @@ impl crate::NozhikUi {
                 ..LanguageUi::default()
             };
             if let Some(root) = root
-                && php_enabled
+                && support_enabled
             {
                 let ctx = ctx.clone();
                 let index_ctx = ctx.clone();
@@ -202,7 +213,7 @@ impl crate::NozhikUi {
             }
         }
         self.language.enabled_languages = Some(self.config.enabled_languages.clone());
-        if !php_enabled {
+        if !support_enabled {
             return;
         }
         self.project_index_tick();
@@ -232,6 +243,49 @@ impl crate::NozhikUi {
                 .or_default();
             view.rebase(&document.buffer);
             view.project_path = Some(document.path.clone());
+            view.is_css = nozhik_language_support::css::is_css(&uri);
+            view.class_index = self.language.class_index.clone().filter(|_| {
+                self.language.class_revisions.get(&document.path) == Some(&snapshot.revision)
+            });
+            if let Some(byte) = view.class_click.take()
+                && let Some(index) = &view.class_index
+                && let Some(occurrence) = index.at(&document.path, byte)
+            {
+                let definitions = !occurrence.declaration;
+                let rows: Vec<_> = index
+                    .occurrences(&occurrence.name)
+                    .iter()
+                    .filter(|o| !definitions || o.declaration)
+                    .map(|o| o.location.clone())
+                    .collect();
+                if definitions && rows.len() == 1 {
+                    let target = &rows[0];
+                    self.language.local_navigation =
+                        Some((target.path.clone(), target.line, target.column));
+                } else {
+                    self.language.usages = Some(crate::usages_popup::UsagesPopup::css(
+                        &occurrence.name,
+                        rows,
+                        definitions,
+                    ));
+                }
+            }
+            if let Some(caret) = view.css_completion_pending
+                && caret == document.buffer.cursors().as_slice()[0].head.byte_offset
+                && let Some(index) = &view.class_index
+            {
+                let source = document.buffer.rope().to_string();
+                if let Some(items) = index.complete(&document.path, &source, caret) {
+                    view.completions = items;
+                    view.selected = 0;
+                    view.completion_scroll = true;
+                    view.completion_caret = caret;
+                    view.request = None;
+                    view.token = 0;
+                    view.local_completion_pending = None;
+                }
+                view.css_completion_pending = None;
+            }
             view.project_index = self.language.index.clone().filter(|_| {
                 self.language.indexed_revisions.get(&document.path) == Some(&snapshot.revision)
             });
@@ -262,7 +316,11 @@ impl crate::NozhikUi {
             {
                 self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
             }
-            view.stubs.clone_from(&self.settings_dialog.php_stubs);
+            if nozhik_language_support::css::is_css(&uri) {
+                view.stubs = None;
+            } else {
+                view.stubs.clone_from(&self.settings_dialog.php_stubs);
+            }
             if let Some(byte) = view.local_completion_pending
                 && view.project_index.is_some()
                 && byte == document.buffer.cursors().as_slice()[0].head.byte_offset
@@ -289,9 +347,21 @@ impl crate::NozhikUi {
                     std::time::Duration::from_millis(200).saturating_sub(at.elapsed()),
                 );
             }
+            if nozhik_language_support::css::is_css(&uri) {
+                view.request = None;
+                continue;
+            }
             if ready && let Some((kind, byte)) = view.request.take() {
                 let source = document.buffer.rope().to_string();
                 if byte > source.len() || !source.is_char_boundary(byte) {
+                    continue;
+                }
+                if kind == RequestKind::Completion
+                    && let Some(index) = &view.class_index
+                    && let Some(items) = index.complete(&document.path, &source, byte)
+                {
+                    view.completions = items;
+                    view.token = 0;
                     continue;
                 }
                 if let Some(index) = &view.project_index {
@@ -401,6 +471,7 @@ impl crate::NozhikUi {
                     revision,
                     spans,
                     syntax,
+                    colors,
                 } => {
                     if let Ok(path) = uri.to_file_path()
                         && let Some(view) = self.language.views.get_mut(&path)
@@ -408,6 +479,16 @@ impl crate::NozhikUi {
                     {
                         view.spans = spans;
                         view.syntax = syntax;
+                        let mut counts = HashMap::<usize, usize>::new();
+                        if let Some(text) = &view.presentation_text {
+                            for color in &colors {
+                                *counts
+                                    .entry(text.byte_to_line(color.range.start))
+                                    .or_default() += 1;
+                            }
+                        }
+                        view.css_gutter_columns = counts.values().copied().max().unwrap_or(0);
+                        view.css_colors = colors;
                     }
                 }
                 Event::Diagnostics {
@@ -657,6 +738,13 @@ impl crate::NozhikUi {
                         self.language.index = Some(index);
                         self.language.indexed_revisions = revisions;
                     }
+                    IndexEvent::Classes(index, revisions) => {
+                        self.language.class_index = Some(index);
+                        self.language.class_revisions = revisions;
+                    }
+                    IndexEvent::CssSnapshot(index, _) => {
+                        self.language.css_index = Some(index);
+                    }
                     IndexEvent::Progress(done, total) => {
                         self.language.indexing =
                             (done != total || total == 0).then_some((done, total));
@@ -700,9 +788,12 @@ impl crate::NozhikUi {
                             )
                         }) {
                             self.language.index = None;
+                            self.language.class_index = None;
+                            self.language.class_revisions.clear();
                             self.language.indexing = Some((0, 0));
                             for view in self.language.views.values_mut() {
                                 view.project_index = None;
+                                view.class_index = None;
                             }
                         }
                         self.language.invalidate_dialog = false;
@@ -848,6 +939,10 @@ impl EditorLanguage {
             self.revision = snapshot.revision;
             self.diagnostics.clear();
             self.syntax.clear();
+            self.css_colors.clear();
+            self.class_index = None;
+            self.class_click = None;
+            self.css_completion_pending = None;
             self.completions.clear();
             self.local_completion_pending = None;
             self.token = 0;
@@ -954,6 +1049,227 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+    fn css_ready(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        path: &std::path::Path,
+    ) -> Result<egui::FullOutput, Box<dyn std::error::Error>> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            let output = navigation_frame(shell, ctx, vec![], egui::Modifiers::NONE);
+            if shell
+                .active
+                .and_then(|i| shell.documents.get(i))
+                .is_some_and(|d| d.path == path)
+                && shell
+                    .language
+                    .views
+                    .get(path)
+                    .is_some_and(|v| v.class_index.is_some())
+            {
+                return Ok(output);
+            }
+            if std::time::Instant::now() > until {
+                return Err(format!("CSS snapshot timeout: {}", shell.status).into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises real keyboard/pointer, worker snapshots, popup navigation and undo together"
+    )]
+    fn css_properties_class_completion_and_cmd_click_cross_language()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let css_path = root.as_path().join("style.css");
+        let php_path = root.as_path().join("view.php");
+        let css = ".left-menu { color: red; }\n.left-menu:hover { color: blue; }\n.demo { fon }";
+        let php = "<div class=\"left-menu\"></div>\n<div class=\"left-\"></div>";
+        std::fs::write(&css_path, css)?;
+        std::fs::write(&php_path, php)?;
+        let bus = nozhik_event_bus::EventBus::new(128)?;
+        let settings = nozhik_config::ConfigManager::from_path(
+            root.as_path().join("settings.toml"),
+            bus.clone(),
+        )?;
+        let mut shell = crate::NozhikUi::new(
+            bus,
+            settings,
+            nozhik_config::Config {
+                ai_enabled: false,
+                ..Default::default()
+            },
+        );
+        shell.project = Some(nozhik_fs_model::tree::ProjectTree::new(root.as_path())?);
+        shell.language.root = Some(root.as_path().into());
+        shell.language.service = Some(nozhik_language_support::LanguageService::with_server(
+            root.as_path().into(),
+            Some(nozhik_language_support::ServerCommand {
+                program: root.as_path().join("no-lsp"),
+                args: vec![],
+            }),
+            || {},
+        ));
+        shell.language.indexer = Some(
+            nozhik_language_support::project_indexer::ProjectIndexer::start(
+                root.as_path().into(),
+                || {},
+            ),
+        );
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        let primary = egui::Modifiers {
+            mac_cmd: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            command: true,
+            ..Default::default()
+        };
+        shell.open_file(css_path.clone());
+        css_ready(&mut shell, &ctx, &css_path)?;
+        let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        let pos = navigation_text(&output, ".left-menu { color: red; }", 3).ok_or("CSS glyph")?;
+        navigation_click(&mut shell, &ctx, pos, primary);
+        navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        assert!(shell.language.usages.is_some());
+        assert!(
+            output.shapes.iter().any(
+                |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text == "3 usages")
+            )
+        );
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![key(egui::Key::Escape)],
+            egui::Modifiers::NONE,
+        );
+        assert!(shell.language.usages.is_none());
+        shell.open_file(php_path.clone());
+        css_ready(&mut shell, &ctx, &php_path)?;
+        let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        let pos = navigation_text(&output, "<div class=\"left-menu\"></div>", 14)
+            .ok_or("PHP class glyph")?;
+        navigation_click(&mut shell, &ctx, pos, primary);
+        navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        let output = navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        assert!(output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.starts_with("Choose CSS declaration"))));
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![key(egui::Key::Enter)],
+            egui::Modifiers::NONE,
+        );
+        css_ready(&mut shell, &ctx, &css_path)?;
+        let active = shell.active.ok_or("active CSS")?;
+        assert_eq!(
+            shell.documents[active].buffer.cursors().as_slice()[0]
+                .head
+                .byte_offset,
+            1
+        );
+        let pos = shell.documents[active]
+            .buffer
+            .position_at(css.find("fon").ok_or("property prefix")? + 3)?;
+        shell.documents[active]
+            .buffer
+            .set_cursors(vec![nozhik_buffer::Cursor {
+                anchor: pos,
+                head: pos,
+            }])?;
+        shell.editor.focus_buffer = Some(shell.documents[active].buffer.snapshot().buffer_id);
+        navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![egui::Event::Text("t-".into())],
+            egui::Modifiers::NONE,
+        );
+        assert!(
+            shell.language.views[&css_path]
+                .completions
+                .iter()
+                .any(|i| i.label == "font-family")
+        );
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![key(egui::Key::Tab)],
+            egui::Modifiers::NONE,
+        );
+        assert!(
+            shell.documents[active]
+                .buffer
+                .rope()
+                .to_string()
+                .contains("font-family: ")
+        );
+        shell.documents[active].buffer.undo()?;
+        assert!(
+            shell.documents[active]
+                .buffer
+                .rope()
+                .to_string()
+                .contains("font-")
+        );
+        shell.open_file(php_path.clone());
+        css_ready(&mut shell, &ctx, &php_path)?;
+        let active = shell.active.ok_or("active PHP")?;
+        let pos = shell.documents[active]
+            .buffer
+            .position_at(php.rfind("left-").ok_or("class prefix")? + 5)?;
+        shell.documents[active]
+            .buffer
+            .set_cursors(vec![nozhik_buffer::Cursor {
+                anchor: pos,
+                head: pos,
+            }])?;
+        shell.editor.focus_buffer = Some(shell.documents[active].buffer.snapshot().buffer_id);
+        navigation_frame(&mut shell, &ctx, vec![], egui::Modifiers::NONE);
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![egui::Event::Text("m".into())],
+            egui::Modifiers::NONE,
+        );
+        css_ready(&mut shell, &ctx, &php_path)?;
+        assert!(
+            shell.language.views[&php_path]
+                .completions
+                .iter()
+                .any(|i| i.label == "left-menu")
+        );
+        navigation_frame(
+            &mut shell,
+            &ctx,
+            vec![key(egui::Key::Tab)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(
+            shell.documents[active].buffer.rope().to_string(),
+            php.replace("left-\"", "left-menu\"")
+        );
+        shell.documents[active].buffer.undo()?;
+        assert!(
+            shell.documents[active]
+                .buffer
+                .rope()
+                .to_string()
+                .contains("left-m\"")
+        );
+        assert_eq!(std::fs::read_to_string(php_path)?, php);
+        Ok(())
     }
     #[test]
     fn presentation_diff_preserves_unicode_across_rope_chunks() {

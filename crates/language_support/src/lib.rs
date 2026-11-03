@@ -1,5 +1,8 @@
-//! Background PHP syntax and LSP services. UI owns authoritative document text.
+//! Background PHP/CSS syntax, CSS formatting and PHP LSP services. UI owns authoritative document text.
 pub mod completion;
+pub mod css;
+pub mod css_completion;
+pub mod css_symbols;
 pub mod doc_provider;
 pub mod formatting;
 pub mod highlighter;
@@ -142,6 +145,8 @@ pub enum Event {
         spans: Vec<highlighter::HighlightSpan>,
         /// Local parser errors independent of LSP diagnostics.
         syntax: Vec<lsp_types::Diagnostic>,
+        /// CSS gutter colors for the exact same revision; parsed off the UI thread.
+        colors: Vec<css::ColorOccurrence>,
     },
     /// Diagnostics for the server's synchronized snapshot.
     Diagnostics {
@@ -234,16 +239,25 @@ impl LanguageService {
                             revision,
                             text,
                         } => {
-                            let parser = parsers
-                                .entry(uri.clone())
-                                .or_insert_with(highlighter::Highlighter::php);
+                            let parser = parsers.entry(uri.clone()).or_insert_with(|| {
+                                if css::is_css(&uri) {
+                                    highlighter::Highlighter::css()
+                                } else {
+                                    highlighter::Highlighter::php()
+                                }
+                            });
                             match parser {
                                 Ok(parser) => parser.highlight(&text.to_string()).map(|spans| {
                                     Event::Highlights {
-                                        uri,
+                                        uri: uri.clone(),
                                         revision,
                                         spans,
                                         syntax: parser.diagnostics(),
+                                        colors: if css::is_css(&uri) {
+                                            css::colors(&text.to_string()).unwrap_or_default()
+                                        } else {
+                                            Vec::new()
+                                        },
                                     }
                                 }),
                                 Err(error) => Err(Error::Protocol(error.to_string())),
@@ -253,7 +267,23 @@ impl LanguageService {
                             parsers.remove(&uri);
                             continue;
                         }
-                        Command::Request { .. } | Command::Format { .. } => continue,
+                        Command::Format {
+                            uri,
+                            revision,
+                            token,
+                            source,
+                            style,
+                            range,
+                        } => {
+                            let edits = css::format(&source, &style, range.as_ref());
+                            Ok(Event::Formatted {
+                                uri,
+                                revision,
+                                token,
+                                edits,
+                            })
+                        }
+                        Command::Request { .. } => continue,
                     };
                 if output
                     .send(result.unwrap_or_else(|e| Event::Error(e.to_string())))
@@ -293,6 +323,15 @@ impl LanguageService {
     /// duplicate Sync/Close commands are idempotent.
     #[must_use]
     pub fn send(&self, command: Command) -> bool {
+        let css_command = match &command {
+            Command::Sync { uri, .. }
+            | Command::Format { uri, .. }
+            | Command::Request { uri, .. }
+            | Command::Close(uri) => css::is_css(uri),
+        };
+        if css_command {
+            return self.syntax.try_send(command).is_ok();
+        }
         if !matches!(command, Command::Request { .. } | Command::Format { .. })
             && self.syntax.try_send(command.clone()).is_err()
         {

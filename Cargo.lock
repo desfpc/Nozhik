@@ -142,7 +142,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "eframe",
@@ -991,6 +991,15 @@ checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
 dependencies = [
  "crypto-bigint",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "csscolorparser"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fda6aace1fbef3aa217b27f4c8d7d071ef2a70a5ca51050b1f17d40299d3f16"
+dependencies = [
+ "phf",
 ]
 
 [[package]]
@@ -3069,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ai-completion"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "nix 0.28.0",
  "reqwest",
@@ -3082,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-buffer"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "nozhik-core",
  "nozhik-event-bus",
@@ -3094,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-config"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "directories",
  "nozhik-core",
@@ -3108,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-core"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3116,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-database"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "chrono",
  "futures-util",
@@ -3137,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-event-bus"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "nozhik-core",
  "thiserror 2.0.21",
@@ -3146,7 +3155,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-fs-model"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "fuzzy-matcher",
  "git2",
@@ -3162,8 +3171,9 @@ dependencies = [
 
 [[package]]
 name = "nozhik-language-support"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
+ "csscolorparser",
  "ignore",
  "lsp-types",
  "nozhik-config",
@@ -3174,12 +3184,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tree-sitter",
+ "tree-sitter-css",
  "tree-sitter-php",
 ]
 
 [[package]]
 name = "nozhik-plugin-host"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "directories",
  "nozhik-event-bus",
@@ -3193,7 +3204,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-remote-ssh"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "directories",
  "keyring",
@@ -3210,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-terminal"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "nix 0.28.0",
  "parking_lot",
@@ -3222,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ui"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "eframe",
  "egui",
@@ -3258,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-vcs"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "git2",
  "tempfile",
@@ -3896,6 +3907,48 @@ checksum = "44dc769b75f93afdddd8c7fa12d685292ddeff1e66f7f0f3a234cf1818afe892"
 dependencies = [
  "base64ct",
  "ctutils",
+]
+
+[[package]]
+name = "phf"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
+dependencies = [
+ "phf_macros",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
+dependencies = [
+ "phf_shared",
+ "rand 0.8.8",
+]
+
+[[package]]
+name = "phf_macros"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -5167,6 +5220,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "siphasher"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5984,6 +6043,16 @@ dependencies = [
  "regex-syntax",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-css"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

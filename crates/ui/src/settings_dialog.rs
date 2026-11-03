@@ -266,8 +266,8 @@ impl SettingsDialog {
             .get(extension)
             .cloned()
             .unwrap_or_else(|| FileTypeSettings {
-                formatting: matches!(extension.as_str(), "php" | "phtml")
-                    .then(|| "php_psr12.json".into()),
+                formatting: nozhik_config::code_style::default_profile(extension)
+                    .map(str::to_owned),
                 ..FileTypeSettings::default()
             });
         let previous = selection.clone();

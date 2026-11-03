@@ -741,6 +741,7 @@ pub fn parse(path: &Path, source: &str) -> crate::Result<FileSymbols> {
     let mut facts = FileSymbols::default();
     collect(tree.root_node(), source, path, &context, &mut facts);
     references(tree.root_node(), source, path, &context, &mut facts);
+    crate::css_symbols::php_markup(path, source, &tree, &mut facts);
     Ok(facts)
 }
 

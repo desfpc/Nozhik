@@ -16,6 +16,7 @@ pub struct TextEditorView {
     pub proportional_font: bool,
     pub(crate) documentation_target:
         Option<nozhik_language_support::doc_provider::DefinitionTarget>,
+    css_picker: Option<crate::css_colors::Picker>,
     mouse_anchor: Option<(nozhik_core::BufferId, u64, usize)>,
 }
 
@@ -72,7 +73,13 @@ impl TextEditorView {
         if ui.input(|i| i.pointer.any_pressed()) {
             self.ai.rearm();
         }
-        if enabled && response.has_focus() {
+        if self.css_picker.as_ref().is_some_and(|p| !p.valid(buffer)) {
+            self.css_picker = None;
+        }
+        if !enabled {
+            self.css_picker = None;
+        }
+        if enabled && response.has_focus() && self.css_picker.is_none() {
             ui.memory_mut(|m| {
                 m.set_focus_lock_filter(
                     id,
@@ -104,6 +111,7 @@ impl TextEditorView {
                         state.completions.clear();
                         state.request = None;
                         state.local_completion_pending = None;
+                        state.css_completion_pending = None;
                         state.token = 0;
                     }
                     continue;
@@ -152,6 +160,7 @@ impl TextEditorView {
                                 state.token = 0;
                                 state.request = None;
                                 state.local_completion_pending = None;
+                                state.css_completion_pending = None;
                                 continue;
                             }
                             Key::Enter | Key::Tab => {
@@ -225,6 +234,7 @@ impl TextEditorView {
                     state.completions.clear();
                     state.request = None;
                     state.local_completion_pending = None;
+                    state.css_completion_pending = None;
                     state.request_at = Some(std::time::Instant::now());
                     if trigger {
                         Self::refresh_completion(buffer, state, false);
@@ -243,6 +253,11 @@ impl TextEditorView {
         let ghost_column = buffer.cursors().as_slice()[0].head.column as usize;
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut hit_rows = Vec::new();
+        let color_count = language
+            .as_ref()
+            .map_or(0, |state| state.css_gutter_columns);
+        let gutter = (color_count as f32).mul_add(18.0, 66.0);
+        let mut clicked_color = None;
         let cursors = buffer.cursors().as_slice().to_vec();
         if let Some(state) = language.as_deref_mut() {
             state.rebase(buffer);
@@ -252,6 +267,7 @@ impl TextEditorView {
         let mut hovered_byte = None;
         let mut inspected_doc = None;
         let mut hovered_declaration = None;
+        let mut class_hit = None;
         let inspect = enabled && ui.input(|i| primary_modifier(i.modifiers));
         let mut lenses: Vec<_> = language
             .as_ref()
@@ -309,7 +325,7 @@ impl TextEditorView {
                             FontId::monospace(11.0),
                             theme::MUTED,
                         );
-                        let origin = rect.min + egui::vec2(66.0, 5.0);
+                        let origin = rect.min + egui::vec2(gutter, 5.0);
                         let hit = ui.interact(
                             egui::Rect::from_min_size(origin, galley.size()),
                             id.with(("usage_lens", byte)),
@@ -405,13 +421,22 @@ impl TextEditorView {
                         job = ghost_job(&job, ghost_column, &ghost_lines, part, font_size);
                     }
                     let galley = ui.fonts(|fonts| fonts.layout_job(job));
-                    let width = ui.available_width().max(galley.size().x + 90.0);
+                    let width = ui.available_width().max(galley.size().x + gutter + 24.0);
                     let (rect, row) =
                         ui.allocate_exact_size(egui::vec2(width, font_size + 7.0), Sense::hover());
                     if reveal == Some(line) {
                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                     }
-                    let origin = rect.min + egui::vec2(66.0, 3.0);
+                    let origin = rect.min + egui::vec2(gutter, 3.0);
+                    if !synthetic && let Some(state) = language.as_ref() {
+                        let first = state.css_colors.partition_point(|c| c.range.start < start);
+                        for (index, color) in state.css_colors[first..].iter().take_while(|c| c.range.start < start + source.len()).enumerate() {
+                            let swatch_rect = egui::Rect::from_min_size(rect.min + egui::vec2((index as f32).mul_add(18.0, 54.0), 4.0), egui::vec2(14.0,14.0));
+                            let hit = crate::css_colors::swatch(ui, id.with(("css_swatch", color.range.start)), swatch_rect, color.rgba, enabled);
+                            if hit.hovered() { lens_interaction = true; }
+                            if hit.clicked() { clicked_color = Some((color.clone(), swatch_rect.left_bottom())); }
+                        }
+                    }
                     if !synthetic
                         && ghost_row.is_none()
                         && row.contains_pointer()
@@ -425,6 +450,26 @@ impl TextEditorView {
                                     .nth(index)
                                     .map_or(text.len(), |(i, _)| i),
                         );
+                    }
+                    if inspect && !synthetic && ghost_row.is_none() && row.contains_pointer()
+                        && let Some(byte) = hovered_byte
+                        && let Some(state) = language.as_ref()
+                        && let Some((index,path)) = state.class_index.as_ref().zip(state.project_path.as_ref())
+                        && let Some(class) = index.at(path,byte)
+                        && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+                    {
+                        let first = class.location.byte.saturating_sub(start);
+                        let last = first + class.location.length;
+                        if last <= text.len() {
+                            let x1 = origin.x + galley.pos_from_cursor(CCursor::new(text[..first].chars().count())).min.x;
+                            let x2 = origin.x + galley.pos_from_cursor(CCursor::new(text[..last].chars().count())).min.x;
+                            if pos.x >= x1 && pos.x < x2 {
+                                class_hit = Some(byte);
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                let y = origin.y + galley.size().y;
+                                ui.painter().line_segment([egui::pos2(x1,y),egui::pos2(x2,y)], Stroke::new(1.0_f32,theme::INFO));
+                            }
+                        }
                     }
                     if !synthetic
                         && ghost_row.is_none()
@@ -477,6 +522,7 @@ impl TextEditorView {
                         }
                     }
                     if inspect
+                        && class_hit.is_none()
                         && inspected_doc.is_none()
                         && hovered_declaration.is_none()
                         && !synthetic
@@ -724,6 +770,27 @@ impl TextEditorView {
                 }
             }
         }
+        if let Some((color, origin)) = clicked_color {
+            self.css_picker = Some(crate::css_colors::Picker::new(buffer, &color, origin));
+        } else if let Some(picker) = &mut self.css_picker {
+            if picker.show(ui, buffer)? {
+                self.css_picker = None;
+            }
+            self.mouse_anchor = None;
+            return Ok(());
+        }
+        if let Some(byte) = class_hit {
+            if response.clicked_by(egui::PointerButton::Primary)
+                && let Some(state) = language.as_deref_mut()
+            {
+                state.class_click = Some(byte);
+                state.completions.clear();
+                state.request = None;
+                ui.ctx().request_repaint();
+            }
+            self.mouse_anchor = None;
+            return Ok(());
+        }
         if hovered_declaration.is_some() {
             self.mouse_anchor = None;
             return Ok(());
@@ -757,6 +824,7 @@ impl TextEditorView {
                 state.token = 0;
                 state.request = None;
                 state.local_completion_pending = None;
+                state.css_completion_pending = None;
             }
         } else if enabled
             && response.clicked_by(egui::PointerButton::Primary)
@@ -922,6 +990,38 @@ impl TextEditorView {
         }
         state.rebase(buffer);
         state.capture_index();
+        let caret = buffer.cursors().as_slice()[0].head.byte_offset;
+        state.css_completion_pending = Some(caret);
+        if state.is_css {
+            let source = buffer.rope().to_string();
+            state.completions = state
+                .class_index
+                .as_ref()
+                .zip(state.project_path.as_ref())
+                .and_then(|(index, path)| index.complete(path, &source, caret))
+                .unwrap_or_else(|| {
+                    nozhik_language_support::css_completion::properties(&source, caret, explicit)
+                });
+            state.completion_caret = caret;
+            state.selected = 0;
+            state.completion_scroll = true;
+            state.token = 0;
+            state.request = None;
+            return;
+        }
+        if let Some((index, path)) = state.class_index.as_ref().zip(state.project_path.as_ref())
+            && let Some(items) = index.complete(path, &buffer.rope().to_string(), caret)
+        {
+            state.completions = items;
+            state.completion_caret = caret;
+            state.selected = 0;
+            state.completion_scroll = true;
+            state.token = 0;
+            state.request = None;
+            state.local_completion_pending = None;
+            state.css_completion_pending = None;
+            return;
+        }
         let head = buffer.cursors().as_slice()[0].head;
         let line = buffer.rope().line(head.line as usize).to_string();
         let local = head.byte_offset - buffer.rope().line_to_byte(head.line as usize);
@@ -939,6 +1039,7 @@ impl TextEditorView {
         state.completion_caret = head.byte_offset;
         state.completion_prefix = query.into();
         state.local_completion_pending = Some(head.byte_offset);
+        state.css_completion_pending = Some(head.byte_offset);
         state.completions = if explicit || !query.is_empty() || access {
             state.local_fragment_completions(&line, local, head.byte_offset)
         } else {
@@ -1180,6 +1281,7 @@ impl TextEditorView {
             state.token = 0;
             state.request = None;
             state.local_completion_pending = None;
+            state.css_completion_pending = None;
         }
         accept
     }
@@ -1223,6 +1325,7 @@ impl TextEditorView {
         }
         state.request = None;
         state.local_completion_pending = None;
+        state.css_completion_pending = None;
         state.completions.clear();
         state.token = 0;
         Ok(())
@@ -1802,6 +1905,107 @@ mod tests {
     use super::*;
     use nozhik_core::BufferId;
     use nozhik_event_bus::{BufferEvent, Event as BusEvent, EventBus};
+
+    #[test]
+    fn css_swatch_picker_hex_replacement_and_undo() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "a { color: #0c2238; background: blue; }";
+        let mut buffer = TextBuffer::load_from_str(BufferId(89), source);
+        let mut editor = TextEditorView::default();
+        let mut language = crate::language::EditorLanguage {
+            css_colors: nozhik_language_support::css::colors(source)?,
+            css_gutter_columns: 2,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut frame = |editor: &mut TextEditorView,
+                         buffer: &mut TextBuffer,
+                         events: Vec<Event>|
+         -> Result<egui::FullOutput, BufferError> {
+            let mut result = Ok(());
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        result =
+                            editor.show_language(ui, buffer, 14.0, 4, true, Some(&mut language));
+                    });
+                },
+            );
+            result?;
+            Ok(output)
+        };
+        let output = frame(&mut editor, &mut buffer, vec![])?;
+        let swatch = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == egui::Color32::from_rgb(12, 34, 56)
+                        && (r.rect.width() - 14.0).abs() < 0.01 =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .ok_or("swatch missing")?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(swatch, true, egui::Modifiers::NONE),
+        )?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(swatch, false, egui::Modifiers::NONE),
+        )?;
+        assert!(editor.css_picker.is_some());
+        frame(&mut editor, &mut buffer, vec![])?;
+        let popup = frame(&mut editor, &mut buffer, vec![])?;
+        let hex = text_position(&popup, "#0c2238", 3).ok_or("Hex field missing")?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(hex, true, egui::Modifiers::NONE),
+        )?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            pointer(hex, false, egui::Modifiers::NONE),
+        )?;
+        frame(
+            &mut editor,
+            &mut buffer,
+            vec![
+                Event::Key {
+                    key: Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                Event::Text("#12345678".into()),
+            ],
+        )?;
+        assert_eq!(
+            buffer.rope().to_string(),
+            "a { color: #12345678; background: blue; }"
+        );
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        frame(&mut editor, &mut buffer, vec![])?;
+        assert!(
+            editor.css_picker.is_none(),
+            "Undo invalidates the color edit target"
+        );
+        Ok(())
+    }
 
     fn mouse_frame(
         editor: &mut TextEditorView,

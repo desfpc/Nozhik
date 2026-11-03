@@ -124,7 +124,7 @@ impl Default for FileTypeSettings {
 #[derive(Clone, Debug, Default)]
 pub struct CodeStyles(pub BTreeMap<String, BTreeMap<String, CodeStyle>>);
 impl CodeStyles {
-    /// Includes the shipped PHP profile, without touching the user filesystem.
+    /// Includes the shipped PHP and CSS profiles, without touching the user filesystem.
     /// # Errors
     /// Returns a malformed embedded profile error.
     pub fn builtin() -> Result<Self, ConfigError> {
@@ -137,6 +137,10 @@ impl CodeStyles {
                 .or_default()
                 .insert("php_psr12.json".into(), php.clone());
         }
+        catalog.0.entry("css".into()).or_default().insert(
+            "css_default.json".into(),
+            CodeStyle::parse(include_str!("../code_styles/css/css_default.json"))?,
+        );
         Ok(catalog)
     }
     /// Loads `<root>/<extension>/*.json`; later roots override matching filenames.
@@ -168,7 +172,7 @@ impl CodeStyles {
         }
         Ok(())
     }
-    /// Resolves an explicit selection, or the shipped PHP default for an unset extension.
+    /// Resolves an explicit selection, or the shipped language default for an unset extension.
     #[must_use]
     pub fn selected(
         &self,
@@ -178,10 +182,19 @@ impl CodeStyles {
         let extension = extension.to_lowercase();
         let name = match settings.get(&extension) {
             Some(s) => s.formatting.as_deref()?,
-            None if matches!(extension.as_str(), "php" | "phtml") => "php_psr12.json",
-            None => return None,
+            None => default_profile(&extension)?,
         };
         self.0.get(&extension)?.get(name)
+    }
+}
+
+/// Built-in formatting selection for a newly supported file type.
+#[must_use]
+pub fn default_profile(extension: &str) -> Option<&'static str> {
+    match extension {
+        "php" | "phtml" => Some("php_psr12.json"),
+        "css" => Some("css_default.json"),
+        _ => None,
     }
 }
 

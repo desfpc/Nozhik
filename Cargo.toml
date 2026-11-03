@@ -3,7 +3,7 @@ members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "cr
 resolver = "3"
 
 [workspace.package]
-version = "0.1.22"
+version = "0.1.24"
 edition = "2024"
 license-file = "LICENSE"
 
@@ -37,6 +37,8 @@ parking_lot = "0.12"
 nozhik-language-support = { path = "crates/language_support" }
 tree-sitter = "0.25"
 tree-sitter-php = "0.24.2"
+tree-sitter-css = "0.25"
+csscolorparser = "0.7"
 lsp-types = "0.95.1"
 nozhik-plugin-host = { path = "crates/plugin_host" }
 semver = { version = "1", features = ["serde"] }

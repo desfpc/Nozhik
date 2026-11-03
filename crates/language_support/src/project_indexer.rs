@@ -12,6 +12,7 @@ use std::{
 };
 
 /// Commands never parse or perform I/O on the caller thread.
+#[derive(Clone)]
 pub enum IndexCommand {
     /// Reconcile a changed path (including directories and deleted paths).
     Changed(PathBuf),
@@ -35,6 +36,10 @@ pub enum IndexCommand {
 pub enum IndexEvent {
     /// Shared immutable live index plus overlay revision gates.
     Snapshot(Arc<SymbolIndex>, HashMap<PathBuf, u64>),
+    /// Independent CSS class partition, retaining case-sensitive source names.
+    CssSnapshot(Arc<SymbolIndex>, HashMap<PathBuf, u64>),
+    /// Cross-language class catalog with exact overlay revision gates.
+    Classes(Arc<crate::css_symbols::ClassIndex>, HashMap<PathBuf, u64>),
     /// Completed and total files; zero total denotes discovery.
     Progress(usize, usize),
     /// Traversal and cache persistence completed, including projects with no PHP files.
@@ -61,7 +66,7 @@ impl ProjectIndexer {
         enabled_languages: BTreeSet<LanguageId>,
         wake: impl Fn() + Send + 'static,
     ) -> Self {
-        let (sender, commands) = mpsc::channel();
+        let (sender, commands) = mpsc::channel::<IndexCommand>();
         let (output, events) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
@@ -70,32 +75,67 @@ impl ProjectIndexer {
                 let _sent = output.send(event);
                 wake();
             };
-            let mut worker = Worker::new(root);
-            worker.enabled_languages = enabled_languages;
-            if !worker.php_enabled() {
-                notify(worker.snapshot());
+            let mut workers: Vec<_> = [LanguageId::Php, LanguageId::Css]
+                .into_iter()
+                .filter(|id| nozhik_config::languages::enabled(&enabled_languages, *id))
+                .map(|id| {
+                    let mut worker = Worker::new(root.clone());
+                    worker.disk = SymbolIndex::new(id);
+                    worker.live = worker.disk.clone();
+                    worker.enabled_languages.clone_from(&enabled_languages);
+                    worker
+                })
+                .collect();
+            if workers.is_empty() {
                 notify(IndexEvent::Finished);
                 return;
             }
-            match worker.load() {
-                Ok(()) => notify(worker.snapshot()),
-                Err(e) => notify(IndexEvent::Error(e.to_string())),
+            for worker in &mut workers {
+                match worker.load() {
+                    Ok(()) => notify(worker.snapshot()),
+                    Err(e) => notify(IndexEvent::Error(e.to_string())),
+                }
+                if let Err(e) = worker.reconcile(&stopping, &notify) {
+                    notify(IndexEvent::Error(e.to_string()));
+                }
+                if stopping.load(Ordering::Relaxed) {
+                    return;
+                }
+                notify(worker.snapshot());
             }
-            if let Err(e) = worker.reconcile(&stopping, &notify) {
-                notify(IndexEvent::Error(e.to_string()));
-            }
-            if stopping.load(Ordering::Relaxed) {
-                return;
-            }
-            notify(worker.snapshot());
+            notify(class_snapshot(&workers));
             while !stopping.load(Ordering::Relaxed) {
                 let Ok(command) = commands.recv() else {
                     break;
                 };
-                match worker.command(command, &stopping, &notify) {
-                    Ok(true) => notify(worker.snapshot()),
-                    Ok(false) => {}
-                    Err(e) => notify(IndexEvent::Error(e.to_string())),
+                if matches!(command, IndexCommand::Invalidate) {
+                    match std::fs::remove_dir_all(root.join(".nozhik/cache")) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            notify(IndexEvent::Error(e.to_string()));
+                            continue;
+                        }
+                    }
+                }
+                let mut changed = false;
+                for worker in &mut workers {
+                    let result = if matches!(command, IndexCommand::Invalidate) {
+                        worker.rebuild(&stopping, &notify)
+                    } else {
+                        worker.command(command.clone(), &stopping, &notify)
+                    };
+                    match result {
+                        Ok(true) => {
+                            changed = true;
+                            notify(worker.snapshot());
+                        }
+                        Ok(false) => {}
+                        Err(e) => notify(IndexEvent::Error(e.to_string())),
+                    }
+                }
+                if changed {
+                    notify(class_snapshot(&workers));
                 }
             }
         });
@@ -173,34 +213,54 @@ impl Worker {
             parsed: 0,
         }
     }
-    fn php_enabled(&self) -> bool {
-        nozhik_config::languages::enabled(&self.enabled_languages, LanguageId::Php)
+    fn partition_enabled(&self) -> bool {
+        nozhik_config::languages::enabled(&self.enabled_languages, self.disk.language)
     }
     fn supports_path(&self, path: &Path) -> bool {
-        self.php_enabled()
-            && nozhik_config::languages::language_for_path(path) == Some(LanguageId::Php)
+        self.partition_enabled()
+            && nozhik_config::languages::language_for_path(path) == Some(self.disk.language)
     }
     fn eligible(&self, path: &Path) -> bool {
         path.strip_prefix(&self.root)
             .is_ok_and(|relative| !relative.components().any(|c| excluded(c.as_os_str())))
     }
+    fn cache_name(&self) -> &'static str {
+        if self.disk.language == LanguageId::Css {
+            "index_css.json"
+        } else {
+            "index_php.json"
+        }
+    }
+    fn extract(&self, path: &Path, source: &str) -> crate::Result<FileSymbols> {
+        if self.disk.language == LanguageId::Css {
+            let mut facts = FileSymbols {
+                css_classes: crate::css::classes(source)?,
+                ..FileSymbols::default()
+            };
+            crate::css_symbols::selectors(path, source, &mut facts);
+            Ok(facts)
+        } else {
+            crate::php_symbols::parse(path, source)
+        }
+    }
     fn cache_dir(&self) -> PathBuf {
         self.root.join(".nozhik/cache")
     }
     fn load(&mut self) -> std::io::Result<()> {
-        if !self.php_enabled() {
+        if !self.partition_enabled() {
             return Ok(());
         }
-        let file = match std::fs::File::open(self.cache_dir().join("index_php.json")) {
+        let file = match std::fs::File::open(self.cache_dir().join(self.cache_name())) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
         let cache: Cache = serde_json::from_reader(std::io::BufReader::new(file))?;
-        if cache.version != 4 {
+        if cache.version != 5 {
             return Ok(());
         }
-        if cache.root != self.root || cache.index.language != LanguageId::Php {
+        let expected_language = self.disk.language;
+        if cache.root != self.root || cache.index.language != expected_language {
             return Err(std::io::Error::other(
                 "Incompatible project index cache; use Invalidate Caches",
             ));
@@ -216,18 +276,23 @@ impl Worker {
         serde_json::to_writer(
             std::io::BufWriter::new(file.as_file_mut()),
             &CacheRef {
-                version: 4,
+                version: 5,
                 root: &self.root,
                 stamps: &self.stamps,
                 index: &self.disk,
             },
         )?;
-        file.persist(self.cache_dir().join("index_php.json"))
+        file.persist(self.cache_dir().join(self.cache_name()))
             .map_err(|e| e.error)?;
         Ok(())
     }
     fn snapshot(&self) -> IndexEvent {
-        IndexEvent::Snapshot(
+        let snapshot = if self.disk.language == LanguageId::Css {
+            IndexEvent::CssSnapshot
+        } else {
+            IndexEvent::Snapshot
+        };
+        snapshot(
             Arc::new(self.live.clone()),
             self.overlays
                 .iter()
@@ -254,7 +319,7 @@ impl Worker {
             return Ok(None);
         }
         let source = std::fs::read_to_string(path)?;
-        let facts = crate::php_symbols::parse(path, &source).map_err(std::io::Error::other)?;
+        let facts = self.extract(path, &source).map_err(std::io::Error::other)?;
         self.parsed += 1;
         if stamp(path)? != before {
             return Err(std::io::Error::new(
@@ -323,7 +388,7 @@ impl Worker {
         stop: &AtomicBool,
         notify: &impl Fn(IndexEvent),
     ) -> std::io::Result<bool> {
-        if !self.php_enabled() {
+        if !self.partition_enabled() {
             notify(IndexEvent::Finished);
             return Ok(false);
         }
@@ -381,7 +446,14 @@ impl Worker {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
-        self.disk = SymbolIndex::new(LanguageId::Php);
+        self.rebuild(stop, notify)
+    }
+    fn rebuild(
+        &mut self,
+        stop: &AtomicBool,
+        notify: &impl Fn(IndexEvent),
+    ) -> std::io::Result<bool> {
+        self.disk = SymbolIndex::new(self.disk.language);
         self.live = self.disk.clone();
         self.stamps.clear();
         // Revision gates must only advertise facts present in this snapshot.
@@ -401,7 +473,7 @@ impl Worker {
         stop: &AtomicBool,
         notify: &impl Fn(IndexEvent),
     ) -> std::io::Result<bool> {
-        if !self.php_enabled() {
+        if !self.partition_enabled() {
             return Ok(false);
         }
         match command {
@@ -419,7 +491,8 @@ impl Worker {
                 {
                     return Ok(false);
                 }
-                let facts = crate::php_symbols::parse(&path, &text.to_string())
+                let facts = self
+                    .extract(&path, &text.to_string())
                     .map_err(std::io::Error::other)?;
                 self.parsed += 1;
                 self.live.replace(path.clone(), facts.clone());
@@ -484,6 +557,24 @@ impl Worker {
         }
     }
 }
+fn class_snapshot(workers: &[Worker]) -> IndexEvent {
+    if !workers.iter().any(|w| w.disk.language == LanguageId::Css) {
+        return IndexEvent::Classes(
+            Arc::new(crate::css_symbols::ClassIndex::default()),
+            HashMap::new(),
+        );
+    }
+    let index = crate::css_symbols::ClassIndex::from_partitions(workers.iter().map(|w| &w.live));
+    let revisions = workers
+        .iter()
+        .flat_map(|w| {
+            w.overlays
+                .iter()
+                .map(|(path, (revision, _))| (path.clone(), *revision))
+        })
+        .collect();
+    IndexEvent::Classes(Arc::new(index), revisions)
+}
 fn excluded(name: &std::ffi::OsStr) -> bool {
     matches!(name.to_str(), Some(".git" | ".nozhik"))
 }
@@ -491,6 +582,126 @@ fn excluded(name: &std::ffi::OsStr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn css_class_links_follow_php_overlays_cache_close_and_removal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let css_path = dir.path().join("style.css");
+        let php_path = dir.path().join("view.php");
+        std::fs::write(&css_path, ".card { color: red; }")?;
+        std::fs::write(&php_path, "<i class=\"card\"></i>")?;
+        let stop = AtomicBool::new(false);
+        let mut php = Worker::new(dir.path().into());
+        let mut css = Worker::new(dir.path().into());
+        css.disk = SymbolIndex::new(LanguageId::Css);
+        css.live = css.disk.clone();
+        php.reconcile(&stop, &|_| {})?;
+        css.reconcile(&stop, &|_| {})?;
+        let mut workers = vec![php, css];
+        let catalog = |workers: &[Worker]| match class_snapshot(workers) {
+            IndexEvent::Classes(index, _) => index,
+            _ => Arc::new(crate::css_symbols::ClassIndex::default()),
+        };
+        assert_eq!(catalog(&workers).occurrences("card").len(), 2);
+        let css_parsed = workers[1].parsed;
+        workers[0].command(
+            IndexCommand::Overlay {
+                path: php_path.clone(),
+                revision: 3,
+                text: ropey::Rope::from_str("<i class=\"changed\"></i>"),
+            },
+            &stop,
+            &|_| {},
+        )?;
+        assert_eq!(catalog(&workers).occurrences("card").len(), 1);
+        assert_eq!(catalog(&workers).occurrences("changed").len(), 1);
+        assert_eq!(workers[1].parsed, css_parsed, "no other source is reparsed");
+        let mut warm = Worker::new(dir.path().into());
+        warm.load()?;
+        assert_eq!(
+            warm.live
+                .file_symbols(&php_path)
+                .ok_or("cached PHP")?
+                .class_occurrences[0]
+                .name,
+            "card"
+        );
+        workers[0].command(IndexCommand::Close(php_path.clone()), &stop, &|_| {})?;
+        assert_eq!(catalog(&workers).occurrences("card").len(), 2);
+        std::fs::remove_file(css_path.clone())?;
+        workers[1].command(IndexCommand::Changed(css_path), &stop, &|_| {})?;
+        assert_eq!(catalog(&workers).occurrences("card").len(), 1);
+        assert_eq!(
+            catalog(&workers)
+                .complete(&php_path, "<i class=\"card\"></i>", 12)
+                .ok_or("class context")?
+                .len(),
+            0,
+            "removed declarations are not suggested"
+        );
+        assert_eq!(
+            catalog(&workers[..1]).occurrences("card").len(),
+            0,
+            "disabled CSS has no class navigation service"
+        );
+        Ok(())
+    }
+    #[test]
+    fn css_partition_cache_overlay_and_deletion() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("styles.CSS");
+        std::fs::write(&path, ".Card,.card { color: red; }")?;
+        std::fs::write(dir.path().join("wrong.php"), [0xff, 0xfe])?;
+        let make_worker = || {
+            let mut worker = Worker::new(dir.path().into());
+            worker.disk = SymbolIndex::new(LanguageId::Css);
+            worker.live = worker.disk.clone();
+            worker.enabled_languages = BTreeSet::from([LanguageId::Css]);
+            worker
+        };
+        let stop = AtomicBool::new(false);
+        let mut worker = make_worker();
+        worker.reconcile(&stop, &|_| {})?;
+        assert_eq!(worker.parsed, 1);
+        assert_eq!(
+            worker
+                .live
+                .css_classes()
+                .map(|(_, c)| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Card", "card"]
+        );
+        assert!(dir.path().join(".nozhik/cache/index_css.json").exists());
+        assert!(!dir.path().join(".nozhik/cache/index_php.json").exists());
+        worker.command(
+            IndexCommand::Overlay {
+                path: path.clone(),
+                revision: 4,
+                text: ropey::Rope::from_str(".Unsaved { color: blue }"),
+            },
+            &stop,
+            &|_| {},
+        )?;
+        assert_eq!(
+            worker
+                .live
+                .css_classes()
+                .next()
+                .map(|(_, c)| c.name.as_str()),
+            Some("Unsaved")
+        );
+        let mut restored = make_worker();
+        restored.load()?;
+        restored.reconcile(&stop, &|_| {})?;
+        assert_eq!(restored.parsed, 0);
+        assert_eq!(restored.live.css_classes().count(), 2);
+        worker.command(IndexCommand::Close(path.clone()), &stop, &|_| {})?;
+        assert_eq!(worker.live.css_classes().count(), 2);
+        std::fs::remove_file(&path)?;
+        worker.command(IndexCommand::Changed(path), &stop, &|_| {})?;
+        assert_eq!(worker.live.css_classes().count(), 0);
+        Ok(())
+    }
     #[test]
     #[allow(
         clippy::too_many_lines,

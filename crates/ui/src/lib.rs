@@ -8,6 +8,7 @@ mod repository_clone;
 mod welcome;
 pub use data_grid::DataGrid;
 mod ai_inline;
+mod css_colors;
 mod database_panel;
 mod diff_view;
 mod editor_tabs;

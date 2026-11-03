@@ -122,6 +122,15 @@ pub enum PhpTypeSource {
 /// Parsed per-file facts, retained so linking never needs another parse.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileSymbols {
+    /// Cross-language CSS class declarations/references; case-sensitive.
+    #[serde(default)]
+    pub class_occurrences: Vec<crate::css_symbols::ClassOccurrence>,
+    /// Static markup attribute segments eligible for class completion.
+    #[serde(default)]
+    pub class_attributes: Vec<Range<usize>>,
+    /// CSS selector declarations in this file; names preserve CSS case sensitivity.
+    #[serde(default)]
+    pub css_classes: Vec<crate::css::ClassDeclaration>,
     /// Source declarations.
     pub declarations: Vec<SymbolDeclaration>,
     /// Candidate names in PHP resolution order and their source locations.
@@ -190,6 +199,15 @@ impl From<StoredIndex> for SymbolIndex {
     }
 }
 impl SymbolIndex {
+    /// CSS classes with original source paths, including duplicate declarations.
+    pub fn css_classes(&self) -> impl Iterator<Item = (&Path, &crate::css::ClassDeclaration)> {
+        self.files.iter().flat_map(|(path, facts)| {
+            facts
+                .css_classes
+                .iter()
+                .map(move |class| (path.as_path(), class))
+        })
+    }
     /// Creates an empty language partition.
     #[must_use]
     pub fn new(language: LanguageId) -> Self {
@@ -203,6 +221,12 @@ impl SymbolIndex {
             dependencies_by_file: HashMap::new(),
             resolved_by_file: HashMap::new(),
         }
+    }
+    /// Iterates already parsed file facts; no I/O or extraction.
+    pub fn file_facts(&self) -> impl Iterator<Item = (&Path, &FileSymbols)> {
+        self.files
+            .iter()
+            .map(|(path, facts)| (path.as_path(), facts))
     }
     /// Retrieves immutable parsed facts for restoring a disk overlay.
     #[must_use]

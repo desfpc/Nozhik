@@ -235,3 +235,81 @@ async fn workers_debounce_revisions_close_and_graceful_exit() -> TestResult {
     assert!(packets.iter().any(|p| p["method"] == "exit"));
     Ok(())
 }
+
+#[test]
+fn css_worker_highlights_and_formats_without_php_server() -> TestResult {
+    use nozhik_language_support::{Command, Event, LanguageService, ServerCommand};
+    let dir = tempfile::tempdir()?;
+    let uri = Url::from_file_path(dir.path().join("style.css")).map_err(|()| "file URI")?;
+    let service = LanguageService::with_server(
+        dir.path().into(),
+        Some(ServerCommand {
+            program: dir.path().join("no-php-process"),
+            args: vec![],
+        }),
+        || {},
+    );
+    let source = "a{color:rgb(12,34,56);}";
+    assert!(service.send(Command::Sync {
+        uri: uri.clone(),
+        revision: 7,
+        text: ropey::Rope::from_str(source)
+    }));
+    let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+    let style = styles
+        .selected("css", &std::collections::BTreeMap::new())
+        .ok_or("CSS profile")?
+        .clone();
+    assert!(service.send(Command::Format {
+        uri,
+        revision: 7,
+        token: 3,
+        source: source.into(),
+        style,
+        range: None
+    }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut highlighted = false;
+    let mut formatted = false;
+    while !(highlighted && formatted) {
+        for event in service.drain() {
+            match event {
+                Event::Highlights {
+                    revision,
+                    spans,
+                    syntax,
+                    colors,
+                    ..
+                } => {
+                    assert_eq!(revision, 7);
+                    assert!(spans.iter().any(|s| s.token == "css.property"));
+                    assert_eq!(syntax.len(), 0);
+                    assert_eq!(colors.first().map(|c| c.rgba), Some([12, 34, 56, 255]));
+                    highlighted = true;
+                }
+                Event::Formatted {
+                    token,
+                    revision,
+                    edits,
+                    ..
+                } => {
+                    assert_eq!((token, revision), (3, 7));
+                    let mut text = source.to_string();
+                    for (range, value) in edits?.into_iter().rev() {
+                        text.replace_range(range, &value);
+                    }
+                    assert!(text.contains("    color: rgb(12, 34, 56);\n"), "{text}");
+                    formatted = true;
+                }
+                Event::Error(error) => return Err(error.into()),
+                _ => {}
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("CSS worker timed out".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    service.shutdown();
+    Ok(())
+}

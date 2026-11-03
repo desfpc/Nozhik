@@ -2904,3 +2904,105 @@ Windows build/Clippy не запускались. Два временных ко
 пользовательские БД и настройки не менялись. Cargo clean удалил 11.9 GiB;
 удалены временные логи и пять untracked .DS_Store. Итоговый размер проекта — 383 MiB,
 готовый macOS-комплект сохранён. Финальные git status и diff --check проверены.
+
+### CSS: подсветка, форматирование, индекс и палитра (v0.1.23, 2026-11-03)
+
+CSS зарегистрирован как реализованный язык с расширением .css без учёта регистра.
+Tree-sitter CSS работает в syntax worker, без PHP LSP и offline PHP catalogs.
+Подсветка различает селекторы, свойства, значения, функции, строки, числа и комментарии.
+Локальный форматтер подключён к Reformat Code и встроенному css_default.json:
+отступы, границы блоков/деклараций и запятые, весь файл либо выделение. Проверяются
+AST и точное сохранение токенов; malformed CSS отклоняется, CRLF сохраняется.
+
+В gutter видимых строк рисуются цвета, включая stops градиентов. Поддержаны Hex,
+named, RGB/RGBA, HSL/HSLA и другие литералы csscolorparser. Клик открывает графическую
+палитру, RGBA и Hex с прозрачностью; изменение заменяет конкретный литерал через
+EditTransaction с Undo. Цель привязана к BufferId/revision; внешние правки, Undo,
+смена документа и modal gates закрывают окно. Exact RGBA хранится отдельно от
+premultiplied Color32, чтобы Hex с alpha не округлялся. Однозначные document-local
+var chains разрешаются до литерала: меняется определение, ссылки сохраняются.
+Циклы, неоднозначные/внешние определения и вычисляемые цвета не угадываются;
+каскад DOM и @import не вычисляются. Ширина gutter сохраняется до нового snapshot.
+
+ProjectIndexer использует независимые PHP/CSS partitions с отдельными кэшами.
+CSS хранит классы с учётом регистра, decoded escapes, путями и диапазонами;
+комментарии, строки и имена псевдоклассов исключены. Unsaved overlays остаются
+в памяти, Close восстанавливает disk facts; watcher/removal/invalidation обновляют
+нужные файлы. Cache directory удаляется один раз перед rebuild всех partitions.
+Автодополнение HTML оставлено отдельной задаче. Языковой opt-in сохраняется:
+в старых проектах CSS включается через Settings → Languages, новые defaults — PHP/CSS.
+
+Новые зависимости: tree-sitter-css (MIT), csscolorparser (MIT OR Apache-2.0),
+transitive phf; legal materials включаются штатным packaging script. Все 14 workspace
+packages, Cargo.lock, UI и bundle — 0.1.23; следующая доработка — 0.1.24.
+
+Проверки: native workspace/all-features — 266 passed, 0 failed, 9 ignored. Один
+SQL-console pointer test в первом параллельном прогоне не дождался UI label;
+отдельная перепроверка и полный последовательный прогон прошли. Дополнительные CSS
+проверки последней правки var chains также прошли. Headless pointer-driven regression
+проверяет swatch → popup → Hex с alpha → точную замену → Undo и stale target gate.
+Проверены formatter idempotence/selection, gradient/var cycles/ambiguity,
+case-sensitive classes/escapes, cache reload, overlay/Close/deletion и CSS worker
+без PHP server. Native Clippy workspace/all-targets/all-features с -D warnings,
+rustfmt, workspace release build и git diff --check прошли. Native GUI вручную,
+Windows build/Clippy, commit и push не выполнялись.
+
+macOS ARM64 executable и подписанный Nozhik.app.zip обновлены штатным
+update-binaries.py; --check подтвердил source fingerprint и SHA-256 payload.
+Проверены bundle version 0.1.23, целостность обоих ZIP, четыре legal sidecars
+и notices новых CSS-зависимостей. После проверки выполнен cargo clean (10.5 GiB),
+удалены временные логи/скрипты задачи и шесть untracked Finder files. Размер проекта
+после очистки — 383 MiB; актуальный macOS-комплект и legal materials сохранены.
+Windows-кэш не создавался. Финальные git status и diff --check проверены.
+
+### CSS completion и переходы между CSS/PHP (v0.1.24, 2026-11-03)
+
+В CSS при вводе имени свойства работают встроенные стандартные подсказки через
+прежний completion popup: дефисы, Tab/Enter, Ctrl+Space и сохранение существующего
+двоеточия. Лексический контекст исключает значения, комментарии, строки, селекторы,
+custom properties и контейнеры at-rules. В class-атрибутах PHP/PHTML и CSS-селекторах
+предлагаются классы из индекса; замена ограничена текущим токеном и поддерживает Undo.
+
+FileSymbols содержит общие ClassOccurrence и диапазоны статических class-атрибутов.
+PHP extractor использует существующий AST, оставляя только markup nodes и literal
+whitespace после закрывающего тега PHP. PHP-код/строки, HTML comments и raw тела
+script/style/textarea/title исключены. Статические токены рядом с PHP-вставками
+сохраняются только при разделении ASCII whitespace; динамические и entity-encoded
+имена не угадываются. CSS-классы сохраняют регистр и decoded escapes. Другие языковые
+extractors смогут передавать такие же факты; HTML/JS пока не включены.
+
+ProjectIndexer публикует общий ClassIndex из retained facts PHP/CSS и объединённые
+overlay revision gates. Cache schema 5 перестраивает старые кэши один раз. Unsaved
+факты остаются в памяти, Close восстанавливает disk facts; удаление CSS убирает
+определения и подсказки. Правка PHP не перепарсивает CSS. Отключение CSS выключает
+class completion/navigation, даже если PHP включён. UI применяет данные только к
+точной ревизии и текущему caret; class contexts имеют приоритет над PHP/LSP completion.
+
+Cmd+клик (Ctrl+клик вне macOS) по классу в CSS открывает модальный список всех
+индексированных CSS/PHP-мест с файлами, строками, preview и переходом. Из PHP один
+selector открывается сразу, несколько — через модальный Choose CSS declaration.
+Списки используют общий renderer UsagesPopup: поиск, стрелки, Enter, Escape,
+группировка и опциональное отдельное окно. PHP usages сохраняют прежнее поведение.
+Hit testing ограничен glyph ranges классов; modifier-hover не открывает CSS popup.
+Стандартные CSS-свойства не участвуют в этих переходах и поиске использований.
+
+Проверки: полный native workspace/all-features test последовательно — 270 passed,
+0 failed, 9 existing optional tests ignored. Headless UI проверяет реальные Cmd-click,
+modal usages/chooser, Enter navigation, ввод свойства/класса, Tab и Undo. Worker tests
+проверяют cache/overlay/Close/removal, отсутствие повторного CSS parse при правке PHP,
+отключённый CSS, регистр, дефисы, Unicode, escaped selectors, динамические вставки
+и исключение false positives. Native Clippy workspace/all-targets/all-features с
+-D warnings, rustfmt и git diff --check прошли. Новых зависимостей нет.
+Workspace/Cargo.lock/UI/bundle — 0.1.24; следующая доработка — 0.1.25.
+Native GUI вручную, Windows build/Clippy, commit и push не выполнялись.
+
+Последняя поправка HTML scanner отдельно проверяет custom elements вроде
+script-card и закрывающие raw-text теги без ложного совпадения по префиксу;
+focused CSS tests и финальный Clippy прошли. Workspace release build завершён,
+штатный update-binaries.py обновил macOS ARM64 executable и подписанный app archive.
+--check подтвердил source fingerprint и SHA-256; проверены bundle 0.1.24,
+целостность обоих ZIP и точное совпадение четырёх legal sidecars с Resources/Legal.
+После проверки выполнен cargo clean (10.7 GiB), удалены временные логи задачи,
+Python bytecode packaging script и семь untracked Finder files. Размер проекта —
+384 MiB; актуальный macOS-комплект и legal materials сохранены. Windows-кэш
+не создавался. Финальные git status и diff --check проверены.

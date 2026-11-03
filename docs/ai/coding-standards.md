@@ -47,7 +47,7 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
-- language_support: tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror.
+- language_support: tree-sitter/php/css, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
@@ -193,3 +193,23 @@ exit, validate dependent views/FKs before commit and preserve rowids/counters.
 Keep selected-table export catalog filters separate from whole-schema scope.
 Table-loading replies are BufferId-bound and must never change focus or reopen a
 closed tab. Read-only pending loads do not count as unsaved data edits.
+
+
+### CSS
+
+CSS class names are case-sensitive; keep their source ranges and decoded identifier
+separate from PHP normalized identities. Partition caches and unsaved overlays follow
+the same worker/revision policy as PHP. CSS must never start PHP LSP/stub services.
+Color scanning stays off the UI thread. Gutter edits validate BufferId/revision and
+replace only the literal (resolved variable definitions retain var references).
+Retain exact unmultiplied RGBA bytes for numeric/Hex edits; rendering Color32 can
+quantize translucent colors. CSS formatting must preserve AST/tokens and selections.
+
+CSS class references are language-extractor facts, separate from PHP symbol FQNs.
+Keep static HTML attribute extraction on the index worker using PHP markup nodes;
+never scan PHP strings/comments as markup. New language backends may contribute the
+same class facts. Navigation requires an exact source revision; completion arrival
+also checks the caret and must not overwrite another context's newer popup.
+Property completion is lexical and independent of class navigation; standard CSS
+properties must never resolve to usages/definitions merely because a class has the
+same name. CSS class lists are modal, with exact source ranges and keyboard routing.

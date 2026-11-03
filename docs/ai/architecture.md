@@ -11,7 +11,7 @@
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-language-support | PHP incremental syntax, stdio LSP client, workers, UTF-16 conversion | tree-sitter/php, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-language-support | PHP/CSS incremental syntax, local formatting, project indexes, PHP stdio LSP | tree-sitter/php/css, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -1562,3 +1562,67 @@ separate states; replies update only the still-existing matching buffer, preserv
 focus. Closing a read-only pending tab cancels work without a dirty confirmation.
 Metadata errors clear loading and permit retry; catalog refresh restarts pending
 requests against fresh metadata without reopening closed tabs.
+
+
+## CSS services and class index (v0.1.23)
+
+config::languages registers Css for case-insensitive .css extensions; disabled CSS
+starts neither parser nor index/cache I/O. LanguageService routes CSS Sync/Format/Close
+only to the syntax worker, with an independent incremental Tree-sitter CSS parser.
+CSS never starts the PHP LSP or uses PHP stubs. Highlights include revision-bound
+ColorOccurrence values, computed on that worker. csscolorparser handles literal
+color conversion; tree-sitter-css and csscolorparser retain their MIT / MIT OR
+Apache-2.0 upstream terms and generated distribution notices.
+
+css::format edits whitespace between tokens and validates both the resulting AST
+and exact token strings. Original UTF-8 selection boundaries and CRLF are retained.
+The builtin css_default.json profile uses the existing CodeStyle/settings worker;
+format replies retain BufferId/revision/profile gates and one undo transaction.
+
+ProjectIndexer owns a Worker per enabled PHP/CSS partition, each with its own
+SymbolIndex, stamps, overlays and atomic cache (index_php.json/index_css.json).
+FileSymbols.css_classes retains raw UTF-8 ranges and decoded, case-sensitive CSS
+identifiers; SymbolIndex::css_classes exposes them with source paths, independently
+of PHP declaration normalization/linking. CSS snapshot events do not replace PHP
+snapshots. Invalidate removes the cache once before rebuilding all active partitions.
+No HTML completion is introduced.
+
+TextEditorView paints multiple swatches per visible row in a gutter reserved before
+the text. css_colors::Picker owns buffer identity, revision, source range and exact
+sRGBA bytes. Graphical/RGBA/Hex edits replace only the selected literal and update
+the revision/range for subsequent edits. External changes/undo, switching buffers
+or a modal gate close the picker. Comments, strings and url contents are excluded.
+Unambiguous in-document var chains resolve to literal definition ranges; ambiguous
+custom-property definitions, external variables and computed colors remain unresolved.
+This is a static preview, without browser cascade/DOM/import evaluation.
+
+## CSS completion and cross-language class lookup (v0.1.24)
+
+FileSymbols contributes class_occurrences (ClassOccurrence with case-sensitive name,
+ReferenceLocation, declaration flag) and class_attributes (literal attribute ranges).
+CSS uses the existing Tree-sitter class extractor; PHP reuses its current tree to
+retain actual markup text and mask expressions/strings, then scans HTML attributes.
+Comments and raw script/style/textarea/title bodies are excluded. Static class tokens
+next to dynamic PHP are retained only when separated by HTML ASCII whitespace;
+entity-encoded tokens and runtime values are not guessed. No HTML/JS service is enabled.
+
+ProjectIndexer publishes a worker-built immutable ClassIndex and merged overlay
+revision gates after the enabled partitions have changed. Lookups include all CSS
+selectors and PHP/PHTML static usages, preserve case and source ranges, and never
+reparse other files. Cache schema 5 rebuilds previous caches once, so markup facts
+are not missing after upgrade; unsaved facts are still excluded from disk. Disabling
+CSS removes class navigation/completion even if PHP indexing stays enabled. New
+language extractors can populate the same facts without frontend extension lists.
+
+EditorLanguage receives the class snapshot only for its exact source revision.
+Typing queues a class completion refresh; index arrival completes it only for the
+same caret. Class contexts claim completion before PHP/LSP responses, with explicit
+TextEdit ranges preserving hyphens, Unicode and neighboring class tokens. CSS
+properties use a separate lexical completion context and bundled identifiers,
+without invoking PHP or parsing ASTs on the UI thread. Existing ':' is retained.
+
+Cmd/Ctrl+click hit tests exact class glyph ranges, without opening on modifier hover.
+CSS selectors open all class occurrences; markup opens one declaration directly
+or a declaration chooser. CSS lists use egui Modal and the shared UsagesPopup row/
+filter/keyboard renderer. Standard properties have no class navigation. PHP usages
+keep their existing window/optional viewport behavior.

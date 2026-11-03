@@ -1,4 +1,4 @@
-//! Incremental PHP trees and query capture ranges (UTF-8 bytes).
+//! Incremental PHP/CSS trees and query capture ranges (UTF-8 bytes).
 use std::ops::Range;
 use tree_sitter::{InputEdit, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -30,6 +30,37 @@ impl Highlighter {
             .map_err(|e| crate::Error::Protocol(e.to_string()))?;
         let query = Query::new(&language, tree_sitter_php::HIGHLIGHTS_QUERY)
             .map_err(|e| crate::Error::Protocol(e.to_string()))?;
+        Ok(Self {
+            parser,
+            query,
+            tree: None,
+            source: String::new(),
+        })
+    }
+    /// Loads the bundled CSS grammar and capture query.
+    /// # Errors
+    /// Returns incompatible grammar or query errors.
+    pub fn css() -> crate::Result<Self> {
+        let language = tree_sitter_css::LANGUAGE.into();
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .map_err(|e| crate::Error::Protocol(e.to_string()))?;
+        let captures = tree_sitter_css::HIGHLIGHTS_QUERY
+            .replace("@tag", "@css.selector")
+            .replace("@variable", "@css.selector")
+            .replace("@property", "@css.selector")
+            .replace(
+                "(property_name) @css.selector",
+                "(property_name) @css.property",
+            )
+            .replace("@function", "@css.function")
+            .replace("@string.special", "@css.color")
+            .replace("@type", "@css.value");
+        let captures =
+            format!("{captures}\n((plain_value) @css.value (#not-match? @css.value \"^--\"))");
+        let query =
+            Query::new(&language, &captures).map_err(|e| crate::Error::Protocol(e.to_string()))?;
         Ok(Self {
             parser,
             query,

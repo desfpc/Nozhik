@@ -14,6 +14,7 @@ pub struct UsagesPopup {
     detached: bool,
     grouped: bool,
     incoming_only: bool,
+    css_definitions: Option<bool>,
     filter: String,
 }
 impl UsagesPopup {
@@ -35,6 +36,25 @@ impl UsagesPopup {
             detached: false,
             grouped: true,
             incoming_only: false,
+            css_definitions: None,
+            filter: String::new(),
+        }
+    }
+    pub fn css(name: &str, rows: Vec<ReferenceLocation>, definitions: bool) -> Self {
+        Self {
+            open: true,
+            title: if definitions {
+                format!("Choose CSS declaration · .{name}")
+            } else {
+                format!("Selector .{name}")
+            },
+            name: name.into(),
+            rows,
+            selected: 0,
+            detached: false,
+            grouped: true,
+            incoming_only: false,
+            css_definitions: Some(definitions),
             filter: String::new(),
         }
     }
@@ -52,6 +72,15 @@ impl UsagesPopup {
                     self.show_window(ctx)
                 },
             )
+        } else if self.css_definitions.is_some() {
+            let response = egui::Modal::new(egui::Id::new("css_class_modal")).show(ctx, |ui| {
+                ui.set_width((ctx.screen_rect().width() - 40.0).clamp(100.0, 880.0));
+                self.contents(ui)
+            });
+            let close = response.should_close();
+            let target = response.inner;
+            self.open &= !close && target.is_none();
+            target
         } else {
             self.show_window(ctx)
         }
@@ -61,9 +90,8 @@ impl UsagesPopup {
         reason = "One popup pass coordinates keyboard routing and four-column row geometry"
     )]
     fn show_window(&mut self, ctx: &egui::Context) -> Option<ReferenceLocation> {
-        let mut target = None;
         let mut open = self.open;
-        egui::Window::new(&self.title)
+        let target = egui::Window::new(&self.title)
             .id(egui::Id::new("usages_popup"))
             .open(&mut open)
             .title_bar(false)
@@ -82,160 +110,174 @@ impl UsagesPopup {
                     ))
                     .corner_radius(7),
             )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong(&self.title);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button("↗")
-                            .on_hover_text("Open usages in a separate window")
-                            .clicked()
-                        {
-                            self.detached = !self.detached;
-                        }
-                        if ui.small_button("×").clicked() {
-                            self.open = false;
-                        }
-                        ui.weak(format!("{} usages", self.rows.len()));
-                    });
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.incoming_only, "↙ Incoming calls");
-                    ui.label("All Places");
-                    ui.checkbox(&mut self.grouped, "Group by file");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.filter)
-                            .hint_text("Filter file / code")
-                            .desired_width(180.0),
-                    );
-                });
-                ui.separator();
-                let mut rows: Vec<_> = self
-                    .rows
-                    .iter()
-                    .filter(|r| {
-                        !self.incoming_only
-                            || r.preview
-                                .get((r.column as usize).saturating_add(r.length)..)
-                                .is_some_and(|tail| tail.trim_start().starts_with('('))
-                    })
-                    .filter(|r| {
-                        self.filter.is_empty()
-                            || format!("{} {}", r.path.display(), r.preview)
-                                .to_lowercase()
-                                .contains(&self.filter.to_lowercase())
-                    })
-                    .collect();
-                if !self.grouped {
-                    rows.sort_by_key(|r| (r.line, r.byte));
-                }
-                self.selected = self.selected.min(rows.len().saturating_sub(1));
-                let mut moved = false;
-                ui.input_mut(|i| {
-                    if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-                        self.open = false;
-                    }
-                    if !rows.is_empty() {
-                        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                            self.selected = (self.selected + 1) % rows.len();
-                            moved = true;
-                        }
-                        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                            self.selected = self.selected.checked_sub(1).unwrap_or(rows.len() - 1);
-                            moved = true;
-                        }
-                        if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                            target = rows.get(self.selected).map(|r| (*r).clone());
-                        }
-                    }
-                });
-                if rows.is_empty() {
-                    ui.weak("No usages found");
-                }
-                egui::ScrollArea::both()
-                    .max_height(if self.detached { 460.0 } else { 250.0 })
-                    .show(ui, |ui| {
-                        for (i, location) in rows.iter().enumerate() {
-                            let frame = egui::Frame::new()
-                                .fill(if self.selected == i {
-                                    egui::Color32::from_rgb(46, 67, 110)
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                })
-                                .inner_margin(4);
-                            let response = frame
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(
-                                            egui::Color32::from_rgb(87, 147, 255),
-                                            "(C)",
-                                        );
-                                        ui.add_sized(
-                                            [230.0, 20.0],
-                                            egui::Label::new(
-                                                location
-                                                    .path
-                                                    .file_name()
-                                                    .unwrap_or_default()
-                                                    .to_string_lossy(),
-                                            ),
-                                        )
-                                        .on_hover_text(location.path.display().to_string());
-                                        ui.add_sized(
-                                            [42.0, 20.0],
-                                            egui::Label::new(
-                                                egui::RichText::new(
-                                                    (location.line + 1).to_string(),
-                                                )
-                                                .color(egui::Color32::GRAY),
-                                            ),
-                                        );
-                                        let mut job = egui::text::LayoutJob::default();
-                                        let start = usize::try_from(location.column)
-                                            .unwrap_or(0)
-                                            .min(location.preview.len());
-                                        let end =
-                                            (start + location.length).min(location.preview.len());
-                                        if let (Some(before), Some(name), Some(after)) = (
-                                            location.preview.get(..start),
-                                            location.preview.get(start..end),
-                                            location.preview.get(end..),
-                                        ) {
-                                            for (text, accent) in
-                                                [(before, false), (name, true), (after, false)]
-                                            {
-                                                job.append(
-                                                    text,
-                                                    0.0,
-                                                    egui::TextFormat {
-                                                        font_id: egui::FontId::monospace(13.0),
-                                                        color: if accent {
-                                                            egui::Color32::from_rgb(255, 211, 115)
-                                                        } else {
-                                                            egui::Color32::LIGHT_GRAY
-                                                        },
-                                                        ..Default::default()
-                                                    },
-                                                );
-                                            }
-                                        }
-                                        ui.label(job).on_hover_text(&self.name);
-                                    });
-                                })
-                                .response;
-                            let click =
-                                ui.interact(response.rect, ui.id().with(i), egui::Sense::click());
-                            if moved && i == self.selected {
-                                click.scroll_to_me(Some(egui::Align::Center));
-                            }
-                            if click.clicked() {
-                                target = Some((*location).clone());
-                            }
-                        }
-                    });
-            });
+            .show(ctx, |ui| self.contents(ui))
+            .and_then(|response| response.inner)
+            .flatten();
         self.open &= open && target.is_none();
+        target
+    }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Shared row layout and keyboard routing for usages window and CSS modal"
+    )]
+    fn contents(&mut self, ui: &mut egui::Ui) -> Option<ReferenceLocation> {
+        let mut target = None;
+
+        ui.horizontal(|ui| {
+            ui.strong(&self.title);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("↗")
+                    .on_hover_text("Open usages in a separate window")
+                    .clicked()
+                {
+                    self.detached = !self.detached;
+                }
+                if ui.small_button("×").clicked() {
+                    self.open = false;
+                }
+                ui.weak(format!(
+                    "{} {}",
+                    self.rows.len(),
+                    if self.css_definitions == Some(true) {
+                        "declarations"
+                    } else {
+                        "usages"
+                    }
+                ));
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if self.css_definitions.is_none() {
+                ui.checkbox(&mut self.incoming_only, "↙ Incoming calls");
+            }
+            ui.label("All Places");
+            ui.checkbox(&mut self.grouped, "Group by file");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("Filter file / code")
+                    .desired_width(180.0),
+            );
+        });
+        ui.separator();
+        let mut rows: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|r| {
+                !self.incoming_only
+                    || r.preview
+                        .get((r.column as usize).saturating_add(r.length)..)
+                        .is_some_and(|tail| tail.trim_start().starts_with('('))
+            })
+            .filter(|r| {
+                self.filter.is_empty()
+                    || format!("{} {}", r.path.display(), r.preview)
+                        .to_lowercase()
+                        .contains(&self.filter.to_lowercase())
+            })
+            .collect();
+        if !self.grouped {
+            rows.sort_by_key(|r| (r.line, r.byte));
+        }
+        self.selected = self.selected.min(rows.len().saturating_sub(1));
+        let mut moved = false;
+        ui.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                self.open = false;
+            }
+            if !rows.is_empty() {
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    self.selected = (self.selected + 1) % rows.len();
+                    moved = true;
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    self.selected = self.selected.checked_sub(1).unwrap_or(rows.len() - 1);
+                    moved = true;
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    target = rows.get(self.selected).map(|r| (*r).clone());
+                }
+            }
+        });
+        if rows.is_empty() {
+            ui.weak("No usages found");
+        }
+        egui::ScrollArea::both()
+            .max_height(if self.detached { 460.0 } else { 250.0 })
+            .show(ui, |ui| {
+                for (i, location) in rows.iter().enumerate() {
+                    let frame = egui::Frame::new()
+                        .fill(if self.selected == i {
+                            egui::Color32::from_rgb(46, 67, 110)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .inner_margin(4);
+                    let response = frame
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(87, 147, 255), "(C)");
+                                ui.add_sized(
+                                    [230.0, 20.0],
+                                    egui::Label::new(
+                                        location
+                                            .path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy(),
+                                    ),
+                                )
+                                .on_hover_text(location.path.display().to_string());
+                                ui.add_sized(
+                                    [42.0, 20.0],
+                                    egui::Label::new(
+                                        egui::RichText::new((location.line + 1).to_string())
+                                            .color(egui::Color32::GRAY),
+                                    ),
+                                );
+                                let mut job = egui::text::LayoutJob::default();
+                                let start = usize::try_from(location.column)
+                                    .unwrap_or(0)
+                                    .min(location.preview.len());
+                                let end = (start + location.length).min(location.preview.len());
+                                if let (Some(before), Some(name), Some(after)) = (
+                                    location.preview.get(..start),
+                                    location.preview.get(start..end),
+                                    location.preview.get(end..),
+                                ) {
+                                    for (text, accent) in
+                                        [(before, false), (name, true), (after, false)]
+                                    {
+                                        job.append(
+                                            text,
+                                            0.0,
+                                            egui::TextFormat {
+                                                font_id: egui::FontId::monospace(13.0),
+                                                color: if accent {
+                                                    egui::Color32::from_rgb(255, 211, 115)
+                                                } else {
+                                                    egui::Color32::LIGHT_GRAY
+                                                },
+                                                ..Default::default()
+                                            },
+                                        );
+                                    }
+                                }
+                                ui.label(job).on_hover_text(&self.name);
+                            });
+                        })
+                        .response;
+                    let click = ui.interact(response.rect, ui.id().with(i), egui::Sense::click());
+                    if moved && i == self.selected {
+                        click.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if click.clicked() {
+                        target = Some((*location).clone());
+                    }
+                }
+            });
+
         target
     }
 }
@@ -263,6 +305,7 @@ mod tests {
             detached: false,
             grouped: true,
             incoming_only: false,
+            css_definitions: None,
             filter: String::new(),
         };
         let ctx = egui::Context::default();

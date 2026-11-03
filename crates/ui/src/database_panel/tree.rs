@@ -14,6 +14,7 @@ const HEIGHT: f32 = 24.0;
 const INDENT: f32 = 19.0;
 
 pub(super) enum Action {
+    Schema(ConnectionProfile, String, super::schema::Action),
     Connect(ConnectionProfile),
     Password(ConnectionProfile),
     Edit(ConnectionProfile),
@@ -387,19 +388,33 @@ pub(super) fn show(ui: &mut Ui, db: &DatabaseUi, selected: &mut Option<egui::Id>
         let response = tree.branch(ui, id, 0, Icon::Database, &profile.name, "", |tree, ui| {
             if let Some(catalog) = catalog {
                 for schema in &catalog.schemas {
-                    if catalog.schemas.len() == 1 && schema.name == profile.database {
-                        tree.tables(ui, db, profile, schema, 1);
-                    } else {
-                        tree.branch(
-                            ui,
-                            id.with(&schema.name),
-                            1,
-                            Icon::Database,
-                            &schema.name,
-                            "",
-                            |tree, ui| tree.tables(ui, db, profile, schema, 2),
-                        );
-                    }
+                    let response = tree.branch(
+                        ui,
+                        id.with(&schema.name),
+                        1,
+                        Icon::Database,
+                        &schema.name,
+                        "",
+                        |tree, ui| tree.tables(ui, db, profile, schema, 2),
+                    );
+                    response.context_menu(|ui| {
+                        for (label, action) in [
+                            ("New SQL console", super::schema::Action::Console),
+                            ("Modify Schema...", super::schema::Action::Modify),
+                            ("Generate DDL to Clipboard", super::schema::Action::Ddl),
+                            ("Run SQL Script...", super::schema::Action::Run),
+                            ("Export Data to File", super::schema::Action::Export),
+                        ] {
+                            if ui.button(label).clicked() {
+                                tree.actions.push(Action::Schema(
+                                    profile.clone(),
+                                    schema.name.clone(),
+                                    action,
+                                ));
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             } else if pending {
                 ui.horizontal(|ui| {

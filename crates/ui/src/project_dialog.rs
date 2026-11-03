@@ -68,3 +68,35 @@ impl crate::NozhikUi {
         ctx.request_repaint();
     }
 }
+
+/// Native save panel, including the operating system's overwrite confirmation.
+#[cfg(target_os = "macos")]
+pub fn save(default_name: &str) -> Result<Option<PathBuf>, String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSModalResponseCancel, NSModalResponseOK, NSSavePanel};
+    use objc2_foundation::NSString;
+    let mtm = MainThreadMarker::new().ok_or("Native picker requires the main thread")?;
+    let panel = NSSavePanel::savePanel(mtm);
+    panel.setTitle(Some(&NSString::from_str("Export Data to File")));
+    panel.setNameFieldStringValue(&NSString::from_str(default_name));
+    panel.setCanCreateDirectories(true);
+    match panel.runModal() {
+        response if response == NSModalResponseOK => panel
+            .URL()
+            .and_then(|url| url.to_file_path())
+            .map(Some)
+            .ok_or_else(|| "Native picker returned no local path".into()),
+        response if response == NSModalResponseCancel => Ok(None),
+        response => Err(format!("Native picker failed ({response})")),
+    }
+}
+#[cfg(not(target_os = "macos"))]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "Shared native picker API reports AppKit errors"
+)]
+pub fn save(default_name: &str) -> Result<Option<PathBuf>, String> {
+    Ok(rfd::FileDialog::new()
+        .set_file_name(default_name)
+        .save_file())
+}

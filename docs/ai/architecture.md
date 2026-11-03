@@ -1388,7 +1388,8 @@ double-click, context menu и Left/Right для раскрытия сфокус�
 Tree возвращает типизированные actions; соединение, Describe, retry и SQL-tab
 действия остаются в прежнем worker integration. Connection actions перенесены
 в контекстное меню; offline-профиль также показывает Connect внутри ветки.
-Единственный namespace с именем database не дублирует корень подключения.
+Начиная с v0.1.21 каждый namespace имеет собственный узел и контекстное меню,
+включая единственную БД с именем database.
 
 SchemaColumn дополнен is_foreign_key и default_value. Признаки берутся из native
 catalog (в SQLite foreign_key_list), а не из названий колонок; display_type сохраняет
@@ -1487,3 +1488,51 @@ TableChanges.insert_defaults содержит точные column/literal рав
 фрагментов WHERE в DML. Исходный query/connection/schema закреплены за snapshot;
 Submit/reload используют выполненный SQL. Dirty/preview/busy gates не дают затереть
 правки Execute или переключением connection/schema. Close/Save All не коммитят DML.
+
+
+## Контекстные действия схемы и встроенный экспорт (v0.1.21)
+
+`database::schema` содержит Settings/Grant, validation + modification_sql,
+Task/Output и Artifact (Arc с owned NamedTempFile). Command::SchemaTask использует
+существующие bounded queues, connection generation и cancellation tokens; schema
+операции не получают credentials и не создают сторонних процессов. SQL, каталоги,
+чтение scripts и запись export идут на worker; атомарная финальная запись —
+spawn_blocking с проверкой cancellation перед persist. Пароли не дублируются.
+
+MySQL/MariaDB dump использует одну checked-out connection и consistent-read
+transaction: SHOW CREATE DATABASE/TABLE/VIEW/SEQUENCE/FUNCTION/PROCEDURE/TRIGGER/EVENT,
+серверные type-aware literals, BIT/blob hex, spatial WKB+SRID, точные decimal и
+временные значения в UTC. FK checks выключены при восстановлении; view placeholders
+разрешают зависимости, программы сохраняют SQL_MODE, triggers/events следуют данным.
+Sequence export сохраняет persisted high-water mark (возможны gaps из-за cache).
+PostgreSQL dump использует repeatable-read/read-only snapshot, SET LOCAL search_path,
+UTC/ISO, row_security=off (недостаточные права дают ошибку, а не filtered backup).
+Catalog DDL включает обычные/partitioned/inherited tables, identity/serial sequence
+settings/state, enum/domain/composite types, functions/procedures, views/mviews,
+constraints/indexes, triggers/rules/RLS policies, collations/statistics и metadata.
+Server quote_nullable(value) сериализует data без потери arrays/bytea/numeric/extension
+values; data читаются FROM ONLY каждой физической таблицы, без дублирования partitions.
+Неподдерживаемые native base/range types, aggregates, foreign tables, operators,
+operator families/classes, conversions и text-search objects явно отклоняются.
+Extension members восстанавливаются CREATE EXTENSION; внешние schema/server/role
+зависимости экспортом одной схемы не создаются. SQLite snapshot хранит обычные
+таблицы/generated exclusions, sqlite_master и sqlite_sequence, file pragmas.
+
+CSV — одна выбранная таблица, engine text output (PG/MySQL), typed SQLite values;
+UTF-8, RFC-style quoting/CRLF, comma/semicolon/tab/pipe, NULL marker, optional headers,
+generated columns и bounded transpose. Экспорт потоковый, лимиты QueryResult не
+применяются. Artifact хранит полный файл и prefix ≤64 KiB для UI; clipboard ≤32 MiB,
+transpose ≤16 MiB, script file ≤64 MiB. Диалог выбора результата использует NSSavePanel
+на macOS и rfd на других платформах; имя/путь назначает пользователь.
+
+`database_panel/schema.rs` коррелирует ответы по request ID, блокирует поля во время
+работы, хранит immutable preview artifact и сбрасывает его при смене параметров.
+Drop диалога отменяет token и удаляет временный файл после завершения владельцев.
+Modify повторно сравнивает исходный snapshot настроек перед применением, SQL preview
+строится тем же modification_sql, что и execution. После Apply/Run обновляется catalog.
+RunFile применяет schema на той же connection и drains все raw SQL results без row cap;
+MySQL DELIMITER обрабатывается вне строк/комментариев, PostgreSQL dollar bodies
+передаются SQLx без splitting. SQLite progress cancellation обязательно завершается
+cleanup/ROLLBACK; экспорт/settings сбрасывают старый progress handler при новом acquire.
+Server connections после scripts/dumps retire, чтобы не переносить USE/search_path/
+SQL_MODE/transaction state между вкладками. Cancel не откатывает committed DDL/DML.

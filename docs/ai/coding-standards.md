@@ -61,6 +61,10 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   remote_ssh, tokio/tokio-util, futures-util, keyring, serde/serde_json, tempfile,
   thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
   SSH только через проверенный SshSession, query/result limits и cancellation.
+  Schema SQL/CSV export реализуется через SQLx и системные каталоги без внешних
+  dump utilities. Полные результаты пишутся потоком во временный файл, preview
+  ограничен отдельно; нельзя незаметно применять лимиты SQL-консоли к экспорту.
+  Неподдерживаемые DDL-объекты дают явную ошибку, а не успешный неполный дамп.
 - ui: serde/serde_json/tempfile для фонового layout I/O; macOS-only muda для
   native menu (safe wrapper, main thread); safe objc2 AppKit для NSOpenPanel на
   macOS, rfd native/xdg-portal для picker на Windows/Linux. Project history JSON

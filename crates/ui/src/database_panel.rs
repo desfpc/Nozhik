@@ -8,6 +8,7 @@ use nozhik_remote_ssh::{SshSession, credentials::Secret};
 use std::{collections::HashMap, sync::Arc};
 use zeroize::Zeroize;
 
+mod schema;
 mod tree;
 
 #[derive(Default)]
@@ -18,6 +19,7 @@ pub struct DatabaseUi {
     passwords: HashMap<String, Secret>,
     pub tabs: Vec<SqlConsole>,
     pub active: Option<usize>,
+    schema_dialog: Option<schema::Dialog>,
     form: Option<Form>,
     login: Option<ConnectionProfile>,
     password: String,
@@ -76,7 +78,7 @@ impl DatabaseUi {
         self.error.clear();
     }
     pub const fn modal_open(&self) -> bool {
-        self.form.is_some() || self.login.is_some()
+        self.form.is_some() || self.login.is_some() || self.schema_dialog.is_some()
     }
     pub fn table_modal(&self) -> bool {
         self.active
@@ -85,6 +87,7 @@ impl DatabaseUi {
             .is_some_and(crate::table_editor::TableEditor::modal_open)
     }
     pub fn shutdown(&mut self) {
+        self.schema_dialog = None;
         if let Some(worker) = self.worker.take() {
             worker.shutdown();
         }
@@ -189,6 +192,7 @@ impl NozhikUi {
                     self.database.error.clear();
                     self.status = "Database connection updated; reconnect to apply settings".into();
                 }
+                Reply::SchemaTask(id, result) => self.schema_task_reply(ctx, id, result),
                 Reply::Table(id, result) => self.database_table_reply(id, result),
                 Reply::Profiles(profiles) => {
                     self.database.profiles = profiles;
@@ -314,6 +318,7 @@ impl NozhikUi {
         // SSH trust/password dialogs must remain above the DB form while authorizing.
         if !self.workspace.background && !self.remote.modal_open() {
             self.database_dialogs(ctx);
+            self.schema_dialog(ctx);
         }
     }
     fn start_database_connection(
@@ -406,6 +411,9 @@ impl NozhikUi {
         self.database.selected_object = selected;
         for action in actions {
             match action {
+                tree::Action::Schema(profile, schema, action) => {
+                    self.schema_action(ui.ctx(), profile, schema, action);
+                }
                 tree::Action::Connect(profile) => connect = Some(profile),
                 tree::Action::Password(profile) => self.database.login = Some(profile),
                 tree::Action::Edit(profile) => edit = Some(profile),
@@ -1199,7 +1207,11 @@ mod table_tests {
     use nozhik_event_bus::EventBus;
     use std::time::{Duration, Instant};
 
-    fn frame(shell: &mut NozhikUi, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+    pub(super) fn frame(
+        shell: &mut NozhikUi,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+    ) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 700.0))),
@@ -1244,7 +1256,7 @@ mod table_tests {
             ],
         )
     }
-    fn click_label(
+    pub(super) fn click_label(
         shell: &mut NozhikUi,
         ctx: &egui::Context,
         label: &str,
@@ -1264,13 +1276,26 @@ mod table_tests {
         .ok_or_else(|| format!("Missing UI label: {label}"))?;
         Ok(click(shell, ctx, rect.center()))
     }
-    fn connection_menu(
+    pub(super) fn connection_menu(
         shell: &mut NozhikUi,
         ctx: &egui::Context,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let output = frame(shell, ctx, vec![]);
-        let point = text(&output, name).ok_or("connection row")?.center();
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == name
+                        && t.pos.x < 300.0
+                        && s.clip_rect.contains(t.pos) =>
+                {
+                    Some(Rect::from_min_size(t.pos, t.galley.size()).center())
+                }
+                _ => None,
+            })
+            .ok_or("connection/schema row")?;
         frame(
             shell,
             ctx,
@@ -1292,7 +1317,7 @@ mod table_tests {
         );
         Ok(())
     }
-    fn wait(
+    pub(super) fn wait(
         shell: &mut NozhikUi,
         ctx: &egui::Context,
         ready: impl Fn(&NozhikUi) -> bool,

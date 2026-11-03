@@ -4,6 +4,7 @@ pub mod changes;
 pub mod connection;
 pub mod driver;
 pub mod introspection;
+pub mod schema;
 mod table_ops;
 pub mod table_query;
 pub mod worker;

@@ -6,7 +6,7 @@ PhpStorm/DataGrip с независимыми подсистемами и явн
 
 ## Статус
 
-**v0.1.20. Этап 9 реализован.** Четырнадцать крейтов,
+**v0.1.21. Этап 9 реализован.** Четырнадцать крейтов,
 нативная оболочка egui/eframe, ленивое дерево проекта, файловый I/O в фоне,
 watcher, fuzzy-поиск по путям, вкладки, виртуализированный Rope-редактор
 и встроенный Git-клиент. PHP: Tree-sitter подсветка, LSP-диагностика, completion,
@@ -43,8 +43,8 @@ host key libgit2; неизвестный/недоверенный сервер �
 После клонирования проект автоматически открывается в IDE.
 
 Версия — `[workspace.package].version` в `Cargo.toml`, общая для интерфейса,
-Cargo packages и macOS bundle. Текущая версия — **0.1.20**; следующая доработка/коммит
-должна увеличить patch до **0.1.21** (правило закреплено в `AGENTS.md`).
+Cargo packages и macOS bundle. Текущая версия — **0.1.21**; следующая доработка/коммит
+должна увеличить patch до **0.1.22** (правило закреплено в `AGENTS.md`).
 
 ## Несколько проектов
 
@@ -757,9 +757,46 @@ cargo test -p nozhik-remote-ssh system_openssh_shell_and_sftp -- --ignored
 синие папки, отдельные иконки таблиц/колонок/ключей/индексов. Первичные ключи
 жёлтые, внешние — синие; типы, defaults и количества показаны вторичным цветом.
 Клик выделяет строку на всю ширину; группы раскрываются кликом, таблица открывается
-двойным кликом. Если единственный namespace совпадает с database, его лишний
-уровень скрыт. Connect, Refresh metadata, Disconnect, Edit Connection…,
+двойным кликом. Каждая схема/БД имеет собственный узел, включая единственную
+схему подключения. Connect, Refresh metadata, Disconnect, Edit Connection…
 Connect with password… и New SQL Console доступны по правому клику на подключении.
+
+Правый клик на **схеме/БД** открывает New SQL console (с уже выбранной схемой),
+Modify Schema..., Generate DDL to Clipboard, Run SQL Script... и Export Data to File.
+Modify Schema загружает текущие настройки: MySQL/MariaDB — collation и явные
+schema grants; PostgreSQL — имя, owner, comment и USAGE/CREATE grants;
+SQLite — user_version/application_id. Сверху форма, снизу точный SQL preview,
+Apply применяет изменения и обновляет дерево. MySQL/SQLite не предлагают
+неподдерживаемое переименование схемы. Права видны в пределах доступа текущего login.
+
+Экспорт встроен в приложение и **не требует pg_dump, mysqldump, интерпретатора
+или компилятора**. SQL выгружает всю выбранную схему: INSERT и опциональный DDL.
+MySQL/MariaDB использует SHOW CREATE для таблиц, views, routines, triggers/events;
+PostgreSQL — системные каталоги для таблиц, partitions/inheritance, views/materialized
+views, sequences, enum/domain/composite types, functions/procedures, keys/indexes,
+triggers/rules/policies, owners/comments/ACL. SQLite сохраняет sqlite_master,
+обычные таблицы, индексы, views, triggers и AUTOINCREMENT high-water marks.
+Триггеры восстанавливаются после данных; generated columns вычисляются сервером.
+Экспорт сохраняет видимые объекты схемы, а не общесерверные роли или внешние
+зависимости других схем. Некоторые специальные PostgreSQL-объекты (пользовательские
+base/range types, aggregates, operators/operator classes, text-search objects,
+foreign tables), а также данные SQLite virtual tables пока возвращают явную
+ошибку вместо неполного дампа; CSV видимых строк virtual tables доступен.
+
+CSV выгружает выбранную таблицу: generated/computed columns, transpose,
+column/row headers, delimiter и NULL marker. SQL/CSV preview показывает первые
+64 KiB; файл содержит полный результат без лимита строк консоли. Update Preview
+создаёт snapshot; Copy to Clipboard и Export to File используют тот же snapshot,
+смена параметров требует новой генерации. Сохранение через стандартный диалог
+выбора имени/папки атомарно заменяет файл после успешной генерации. Clipboard
+ограничен 32 MiB, transpose — 16 MiB; обычный экспорт потоковый.
+
+Run SQL Script открывает стандартный файловый диалог и выполняет UTF-8 SQL
+в выбранной схеме (до 64 MiB, MySQL DELIMITER поддержан). SELECT-результаты
+скрипта не удерживаются и не останавливают оставшиеся команды на лимите консоли.
+SQLite исполняет скрипты в main; attached aliases принадлежат отдельной сессии.
+Cancel прерывает работу; уже закоммиченные команды могут остаться применёнными.
+Незавершённая явная SQLite-транзакция откатывается с сообщением об ошибке.
 
 **Edit Connection…** открывает существующие поля подключения (имя, driver,
 host/port, user/database, SSH и сохранение пароля). Save заменяет профиль,

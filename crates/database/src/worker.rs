@@ -43,7 +43,7 @@ macro_rules! common_value {
         }
     }};
 }
-fn pg_value(row: &sqlx::postgres::PgRow, i: usize) -> Result<DbValue> {
+pub(crate) fn pg_value(row: &sqlx::postgres::PgRow, i: usize) -> Result<DbValue> {
     let raw = row.try_get_raw(i)?;
     if raw.is_null() {
         return Ok(DbValue::Null);
@@ -60,7 +60,7 @@ fn pg_value(row: &sqlx::postgres::PgRow, i: usize) -> Result<DbValue> {
         _ => common_value!(row, i, kind),
     })
 }
-fn mysql_value(row: &sqlx::mysql::MySqlRow, i: usize) -> Result<DbValue> {
+pub(crate) fn mysql_value(row: &sqlx::mysql::MySqlRow, i: usize) -> Result<DbValue> {
     let raw = row.try_get_raw(i)?;
     if raw.is_null() {
         return Ok(DbValue::Null);
@@ -89,7 +89,7 @@ fn mysql_value(row: &sqlx::mysql::MySqlRow, i: usize) -> Result<DbValue> {
         _ => common_value!(row, i, kind),
     })
 }
-fn sqlite_value(row: &sqlx::sqlite::SqliteRow, i: usize) -> Result<DbValue> {
+pub(crate) fn sqlite_value(row: &sqlx::sqlite::SqliteRow, i: usize) -> Result<DbValue> {
     let raw = row.try_get_raw(i)?;
     if raw.is_null() {
         return Ok(DbValue::Null);
@@ -263,6 +263,19 @@ impl Connection {
 }
 /// Background command; request IDs are supplied by the UI and never reused.
 pub enum Command {
+    /// Run a schema operation on the existing connection and SSH tunnel.
+    SchemaTask {
+        /// Request identity.
+        id: u64,
+        /// Connection name.
+        name: String,
+        /// Namespace.
+        schema: String,
+        /// Requested operation.
+        task: crate::schema::Task,
+        /// Independent cancellation.
+        cancel: CancellationToken,
+    },
     /// Load public profiles.
     Load,
     /// Save a new profile and optionally its password after testing successfully.
@@ -336,6 +349,8 @@ pub enum Command {
 }
 /// Typed completions.
 pub enum Reply {
+    /// Schema operation completion.
+    SchemaTask(u64, Result<crate::schema::Output>),
     /// Loaded or saved profiles.
     Profiles(Vec<crate::ConnectionProfile>),
     /// Profile replaced successfully; old connection has been invalidated.
@@ -415,6 +430,22 @@ impl Worker {
                         }
                         command = commands.recv() => {
                             let Some(command) = command else { break; };
+                            if let Command::SchemaTask { id, name, schema, task, cancel } = command {
+                                let connection = connections.get(&name).cloned(); let sender = sender.clone(); let wake = wake.clone();
+                                if tasks.len() >= 16 { let _sent = sender.send(Reply::SchemaTask(id, Err(Error::Invalid("Too many active database requests".into())))).await; wake(); continue; }
+                                active_tokens.insert(id, cancel.clone());
+                                tasks.spawn_local(async move {
+                                    let result = if let Some((connection, disconnected)) = connection {
+                                        let operation = connection.schema_task(&schema, task, &cancel); tokio::pin!(operation);
+                                        tokio::select! { biased;
+                                            () = disconnected.cancelled() => { cancel.cancel(); operation.await },
+                                            result = &mut operation => result,
+                                        }
+                                    } else { Err(Error::Invalid("Connection offline".into())) };
+                                    let _sent = sender.send(Reply::SchemaTask(id, result)).await; wake(); id
+                                });
+                                continue;
+                            }
                             if let Command::Describe {id,name,schema,table,is_view}=command {
                                 let connection=connections.get(&name).cloned();let sender=sender.clone();let wake=wake.clone();
                                 if tasks.len()>=16 {let _sent=sender.send(Reply::Table(id,Err(Error::Invalid("Too many active database requests".into())))).await;wake();continue;}
@@ -705,7 +736,10 @@ async fn handle(
             };
             Some(Reply::Schema(name, result))
         }
-        Command::Query { .. } | Command::Apply { .. } | Command::Describe { .. } => None,
+        Command::Query { .. }
+        | Command::Apply { .. }
+        | Command::Describe { .. }
+        | Command::SchemaTask { .. } => None,
     }
 }
 

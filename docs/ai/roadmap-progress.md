@@ -2792,3 +2792,61 @@ payload hashes. Проверены bundle version 0.1.20, целостность
 cargo clean (9.8 GiB logical), удалены 6 untracked Finder files и временные логи.
 Размер проекта после очистки — 379 MiB; готовый macOS-комплект и legal materials
 сохранены. Windows-кэш не создавался. Финальный git diff --check прошёл.
+
+
+### Контекстное меню схемы и встроенный экспорт (v0.1.21, 2026-11-02)
+
+Каждая схема/БД теперь имеет отдельный узел и меню: New SQL console сразу выбирает
+namespace; Modify Schema показывает реальные настройки и точный SQL diff;
+Generate DDL to Clipboard копирует определения объектов; Run SQL Script выбирает
+UTF-8 файл штатным picker и выполняет все команды; Export Data to File предлагает
+SQL всей схемы либо CSV выбранной таблицы, параметры и bounded preview.
+Для MySQL/MariaDB редактируются collation/schema grants, PostgreSQL — имя, owner,
+comment/USAGE/CREATE, SQLite — user_version/application_id. Stale settings перед
+Apply отклоняются; pending requests защищены ID/cancellation и modal gates.
+
+Экспорт полностью встроенный, через существующие SQLx pools и SSH transports;
+pg_dump/mariadb-dump/mysqldump и другие установленные программы не нужны.
+MySQL/MariaDB использует SHOW CREATE, typed server literals, routines/triggers/events,
+view placeholders, BIT/blob hex, WKB+SRID, sequence high-water marks. PostgreSQL
+использует catalog deparse, repeatable-read snapshot и server quote_nullable:
+tables/partitions/inheritance, identity/sequences, enum/domain/composite types,
+functions/procedures, views/mviews, keys/indexes, triggers/rules/RLS policies,
+collations/statistics, owners/comments/ACL. SQLite сохраняет ordinary rowids,
+generated exclusions, sqlite_master и AUTOINCREMENT state. Generated columns
+восстанавливаются сервером; triggers следуют данным. Неподдерживаемые специальные
+PostgreSQL-категории и SQL data SQLite virtual tables дают явную ошибку,
+CSV видимых строк virtual tables остаётся доступен. Список ограничений в README.
+
+Artifact владеет полным временным файлом; preview ≤64 KiB, clipboard ≤32 MiB,
+transpose ≤16 MiB. Обычный SQL/CSV экспорт потоковый, без лимита строк консоли.
+Смена настроек сбрасывает старый preview; Export/Copy используют ту же генерацию.
+Финальная запись атомарна и не портит destination при ошибке генерации.
+Run SQL Script drains результаты без retained row cap, обрабатывает MySQL
+DELIMITER вне строк/комментариев и SQL_MODE NO_BACKSLASH_ESCAPES. SQLite cancel/
+незавершённый BEGIN не оставляют transaction/progress-handler в следующей операции.
+Скрипты ограничены 64 MiB; committed DDL/DML при ошибке/отмене могут сохраниться.
+Новых зависимостей нет. Все 14 workspace packages/Cargo.lock/UI/bundle — 0.1.21,
+следующая доработка — 0.1.22.
+
+Проверки: полный native workspace/all-features test с system access для
+localhost/process fixtures и двумя test threads — 258 passed, 0 failed, 8 ignored.
+Новый optional live regression отдельно успешно выполнен на изолированных
+PostgreSQL 14.4 и MariaDB из существующих Docker images: dump/drop/restore,
+10 005/16 384 строк, schema/identifier quoting, FK ordering, view dependencies,
+functions/procedures/events/triggers, generated/identity, sequence state,
+DECIMAL/bytea/BIT/geometry/SRID/arrays/time, comments/ACL и изменение settings.
+Контейнеры задачи удалены вместе с tmpfs-данными, пользовательские БД не трогались.
+SQLite регрессии покрывают >10 000 строк, round-trip, CSV escaping/headers/NULL/
+transpose, атомарное сохранение, stale diff, script errors/cancellation/rollback.
+Headless pointer-driven UI regression проверяет меню, выбранную схему консоли,
+SQL preview/Apply, экспорт и invalidation, clipboard. Native GUI вручную не запускался.
+Native Clippy workspace/all-targets/all-features с -D warnings, rustfmt,
+workspace release build прошли. Windows build/Clippy, commit и push не выполнялись.
+
+Штатный update-binaries.py обновил macOS ARM64 executable и подписанный app archive;
+--check подтвердил source fingerprint и SHA-256 payload. Проверены bundle version
+0.1.21, целостность обоих ZIP и совпадение четырёх legal sidecars с Resources/Legal.
+После проверки выполнен cargo clean (11.4 GiB), удалены пять untracked Finder files
+и временные файлы/логи задачи. Размер проекта после очистки — 381 MiB;
+актуальный macOS-комплект сохранён, Windows-кэш не создавался.

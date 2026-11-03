@@ -1,4 +1,4 @@
-//! Background PHP/CSS syntax, CSS formatting and PHP LSP services. UI owns authoritative document text.
+//! Background PHP/CSS/YAML syntax, local formatting and PHP LSP services. UI owns authoritative document text.
 pub mod completion;
 pub mod css;
 pub mod css_completion;
@@ -14,6 +14,7 @@ pub mod structural;
 pub mod symbol_index;
 pub mod triggers;
 pub mod type_inference;
+pub mod yaml;
 pub use lsp_types;
 use lsp_types::{
     CompletionResponse, GotoDefinitionResponse, Hover, Position, PublishDiagnosticsParams, Url,
@@ -239,13 +240,9 @@ impl LanguageService {
                             revision,
                             text,
                         } => {
-                            let parser = parsers.entry(uri.clone()).or_insert_with(|| {
-                                if css::is_css(&uri) {
-                                    highlighter::Highlighter::css()
-                                } else {
-                                    highlighter::Highlighter::php()
-                                }
-                            });
+                            let parser = parsers
+                                .entry(uri.clone())
+                                .or_insert_with(|| highlighter::Highlighter::for_uri(&uri));
                             match parser {
                                 Ok(parser) => parser.highlight(&text.to_string()).map(|spans| {
                                     Event::Highlights {
@@ -275,7 +272,11 @@ impl LanguageService {
                             style,
                             range,
                         } => {
-                            let edits = css::format(&source, &style, range.as_ref());
+                            let edits = if yaml::is_yaml(&uri) {
+                                yaml::format(&source, &style, range.as_ref())
+                            } else {
+                                css::format(&source, &style, range.as_ref())
+                            };
                             Ok(Event::Formatted {
                                 uri,
                                 revision,
@@ -323,13 +324,13 @@ impl LanguageService {
     /// duplicate Sync/Close commands are idempotent.
     #[must_use]
     pub fn send(&self, command: Command) -> bool {
-        let css_command = match &command {
+        let local_command = match &command {
             Command::Sync { uri, .. }
             | Command::Format { uri, .. }
             | Command::Request { uri, .. }
-            | Command::Close(uri) => css::is_css(uri),
+            | Command::Close(uri) => css::is_css(uri) || yaml::is_yaml(uri),
         };
-        if css_command {
+        if local_command {
             return self.syntax.try_send(command).is_ok();
         }
         if !matches!(command, Command::Request { .. } | Command::Format { .. })

@@ -508,6 +508,12 @@ pub fn newline_text(before: &str, newline: &str, style: Option<&CodeStyle>) -> S
     let Some(style) = style else {
         return newline.into();
     };
+    if style.language == "yaml" {
+        return format!(
+            "{newline}{}",
+            " ".repeat(indent_width(before, style.indent.size))
+        );
+    }
     let depth = match fragment_indents(before) {
         FragmentIndent::Structural { depth, .. } => depth,
         FragmentIndent::Relative => 0,
@@ -593,6 +599,9 @@ pub fn paste_edit(
     text: &str,
     style: Option<&CodeStyle>,
 ) -> (Range<usize>, String) {
+    if style.is_some_and(|s| s.language == "yaml") {
+        return (range, text.into());
+    }
     if text.is_empty()
         || style.is_some_and(|s| s.language == "php")
             && matches!(fragment_indents(text), FragmentIndent::Verbatim)

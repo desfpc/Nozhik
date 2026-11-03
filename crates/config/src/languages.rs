@@ -16,7 +16,7 @@ pub enum LanguageId {
     Css,
     /// HTML (reserved).
     Html,
-    /// YAML (reserved).
+    /// YAML syntax and local formatting (no semantic index).
     Yaml,
     /// Go (reserved).
     #[serde(alias = "Go")]
@@ -65,7 +65,7 @@ pub const LANGUAGES: &[LanguageSpec] = &[
         id: LanguageId::Yaml,
         label: "YAML",
         extensions: &["yaml", "yml"],
-        available: false,
+        available: true,
     },
     LanguageSpec {
         id: LanguageId::Go,
@@ -113,12 +113,18 @@ mod tests {
     #[test]
     fn availability_extensions_and_empty_selection() -> Result<(), Box<dyn std::error::Error>> {
         let defaults = default_enabled();
-        for path in ["a.php", "a.PHP", "template.phtml", "template.PHTML"] {
+        for path in [
+            "a.php",
+            "a.PHP",
+            "template.phtml",
+            "template.PHTML",
+            "a.YAML",
+            "a.yml",
+        ] {
             assert!(enabled_for_path(&defaults, Path::new(path)));
         }
         for path in [
             "a.html",
-            "a.yaml",
             "a.js",
             "a.go",
             "a.png",

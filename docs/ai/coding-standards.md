@@ -47,7 +47,7 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
-- language_support: tree-sitter/php/css, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
+- language_support: tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
@@ -213,3 +213,12 @@ also checks the caret and must not overwrite another context's newer popup.
 Property completion is lexical and independent of class navigation; standard CSS
 properties must never resolve to usages/definitions merely because a class has the
 same name. CSS class lists are modal, with exact source ranges and keyboard routing.
+
+
+### YAML
+
+YAML syntax/formatting never starts PHP services or a semantic index. Preserve
+scalar content, quotes, comments, anchors and aliases. Verify the complete AST and
+scalar/token signatures after whitespace edits, including range formatting.
+Never infer the intended hierarchy of malformed YAML. Indentation uses spaces;
+clipboard paste must preserve its original bytes and Enter copies current indent.

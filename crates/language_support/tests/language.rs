@@ -313,3 +313,106 @@ fn css_worker_highlights_and_formats_without_php_server() -> TestResult {
     service.shutdown();
     Ok(())
 }
+
+#[test]
+fn yaml_worker_highlights_and_formats_without_php_server() -> TestResult {
+    use nozhik_language_support::{Command, Event, LanguageService, ServerCommand};
+    let dir = tempfile::tempdir()?;
+    let uri = Url::from_file_path(dir.path().join("pipeline.YAML")).map_err(|()| "file URI")?;
+    let service = LanguageService::with_server(
+        dir.path().into(),
+        Some(ServerCommand {
+            program: dir.path().join("no-php-process"),
+            args: vec![],
+        }),
+        || {},
+    );
+    let source = "options:\n    docker:   true\n";
+    assert!(service.send(Command::Sync {
+        uri: uri.clone(),
+        revision: 7,
+        text: ropey::Rope::from_str(source)
+    }));
+    let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+    let style = styles
+        .selected("yaml", &std::collections::BTreeMap::new())
+        .ok_or("YAML profile")?
+        .clone();
+    assert!(service.send(Command::Format {
+        uri,
+        revision: 7,
+        token: 3,
+        source: source.into(),
+        style,
+        range: None
+    }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut highlighted = false;
+    let mut formatted = false;
+    while !(highlighted && formatted) {
+        for event in service.drain() {
+            match event {
+                Event::Highlights {
+                    revision,
+                    spans,
+                    syntax,
+                    colors,
+                    ..
+                } => {
+                    assert_eq!(revision, 7);
+                    assert!(spans.iter().any(|s| s.token == "yaml.key"));
+                    assert_eq!(syntax.len(), 0);
+                    assert!(colors.is_empty());
+                    highlighted = true;
+                }
+                Event::Formatted {
+                    token,
+                    revision,
+                    edits,
+                    ..
+                } => {
+                    assert_eq!((token, revision), (3, 7));
+                    let mut text = source.to_string();
+                    for (range, value) in edits?.into_iter().rev() {
+                        text.replace_range(range, &value);
+                    }
+                    assert_eq!(text, "options:\n  docker: true\n");
+                    formatted = true;
+                }
+                Event::Error(error) => return Err(error.into()),
+                _ => {}
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("YAML worker timed out".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    service.shutdown();
+    Ok(())
+}
+
+#[test]
+fn yaml_only_project_has_no_semantic_index_or_cache() -> TestResult {
+    use nozhik_config::languages::LanguageId;
+    use nozhik_language_support::project_indexer::{IndexEvent, ProjectIndexer};
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join("pipeline.yml"), "root: [invalid")?;
+    let indexer = ProjectIndexer::with_languages(
+        dir.path().into(),
+        std::collections::BTreeSet::from([LanguageId::Yaml]),
+        || {},
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(event) = indexer.drain().next() {
+            assert!(matches!(event, IndexEvent::Finished));
+            assert!(!dir.path().join(".nozhik").exists());
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("index worker timed out".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}

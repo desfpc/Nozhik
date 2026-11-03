@@ -102,7 +102,8 @@ pub fn apply(ctx: &Context) {
 #[must_use]
 pub fn syntax_color(token: &str) -> Color32 {
     match token {
-        "css.selector" | "css.function" => return Color32::from_rgb(218, 186, 112),
+        "yaml.key" => return Color32::from_rgb(207, 142, 109),
+        "yaml.anchor" | "css.selector" | "css.function" => return Color32::from_rgb(218, 186, 112),
         "css.property" => return TEXT,
         "css.color" => return Color32::from_rgb(86, 168, 245),
         "css.value" => return Color32::from_rgb(106, 171, 115),

@@ -316,7 +316,9 @@ impl crate::NozhikUi {
             {
                 self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
             }
-            if nozhik_language_support::css::is_css(&uri) {
+            if nozhik_language_support::css::is_css(&uri)
+                || nozhik_language_support::yaml::is_yaml(&uri)
+            {
                 view.stubs = None;
             } else {
                 view.stubs.clone_from(&self.settings_dialog.php_stubs);
@@ -347,7 +349,9 @@ impl crate::NozhikUi {
                     std::time::Duration::from_millis(200).saturating_sub(at.elapsed()),
                 );
             }
-            if nozhik_language_support::css::is_css(&uri) {
+            if nozhik_language_support::css::is_css(&uri)
+                || nozhik_language_support::yaml::is_yaml(&uri)
+            {
                 view.request = None;
                 continue;
             }
@@ -1700,6 +1704,68 @@ mod tests {
         assert_eq!(
             buffer.rope().to_string(),
             "class Sample\n{\n    public function test()\n    {\n        $this->doSomething();\n    }\n}\n"
+        );
+        buffer.undo()?;
+        assert_eq!(buffer.rope().to_string(), source);
+        assert!(!buffer.is_dirty());
+        Ok(())
+    }
+    #[test]
+    fn yaml_reformat_action_highlights_and_atomic_undo() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings =
+            nozhik_config::ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = crate::NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        let source = "options:\n    docker:   true\nx-artifacts: &artifacts\n    - logs/**\n";
+        shell.documents.push(crate::Document {
+            path: dir.path().join("pipeline.YML"),
+            binary: false,
+            name: "pipeline.YML".into(),
+            open: true,
+            buffer: nozhik_buffer::TextBuffer::load_from_str(nozhik_core::BufferId(82), source),
+        });
+        shell.active = Some(0);
+        shell.language.root = Some(dir.path().into());
+        shell.language.service = Some(nozhik_language_support::LanguageService::with_server(
+            dir.path().into(),
+            Some(nozhik_language_support::ServerCommand {
+                program: dir.path().join("missing-lsp"),
+                args: vec![],
+            }),
+            || {},
+        ));
+        let ctx = egui::Context::default();
+        shell.action("code.reformat");
+        shell.receive_events();
+        shell.global_actions(&ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !shell.documents[0].buffer.is_dirty() && std::time::Instant::now() < deadline {
+            shell.language_tick(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        while !shell
+            .language
+            .views
+            .get(&shell.documents[0].path)
+            .is_some_and(|view| view.spans.iter().any(|span| span.token == "yaml.key"))
+            && std::time::Instant::now() < deadline
+        {
+            shell.language_tick(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let view = shell
+            .language
+            .views
+            .get(&shell.documents[0].path)
+            .ok_or("YAML view")?;
+        assert!(view.spans.iter().any(|span| span.token == "yaml.key"));
+        assert!(view.stubs.is_none());
+        assert!(view.project_index.is_none());
+        let buffer = &mut shell.documents[0].buffer;
+        assert_eq!(
+            buffer.rope().to_string(),
+            "options:\n  docker: true\nx-artifacts: &artifacts\n  - logs/**\n"
         );
         buffer.undo()?;
         assert_eq!(buffer.rope().to_string(), source);

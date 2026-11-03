@@ -11,7 +11,7 @@
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-language-support | PHP/CSS incremental syntax, local formatting, project indexes, PHP stdio LSP | tree-sitter/php/css, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-language-support | PHP/CSS/YAML incremental syntax, local formatting, PHP/CSS project indexes, PHP stdio LSP | tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -1639,3 +1639,18 @@ and PostgreSQL use transactions; MySQL can retain partially committed DDL. Reloa
 after a creation attempt reads the target if it exists. Successful Apply installs
 the catalog snapshot as the baseline for subsequent modifications and refreshes
 the catalog without renaming or invalidating other open tables. Cancel drops the draft.
+
+
+## YAML syntax and formatting (v0.1.26)
+
+YAML/YML is an available opt-in language in config::languages. The syntax worker
+uses tree-sitter-yaml (MIT), with key captures taking priority over scalar captures.
+Sync/Format/Close stay on the syntax queue; no PHP LSP/stubs or YAML index partition
+is created. Local formatting derives collection columns from the parsed tree,
+normalizes only indentation/separator whitespace and retains scalar tokens.
+Multiline scalar signatures retain indentation relative to their owning collection.
+Both AST shape and scalar/token signatures are checked after applying selected edits
+to the complete document. Partial structural selections fail atomically.
+YAML has a shared two-space built-in profile for both suffixes; tabs are rejected.
+Enter copies leading indentation; paste is verbatim to preserve scalar contents.
+The existing BufferId/revision/style gates and single-transaction Undo apply.

@@ -9,6 +9,7 @@ nozhik-config = { path = "../config" }
 tree-sitter.workspace = true
 tree-sitter-php.workspace = true
 tree-sitter-css.workspace = true
+tree-sitter-yaml.workspace = true
 csscolorparser.workspace = true
 lsp-types.workspace = true
 tokio.workspace = true

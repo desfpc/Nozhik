@@ -3042,3 +3042,46 @@ commit и push не выполнялись.
 После проверок cargo clean удалил 8.9 GiB; удалены временные логи задачи и untracked
 Finder files. Размер проекта после очистки — 385 MiB; готовый macOS-комплект сохранён.
 Windows-кэш не создавался. Финальные git status и diff --check проверены.
+
+
+### YAML/YML: подсветка и безопасное форматирование (v0.1.26, 2026-11-03)
+
+YAML доступен через общий реестр языков для .yaml/.yml без учёта регистра.
+Tree-sitter YAML работает в syntax worker: ключи, строки, числа, boolean/null,
+комментарии, anchors/aliases, tags и directives. Ключи имеют приоритет над
+общими scalar captures. YAML не создаёт semantic index/cache и не запускает
+PHP LSP/stubs. В старых проектах с сохранённым opt-in YAML нужно включить вручную.
+
+Reformat Code использует общий YAML-профиль (два пробела) и прежние revision/style
+gates, selection и единую Undo-транзакцию. Отступы коллекций выводятся из AST;
+изменяются только leading/separator whitespace. После выбранных edits проверяются
+AST и scalar/token signatures всего документа. Неоднозначные исправления malformed
+YAML и изменения смысла частичных выделений отклоняются. Кавычки, комментарии,
+anchors/aliases, LF/CRLF и содержимое скаляров сохраняются. Учтены trailing blank
+lines, отсутствующие в AST block_scalar даже при keep chomping (|+).
+Enter копирует текущий отступ, paste сохраняет исходные байты. Tabs profile
+отклоняется; автоматическое исправление ошибочной иерархии не выполняется.
+
+Новая зависимость — tree-sitter-yaml 0.7.2 (MIT); legal inventory формируется
+штатным packaging script. Workspace/Cargo.lock/UI/bundle — 0.1.26, следующая
+доработка — 0.1.27.
+
+Проверки: native workspace/all-features последовательно — 278 passed, 0 failed,
+9 existing optional tests ignored. Rustfmt, Clippy workspace/all-targets/all-features
+с -D warnings и git diff --check прошли. YAML regressions проверяют pipelines,
+вложенные/compact sequences, flow collections, anchors/aliases, Unicode, CRLF,
+explicit/folded scalars и trailing blank payload, idempotence и безопасный selection.
+Worker regression работает с отсутствующим PHP server; YAML-only indexer не создаёт
+.nozhik/cache. Headless UI проверяет реальную команду Reformat Code, highlights
+и атомарный Undo. Дополнительный независимый audit через Ruby Psych подтвердил
+сохранение значений 18 YAML-документов. Native GUI вручную, Windows build/Clippy,
+commit и push не выполнялись.
+
+Workspace release build и штатный update-binaries.py завершены; macOS ARM64
+executable и подписанный app archive обновлены. --check подтвердил fingerprint
+и SHA-256. Проверены bundle 0.1.26, целостность обоих ZIP, codesign --verify
+--deep --strict и точное совпадение четырёх legal sidecars с Resources/Legal,
+включая notices tree-sitter-yaml. После проверки cargo clean удалил 10.7 GiB.
+Удалены временные файлы/логи задачи, packaging bytecode и untracked Finder file.
+Размер проекта после очистки — 385 MiB; готовый macOS-комплект сохранён.
+Windows-кэш не создавался. Финальные git status и diff --check проверены.

@@ -142,7 +142,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "eframe",
@@ -3078,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ai-completion"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "nix 0.28.0",
  "reqwest",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-buffer"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "nozhik-core",
  "nozhik-event-bus",
@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-config"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "directories",
  "nozhik-core",
@@ -3117,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-core"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-database"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "chrono",
  "futures-util",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-event-bus"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "nozhik-core",
  "thiserror 2.0.21",
@@ -3155,7 +3155,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-fs-model"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "fuzzy-matcher",
  "git2",
@@ -3171,7 +3171,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-language-support"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "csscolorparser",
  "ignore",
@@ -3186,11 +3186,12 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-css",
  "tree-sitter-php",
+ "tree-sitter-yaml",
 ]
 
 [[package]]
 name = "nozhik-plugin-host"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "directories",
  "nozhik-event-bus",
@@ -3204,7 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-remote-ssh"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "directories",
  "keyring",
@@ -3221,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-terminal"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "nix 0.28.0",
  "parking_lot",
@@ -3233,7 +3234,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ui"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "eframe",
  "egui",
@@ -3269,7 +3270,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-vcs"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "git2",
  "tempfile",
@@ -6067,6 +6068,16 @@ name = "tree-sitter-php"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c17c3ab69052c5eeaa7ff5cd972dd1bc25d1b97ee779fec391ad3b5df5592"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-yaml"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c223db85f05e34794f065454843b0668ebc15d240ada63e2b5939f43ce7c97"
 dependencies = [
  "cc",
  "tree-sitter-language",

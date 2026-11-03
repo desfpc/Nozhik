@@ -1,4 +1,4 @@
-//! Incremental PHP/CSS trees and query capture ranges (UTF-8 bytes).
+//! Incremental PHP/CSS/YAML trees and query capture ranges (UTF-8 bytes).
 use std::ops::Range;
 use tree_sitter::{InputEdit, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -19,6 +19,16 @@ pub struct Highlighter {
     source: String,
 }
 impl Highlighter {
+    pub(crate) fn for_uri(uri: &crate::lsp_types::Url) -> crate::Result<Self> {
+        if crate::yaml::is_yaml(uri) {
+            Self::yaml()
+        } else if crate::css::is_css(uri) {
+            Self::css()
+        } else {
+            Self::php()
+        }
+    }
+
     /// Loads the bundled PHP grammar and highlights.scm.
     /// # Errors
     /// Returns grammar/query compatibility failures.
@@ -59,6 +69,28 @@ impl Highlighter {
             .replace("@type", "@css.value");
         let captures =
             format!("{captures}\n((plain_value) @css.value (#not-match? @css.value \"^--\"))");
+        let query =
+            Query::new(&language, &captures).map_err(|e| crate::Error::Protocol(e.to_string()))?;
+        Ok(Self {
+            parser,
+            query,
+            tree: None,
+            source: String::new(),
+        })
+    }
+    /// Loads the YAML grammar and syntax captures, including keys and anchors.
+    /// # Errors
+    /// Returns incompatible grammar or query errors.
+    pub fn yaml() -> crate::Result<Self> {
+        let language = tree_sitter_yaml::LANGUAGE.into();
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .map_err(|e| crate::Error::Protocol(e.to_string()))?;
+        let captures = tree_sitter_yaml::HIGHLIGHTS_QUERY
+            .replace("@property", "@yaml.key")
+            .replace("@label", "@yaml.anchor")
+            .replace("@boolean", "@constant.builtin");
         let query =
             Query::new(&language, &captures).map_err(|e| crate::Error::Protocol(e.to_string()))?;
         Ok(Self {
@@ -126,6 +158,8 @@ impl Highlighter {
                 });
             }
         }
+        // Key captures must override the generic scalar capture on the same bytes.
+        spans.sort_by_key(|span| span.token == "yaml.key");
         self.tree = Some(tree);
         source.clone_into(&mut self.source);
         Ok(flatten(&spans))

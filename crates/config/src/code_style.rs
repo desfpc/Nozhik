@@ -124,7 +124,7 @@ impl Default for FileTypeSettings {
 #[derive(Clone, Debug, Default)]
 pub struct CodeStyles(pub BTreeMap<String, BTreeMap<String, CodeStyle>>);
 impl CodeStyles {
-    /// Includes the shipped PHP and CSS profiles, without touching the user filesystem.
+    /// Includes the shipped PHP, CSS and YAML profiles, without touching the user filesystem.
     /// # Errors
     /// Returns a malformed embedded profile error.
     pub fn builtin() -> Result<Self, ConfigError> {
@@ -141,6 +141,14 @@ impl CodeStyles {
             "css_default.json".into(),
             CodeStyle::parse(include_str!("../code_styles/css/css_default.json"))?,
         );
+        let yaml = CodeStyle::parse(include_str!("../code_styles/yaml/yaml_default.json"))?;
+        for extension in ["yaml", "yml"] {
+            catalog
+                .0
+                .entry(extension.into())
+                .or_default()
+                .insert("yaml_default.json".into(), yaml.clone());
+        }
         Ok(catalog)
     }
     /// Loads `<root>/<extension>/*.json`; later roots override matching filenames.
@@ -194,6 +202,7 @@ pub fn default_profile(extension: &str) -> Option<&'static str> {
     match extension {
         "php" | "phtml" => Some("php_psr12.json"),
         "css" => Some("css_default.json"),
+        "yaml" | "yml" => Some("yaml_default.json"),
         _ => None,
     }
 }

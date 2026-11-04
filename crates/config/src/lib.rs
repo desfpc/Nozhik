@@ -1,6 +1,7 @@
 //! Validated TOML/JSON settings with explicit persistence and change notifications.
 
 pub mod code_style;
+pub mod deployment;
 pub mod languages;
 
 use std::{
@@ -12,6 +13,7 @@ use std::{
 
 use directories::ProjectDirs;
 use nozhik_core::ConfigKey;
+
 use nozhik_event_bus::{Event, EventBus};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -39,6 +41,9 @@ pub struct Config {
     pub ai_model: String,
     /// Input quiet period in milliseconds (50–5000).
     pub ai_debounce_ms: u16,
+    /// Optional single project SFTP deployment target; no secrets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sftp_deployment: Option<deployment::SftpDeployment>,
     /// Per-extension profile and syntax palette selections.
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
 }
@@ -56,6 +61,7 @@ impl Default for Config {
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 1000,
             file_types: std::collections::BTreeMap::new(),
+            sftp_deployment: None,
         }
     }
 }
@@ -66,6 +72,9 @@ impl Config {
     /// # Errors
     /// Returns [`ConfigError::Invalid`] for unsupported values.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(deployment) = &self.sftp_deployment {
+            deployment.validate()?;
+        }
         if !(1..=16).contains(&self.tab_width) {
             return Err(ConfigError::Invalid("tab_width must be between 1 and 16"));
         }

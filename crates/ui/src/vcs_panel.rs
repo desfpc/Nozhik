@@ -24,6 +24,13 @@ enum Mode {
     History,
 }
 /// Persistent UI state. No repository handles or disk operations live here.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum DeploymentAvailability {
+    #[default]
+    Disabled,
+    Ready,
+    Busy,
+}
 pub struct VcsPanel {
     pub open_branches: bool,
     worker: Vcs,
@@ -42,6 +49,12 @@ pub struct VcsPanel {
     last_fetch: Option<Instant>,
     fetch_request: u64,
     open_paths: Vec<PathBuf>,
+    deployment_availability: DeploymentAvailability,
+    deploy_paths: Option<Vec<PathBuf>>,
+    #[cfg(test)]
+    toolbar_menu_rect: Option<egui::Rect>,
+    #[cfg(test)]
+    toolbar_deploy_rect: Option<egui::Rect>,
     repo: Option<GitRepoStatus>,
     mode: Mode,
     filter: String,
@@ -92,6 +105,12 @@ impl Default for VcsPanel {
             last_fetch: None,
             fetch_request: 0,
             open_paths: Vec::new(),
+            deployment_availability: DeploymentAvailability::Disabled,
+            deploy_paths: None,
+            #[cfg(test)]
+            toolbar_menu_rect: None,
+            #[cfg(test)]
+            toolbar_deploy_rect: None,
             repo: None,
             mode: Mode::Changes,
             filter: String::new(),
@@ -142,6 +161,7 @@ impl VcsPanel {
         self.last_fetch = None;
         self.fetch_request = 0;
         self.open_paths.clear();
+        self.deploy_paths = None;
         self.history.clear();
         self.history_selection.clear();
         self.history_anchor = None;
@@ -200,6 +220,32 @@ impl VcsPanel {
     }
     pub(crate) fn invalidate(&mut self) {
         self.refresh_at = Some(Instant::now() + Duration::from_millis(200));
+    }
+    pub(crate) const fn configure_deployment(&mut self, enabled: bool, busy: bool) {
+        self.deployment_availability = if !enabled {
+            DeploymentAvailability::Disabled
+        } else if busy {
+            DeploymentAvailability::Busy
+        } else {
+            DeploymentAvailability::Ready
+        };
+    }
+    pub(crate) const fn take_deploy_paths(&mut self) -> Option<Vec<PathBuf>> {
+        self.deploy_paths.take()
+    }
+    fn deploy_selection(&self) -> Option<&nozhik_vcs::model::HistorySelection> {
+        let details = self.details.as_ref()?;
+        let commit = details.commits.first()?;
+        (self.mode == Mode::History
+            && self.deployment_availability == DeploymentAvailability::Ready
+            && self.deploy_paths.is_none()
+            && self.mutations.is_empty()
+            && !self.pending.contains(&self.details_request)
+            && self.history_selection.len() == 1
+            && details.commits.len() == 1
+            && self.history_selection.first() == Some(&commit.sha)
+            && !details.files.is_empty())
+        .then_some(details)
     }
     pub(crate) fn take_open_paths(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.open_paths)

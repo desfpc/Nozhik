@@ -1,6 +1,7 @@
 //! SSH connections, ephemeral credentials, cached SFTP and loopback tunnels.
 pub mod client;
 pub mod credentials;
+pub mod deployment;
 pub mod sftp;
 pub mod trust;
 pub mod tunnel;

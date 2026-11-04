@@ -271,11 +271,20 @@ impl NozhikUi {
                 });
             });
         self.tool_rail(ctx);
+        self.vcs.configure_deployment(
+            self.config.sftp_deployment.is_some(),
+            self.deployment.busy(),
+        );
         if self.left == Some(LeftTool::Commit) {
             egui::TopBottomPanel::top("git_toolbar")
                 .exact_height(50.0)
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38)))
                 .show(ctx, |ui| self.vcs.toolbar(ui));
+            if self.deployment.visible() {
+                egui::TopBottomPanel::top("git_deployment_progress")
+                    .frame(theme::rail_frame())
+                    .show(ctx, |ui| self.deployment.show(ui));
+            }
             if self.vcs.is_merging() {
                 egui::TopBottomPanel::top("git_merge_banner")
                     .frame(theme::rail_frame())
@@ -663,6 +672,7 @@ impl NozhikUi {
         self.integration_tick(ctx);
         self.database_tick(ctx);
         self.receive_remote(ctx);
+        self.deployment_tick();
         self.language_tick(ctx);
         self.docker_tick(ctx);
         if let Some(panel) = &mut self.terminal
@@ -675,6 +685,9 @@ impl NozhikUi {
         }
         self.vcs.configure_commit_ai(&self.config);
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
+        if let Some(paths) = self.vcs.take_deploy_paths() {
+            self.deploy_files(paths);
+        }
         let git_files = self.vcs.take_open_paths();
         for path in git_files {
             self.open_file(path);

@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 pub enum Intent {
     Test,
     Database(u64),
+    Deployment(u64),
     Terminal,
     Browse,
     Tunnels,
@@ -39,6 +40,8 @@ pub enum Reply {
     CredentialsRequired(SshProfile, Intent, String),
     Connected(String),
     DatabaseSession(u64, SshSession),
+    DeploymentSession(u64, SshSession),
+    DeploymentFailed(u64, String),
     DatabaseFailed(u64, String),
     Disconnected(String),
     Shell(String, RemoteShell),
@@ -101,9 +104,12 @@ impl Worker {
                                 let database_request = match &command {
                                     Command::Verify(_, Intent::Database(id)) | Command::Trust(_, _, Intent::Database(id)) | Command::Connect(_, _, Intent::Database(id)) => Some(*id), _ => None,
                                 };
+                                let deployment_request = match &command {
+                                    Command::Verify(_, Intent::Deployment(id)) | Command::Trust(_, _, Intent::Deployment(id)) | Command::Connect(_, _, Intent::Deployment(id)) => Some(*id), _ => None,
+                                };
                                 let refresh_profiles = matches!(&command, Command::Connect(..));
                                 let result = tokio::time::timeout(std::time::Duration::from_secs(35), state.execute(command)).await;
-                                let reply = match result {
+                                let mut reply = match result {
                                     Ok(Ok(reply)) => reply,
                                     Ok(Err(e @ nozhik_remote_ssh::Error::HostKeyChanged { .. })) => Reply::HostKeyChanged(e.to_string()),
                                     Ok(Err(e)) => Reply::Error(e.to_string()),
@@ -111,6 +117,15 @@ impl Worker {
                                 };
                                 if let Some(id) = database_request && let Reply::Error(error) | Reply::HostKeyChanged(error) = &reply {
                                     if sender.send(Reply::DatabaseFailed(id, error.clone())).await.is_err() { break; } wake();
+                                }
+                                if let Some(id) = deployment_request {
+                                    match reply {
+                                        Reply::Error(error) => { reply=Reply::DeploymentFailed(id,error); }
+                                        Reply::HostKeyChanged(ref error) => {
+                                            if sender.send(Reply::DeploymentFailed(id,error.clone())).await.is_err() { break; } wake();
+                                        }
+                                        _ => {}
+                                    }
                                 }
                                 if refresh_profiles && let Ok(profiles) = state.saved_profiles().await {
                                     if sender.send(Reply::Profiles(profiles)).await.is_err() { break; } wake();
@@ -411,6 +426,7 @@ impl State {
             .clone();
         match intent {
             Intent::Database(id) => Ok(Reply::DatabaseSession(id, session)),
+            Intent::Deployment(id) => Ok(Reply::DeploymentSession(id, session)),
             Intent::Test => Ok(Reply::Connected(profile.name)),
             Intent::Terminal => Ok(Reply::Shell(
                 profile.name,

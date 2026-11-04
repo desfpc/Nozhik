@@ -757,6 +757,7 @@ impl NozhikUi {
         }
         self.docker.shutdown();
         self.database.shutdown();
+        self.deployment.shutdown();
         self.remote.shutdown();
         self.plugins = None;
     }

@@ -41,14 +41,17 @@ fn chrome_button(
     title: &str,
     subtitle: &str,
     arrow: bool,
+    divider: bool,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 50.0), Sense::click());
     ui.painter()
         .rect_filled(rect, 0, if response.hovered() { SURFACE } else { HEADER });
-    ui.painter().line_segment(
-        [rect.right_top(), rect.right_bottom()],
-        Stroke::new(1.0_f32, Color32::from_gray(16)),
-    );
+    if divider {
+        ui.painter().line_segment(
+            [rect.right_top(), rect.right_bottom()],
+            Stroke::new(1.0_f32, Color32::from_gray(16)),
+        );
+    }
     let painter = ui
         .painter()
         .with_clip_rect(rect.shrink(2.0).intersect(ui.clip_rect()));
@@ -107,9 +110,33 @@ impl VcsPanel {
         });
     }
     fn toolbar_controls(&mut self, ui: &mut egui::Ui) {
-        let width = (ui.available_width() * 0.28).clamp(120.0, 230.0);
+        #[cfg(test)]
+        {
+            self.toolbar_menu_rect = None;
+            self.toolbar_deploy_rect = None;
+        }
+        let deploy = self.mode == super::Mode::History
+            && self.deployment_availability != super::DeploymentAvailability::Disabled;
+        let available = ui.available_width();
+        let reserved = if deploy {
+            (available * 0.30).clamp(160.0, 260.0)
+        } else {
+            0.0
+        };
+        let extra_fetch = self.repo.as_ref().is_some_and(|r| {
+            r.has_origin
+                && ((!r.has_upstream && !r.detached && r.head_sha.is_some())
+                    || r.ahead > 0
+                    || r.behind > 0)
+        });
+        let width = if deploy {
+            ((available - reserved - 36.0 - if extra_fetch { 150.0 } else { 0.0 }) / 2.0)
+                .clamp(80.0, 230.0)
+        } else {
+            (available * 0.28).clamp(120.0, 230.0)
+        };
         let branch = self.branch().to_owned();
-        let response = chrome_button(ui, width, "Current Branch", &branch, true);
+        let response = chrome_button(ui, width, "Current Branch", &branch, true, true);
         if response.clicked() {
             self.open_branches = !self.open_branches;
         }
@@ -131,6 +158,47 @@ impl VcsPanel {
             self.branch_popup(ui.ctx(), response.rect);
         }
         self.remote_controls(ui, width);
+        if deploy {
+            self.history_deployment_button(ui, reserved);
+        }
+    }
+    fn history_deployment_button(&mut self, ui: &mut egui::Ui, width: f32) {
+        let (area, _) = ui.allocate_exact_size(vec2(width, 50.0), Sense::hover());
+        let button = egui::Rect::from_min_max(
+            area.min + vec2(7.0, 2.0),
+            pos2(area.right() - 7.0, area.top() + 24.0),
+        );
+        let enabled = self.deploy_selection().is_some() && self.repo.is_some();
+        let response = ui
+            .add_enabled_ui(enabled, |ui| {
+                ui.put(button, egui::Button::new("SFTP Deploy Files"))
+            })
+            .inner;
+        #[cfg(test)]
+        {
+            self.toolbar_deploy_rect = Some(response.rect);
+        }
+        if response.clicked()
+            && let (Some(details), Some(repo)) = (self.deploy_selection(), self.repo.as_ref())
+        {
+            self.deploy_paths = Some(
+                details
+                    .files
+                    .iter()
+                    .map(|file| repo.root.join(&file.change.path))
+                    .collect(),
+            );
+        }
+        response.on_hover_text("Select one commit. Only its changed path list is used; saved current project files are uploaded. Missing files are skipped; no remote files are deleted.");
+        ui.painter()
+            .with_clip_rect(area.intersect(ui.clip_rect()))
+            .text(
+                area.min + vec2(8.0, 26.0),
+                Align2::LEFT_TOP,
+                "Commit provides file paths only.\nUploads current project files.",
+                FontId::proportional(10.0),
+                theme::MUTED,
+            );
     }
     pub(super) fn file_filter(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -225,6 +293,7 @@ impl VcsPanel {
                         &age
                     },
                     false,
+                    false,
                 )
             })
             .inner;
@@ -259,15 +328,36 @@ impl VcsPanel {
         }
         let remote = remote.on_hover_text(age);
         remote.context_menu(|ui| self.network_menu(ui, network));
-        let menu = ui.menu_button("    ", |ui| {
-            self.network_menu(ui, network);
-        });
-        chevron(ui.painter(), menu.response.rect.center());
+        self.remote_menu(ui, network);
     }
+
+    fn remote_menu(&mut self, ui: &mut egui::Ui, network: bool) {
+        let (rect, response) = ui.allocate_exact_size(vec2(36.0, 50.0), Sense::click());
+        ui.painter()
+            .rect_filled(rect, 0, if response.hovered() { SURFACE } else { HEADER });
+        chevron(ui.painter(), rect.center());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Git remote actions")
+        });
+        #[cfg(test)]
+        {
+            self.toolbar_menu_rect = Some(rect);
+        }
+        let response = response.on_hover_text("Git remote actions");
+        egui::Popup::menu(&response).show(|ui| self.network_menu(ui, network));
+    }
+
     fn fetch_button(&mut self, ui: &mut egui::Ui, network: bool) {
         let fetch = ui
             .add_enabled_ui(network, |ui| {
-                chrome_button(ui, 150.0, "Fetch origin", "Fetch remote changes", false)
+                chrome_button(
+                    ui,
+                    150.0,
+                    "Fetch origin",
+                    "Fetch remote changes",
+                    false,
+                    true,
+                )
             })
             .inner;
         if fetch.clicked() {

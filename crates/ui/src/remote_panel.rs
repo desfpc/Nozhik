@@ -126,7 +126,7 @@ impl RemoteUi {
         }
         false
     }
-    fn connect(&self, profile: SshProfile, intent: Intent) -> bool {
+    pub(crate) fn connect(&self, profile: SshProfile, intent: Intent) -> bool {
         if self.connected.contains(&profile.name) {
             self.queue(Command::Connect(profile, None, intent))
         } else {
@@ -206,7 +206,21 @@ impl NozhikUi {
             self.remote_dialogs(ctx);
         }
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Typed SSH replies also route project deployment authentication and preserve independent completion state"
+    )]
     fn accept_remote_reply(&mut self, reply: Reply, ctx: &egui::Context) {
+        let deployment_id = match &reply {
+            Reply::TrustRequired(_, _, Intent::Deployment(id))
+            | Reply::Verified(_, Intent::Deployment(id))
+            | Reply::CredentialsRequired(_, Intent::Deployment(id), _)
+            | Reply::DeploymentFailed(id, _) => Some(*id),
+            _ => None,
+        };
+        if deployment_id.is_some_and(|id| !self.deployment.accepts(id)) {
+            return;
+        }
         match reply {
             Reply::HostKeyChanged(message) => self.remote.host_key_error = Some(message),
             Reply::TrustRequired(profile, pin, intent) => {
@@ -215,6 +229,9 @@ impl NozhikUi {
             Reply::Verified(profile, intent) => {
                 if !self.remote.verified(profile, intent) {
                     self.status = "SSH queue full/stopped".into();
+                    if let Intent::Deployment(id) = intent {
+                        self.deployment.cancel(Some(id), "SSH queue full/stopped");
+                    }
                 }
             }
             Reply::Profiles(profiles) => self.remote.profiles_updated(profiles),
@@ -229,6 +246,11 @@ impl NozhikUi {
             Reply::CredentialsRequired(profile, intent, error) => {
                 self.remote.require_credentials(profile, intent, error);
             }
+            Reply::DeploymentFailed(id, error) => {
+                self.deployment.cancel(Some(id), &error);
+                self.status = error;
+            }
+            Reply::DeploymentSession(id, session) => self.deployment_connected(id, session, ctx),
             Reply::DatabaseFailed(id, error) => self.database.cancel_ssh(id, error),
             Reply::DatabaseSession(id, session) => {
                 self.status =
@@ -456,11 +478,18 @@ impl NozhikUi {
             && !self.remote.queue(Command::Trust(profile, pin, intent))
         {
             self.status = "SSH queue full/stopped".into();
+            if let Intent::Deployment(id) = intent {
+                self.deployment.cancel(Some(id), "SSH queue full/stopped");
+            }
         }
         if cancel {
             if let Some((_, _, Intent::Database(id))) = &self.remote.trust {
                 self.database
                     .cancel_ssh(*id, "SSH connection cancelled".into());
+            }
+            if let Some((_, _, Intent::Deployment(id))) = &self.remote.trust {
+                self.deployment
+                    .cancel(Some(*id), "SSH connection cancelled");
             }
             self.remote.cancel_trust();
             self.status = "SSH connection cancelled; host was not trusted".into();
@@ -611,11 +640,17 @@ impl NozhikUi {
             let secret = Some(Secret::new(secret));
             if !self.remote.queue(Command::Connect(profile, secret, intent)) {
                 self.status = "SSH queue full/stopped".into();
+                if let Intent::Deployment(id) = intent {
+                    self.deployment.cancel(Some(id), "SSH queue full/stopped");
+                }
             }
         }
         if dismiss {
             if let Some((_, Intent::Database(id))) = &self.remote.login {
                 self.database.cancel_ssh(*id, "SSH login cancelled".into());
+            }
+            if let Some((_, Intent::Deployment(id))) = &self.remote.login {
+                self.deployment.cancel(Some(*id), "SSH login cancelled");
             }
             self.remote.login = None;
             self.remote.secret.zeroize();
@@ -696,6 +731,39 @@ mod tests {
             _ => {}
         }
     }
+    #[test]
+    fn cancelled_deployment_auth_replies_do_not_reopen_ssh_dialogs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let bus = nozhik_event_bus::EventBus::new(16)?;
+        let settings = nozhik_config::ConfigManager::from_path(
+            root.path().join("settings.toml"),
+            bus.clone(),
+        )?;
+        let mut shell = NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        let ctx = egui::Context::default();
+        let profile = Form::default().profile;
+        shell.accept_remote_reply(
+            Reply::TrustRequired(
+                profile.clone(),
+                "SHA256:fixture".into(),
+                Intent::Deployment(7),
+            ),
+            &ctx,
+        );
+        shell.accept_remote_reply(
+            Reply::Verified(profile.clone(), Intent::Deployment(7)),
+            &ctx,
+        );
+        shell.accept_remote_reply(
+            Reply::CredentialsRequired(profile, Intent::Deployment(7), "login".into()),
+            &ctx,
+        );
+        assert!(!shell.remote.modal_open());
+        assert!(!shell.deployment.busy());
+        Ok(())
+    }
+
     #[test]
     fn editing_preserves_all_forwards_and_deleted_or_changed_hosts_cannot_retarget_buffers()
     -> Result<(), Box<dyn std::error::Error>> {

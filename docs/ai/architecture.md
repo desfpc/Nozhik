@@ -1789,3 +1789,58 @@ A dedicated Terminal family uses embedded unmodified JetBrains Mono, Noto Sans
 Symbols 2 and Noto Emoji, followed by stock egui fallbacks. Glyphs are fitted and
 clipped to one/two terminal cells; cell text and copy remain unchanged Unicode.
 OFL notices are retained with the assets and added to generated legal sidecars.
+
+
+### Project SFTP Deployment (v0.1.33)
+
+Config has an optional SftpDeployment {ssh_profile, remote_root}, validated and
+persisted through the existing project settings worker. Settings adds a category
+with one saved-project SSH profile, absolute POSIX root, explicit Apply and Disable.
+Draft invalid paths never replace a working config. No credentials are duplicated.
+TreeActions conditionally exposes SFTP Deploy for files/directories/root; dirty
+local buffers under the selection must be saved before a request can start.
+
+DeploymentUi binds an increasing request ID to project root, selection, config and
+SSH identity. RemoteWorker's Deployment intent reuses Verify/Trust/credentials/
+Connect and returns a cloned authenticated SshSession. Typed DeploymentFailed replies
+do not affect editor save completions. Cancelled/stale authentication replies are
+ignored; accepting a session rechecks settings/identity/root and the dirty gate.
+An active transfer keeps its original destination instead of following config edits.
+
+A dedicated cancellable worker builds DeploymentPlan off the UI thread, excluding
+.git/.nozhik and symlinks, checking containment/UTF-8 paths and bounding traversal to
+100000 entries. SftpClient deploys project-relative paths, creates empty/missing
+directories, resolves the configured remote root, rejects internal remote symlinks
+and streams binary files in 64 KiB chunks with per-operation deadlines. Existing
+files are truncated/overwritten; remote extras are retained. Cancellation/failure
+can leave the current file partial and earlier files uploaded; no rollback or
+atomic-project-publication guarantee is made.
+
+A latest-only shared progress snapshot wakes egui at most every 100 ms plus completion.
+Cancellation is checked during traversal and raced against async transfer, with
+bounded shutdown before the project's SSH worker. The active and inactive project
+loops both drain deployment completion. Transfers use separate SFTP subsystems on
+the shared transport and are outside the serialized SSH worker's 35-second deadline.
+Remote browser cache is not automatically refreshed by this independent subsystem;
+use its Refresh after a deployment when browsing the same server directory.
+No new dependency, remote shell command or external deployment tool is introduced.
+
+
+### SFTP Deploy из Git History (v0.1.34)
+
+VcsPanel получает availability/busy deployment, не SSH-профиль. Toolbar History
+содержит SFTP Deploy Files и постоянное пояснение current working files. Запрос
+доступен только для одного выбранного SHA с загруженными соответствующими details;
+pending details/mutation, multi-selection и transfer блокируют кнопку. Клик
+снимет список HistorySelection.files относительно canonical repo.root; UI отдаёт
+его NozhikUi как одноразовый запрос. Git blobs не извлекаются, Git не изменяется.
+
+Deployment worker принимает Sources::Path либо Sources::Files. Второй вариант
+использует DeploymentPlan::files: только точные текущие regular files в canonical
+project root, без рекурсивного раскрытия директорий; dedup, skipped missing/
+internal/symlink/directory/outside-project paths и общий лимит 100000 сохраняются.
+Dirty gate проверяет только запрошенные файлы, повторно после SSH auth. Upload
+читает дисковые bytes через общий SFTP streamer. При отсутствии подходящих файлов
+возвращается ошибка до удалённых записей. Прогресс/отмена доступны также в Git.
+Remote actions dropdown использует square 36×50 chrome рядом с Pull/Push без
+рамки и межкнопочного разделителя, сохраняя popup и прежние Git actions.

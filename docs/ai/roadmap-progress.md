@@ -3375,3 +3375,97 @@ clean удалил 9.7 GiB; удалены временные upstream downloads
 bytecode и шесть untracked Finder files. Размер проекта после очистки — 383 MiB.
 Готовый macOS комплект сохранён; Windows-кэш не создавался, Windows-комплект
 не обновлялся. Финальные git status и git diff --check проверены.
+
+### SFTP Deployment проекта (v0.1.33, 2026-11-04)
+
+Settings → SFTP Deployment хранит один optional target проекта: имя уже сохранённого
+SSH-соединения и абсолютный POSIX remote project root. Apply deployment валидирует
+черновик и сохраняет через прежний project settings worker; Disable deployment
+убирает mapping. Старые TOML/JSON без поля по-прежнему загружаются. Секреты не
+дублируются: используются прежние host key trust, пароль/ключ/agent и OS store.
+
+После настройки в контекстном меню файла/директории/корня проекта появляется
+SFTP Deploy. Корень переносится без дополнительной директории имени проекта;
+подкаталоги и файлы сохраняют project-relative paths. Нужные и пустые каталоги
+создаются на сервере; файлы передаются как binary streams по 64 KiB, без лимита
+редактора 16 MiB. Совпадающие обычные файлы перезаписываются с truncation; лишние
+удалённые файлы сохраняются. .git/.nozhik и вложенные локальные симлинки исключены,
+явно выбранные internals/симлинки/outside paths отклоняются. Remote root разрешён
+через realpath; внутренние целевые симлинки/неверные типы блокируют запись.
+
+Deployment intent RemoteWorker переиспользует Verify/Trust/Connect и отдаёт
+проверенный SshSession отдельному worker передачи. Scan/metadata/file I/O и SFTP
+не выполняются в UI; transfer не ограничен общим 35-second SSH-command timeout,
+но использует deadlines отдельных операций. План ограничен 100000 entries,
+данные файлов не материализуются целиком. Latest-only progress (files/bytes/path)
+будит окно не чаще 100 ms плюс completion, показан над деревом вместе с Cancel.
+Cancel/закрытие проекта прерывают работу; уже загруженное остаётся, текущий файл
+может быть частично записан. Rollback, удаление remote extras и atomic deploy
+не реализуются. Независимый SFTP browser обновляется своим Refresh.
+
+До запроса и после SSH auth проверяются сохранённые локальные buffers выбранного
+поддерева. Pending ID связан с root/selection/config/profile identity; изменение
+настроек/профиля при ожидании не перенаправляет запрос. После отмены stale
+Trust/Verified/Credentials replies не открывают диалоги. DeploymentFailed не
+сбрасывает editor save state. Активные и фоновые проекты читают completion,
+shutdown ограничен и предшествует остановке SSH transport.
+
+Проверки: native workspace/all-features последовательно — 309 passed, 0 failed,
+10 прежних optional ignored. Новые regressions: обе сериализации и legacy defaults,
+реальные pointer clicks настройки/выбора SSH/Apply/Disable, conditional file/dir
+context menu с точной целью, dirty gate/cancel/stale auth. Тестовый SFTP v3 server
+на in-memory duplex проверяет mkdir/empty directories, Unicode names, многочанковый
+binary upload, truncating overwrite, сохранение unrelated files, отказ для remote
+symlink и PermissionDenied. Planner проверяет локальные exclusions/containment/
+symlinks и cancellation. Native Clippy workspace/all-targets/all-features с
+-D warnings, rustfmt, git diff --check и workspace release build прошли.
+Реальный пользовательский сервер/credentials и ручной native GUI не использовались.
+Новых зависимостей нет. Workspace/Cargo.lock/UI — 0.1.33; следующая 0.1.34.
+Windows build/Clippy, commit и push не выполнялись.
+
+Штатный update-binaries.py обновил macOS ARM64 executable и подписанный app archive;
+--check подтвердил source fingerprint/SHA-256. Проверены bundle 0.1.33, оба ZIP,
+codesign --verify --deep --strict и совпадение четырёх embedded legal sidecars.
+После проверок cargo clean удалил 9.4 GiB; удалены task logs, временный файл,
+packaging bytecode и шесть untracked Finder files. Размер проекта после очистки —
+386 MiB; готовые бинарники/legal materials сохранены. Windows-кэш не создавался,
+Windows-комплект не обновлялся. Финальные git status и git diff --check проверены.
+
+
+### SFTP Deploy Files из Git History (v0.1.34, 2026-11-04)
+
+При настроенном deployment Git → History показывает SFTP Deploy Files справа
+от Pull/Push и меню. Под кнопкой постоянное пояснение: коммит определяет только
+список путей, отправляются текущие файлы проекта. Требуется один выбранный коммит
+с готовыми details. Список захватывается при клике; исторические blobs не читаются.
+
+Точный batch-план deduplicate-ит пути, не раскрывает каталоги и пропускает missing,
+internal, symlink, directory и outside-project entries. Отсутствующие удаления не
+удаляют серверные файлы; если подходящих файлов нет, выводится ошибка. Dirty gate
+требует сохранения только включённых файлов, включая повторную проверку после SSH.
+Общие проверка host key/auth, потоковая передача, прогресс и отмена переиспользованы;
+прогресс/отмена видны также в Git. Dropdown remote actions — квадратная часть
+панели высотой 50 px без рамки/скругления и разделителя после Pull/Push.
+
+Добавлены pointer-driven UI test выбора коммита/клика/списка путей и геометрии меню,
+проверка точного batch-плана без рекурсии с exclusions/dedup/cancellation, dirty
+included/unrelated files. SFTP protocol fixture отправляет изменённые текущие bytes
+через batch API, пропускает отсутствующий путь и сохраняет unrelated remote files.
+Новых зависимостей нет. Workspace/Cargo.lock/UI — 0.1.34; следующая 0.1.35.
+
+
+Проверки v0.1.34: cargo fmt --all -- --check; cargo clippy --workspace
+--all-targets --all-features -- -D warnings; cargo test --workspace --all-features
+-- --test-threads=1 — 311 passed, 10 ignored; cargo build --workspace --release.
+Для loopback/PTY fixtures тесты запущены вне sandbox; один стартовый lifecycle
+тест при первой параллельной компиляции превысил deadline, повторный полный прогон
+прошёл. Реальный пользовательский сервер и ручное GUI-окно не использовались.
+python3 scripts/update-binaries.py обновил native macOS ARM64, --check подтвердил
+source fingerprint и checksums. Проверены версия bundle 0.1.34, целостность обоих
+ZIP, legal sidecars в Resources/Legal и codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки бинарников cargo clean удалил 8.2 GiB; удалены временные журналы,
+packaging bytecode и семь untracked Finder files. Размер проекта — 386 MiB;
+исходники, незакоммиченные правки и готовый комплект сохранены. Финальные
+размер/git status/git diff --check проверены.

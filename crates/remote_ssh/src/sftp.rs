@@ -38,8 +38,8 @@ impl RemoteFileEntry {
 }
 /// One SFTP subsystem and a cache of at most 128 directory listings for 30 seconds.
 pub struct SftpClient {
-    session: SftpSession,
-    cache: HashMap<String, (Instant, Vec<RemoteFileEntry>)>,
+    pub(crate) session: SftpSession,
+    pub(crate) cache: HashMap<String, (Instant, Vec<RemoteFileEntry>)>,
 }
 impl SftpClient {
     /// Open the SFTP subsystem on an existing authenticated transport.

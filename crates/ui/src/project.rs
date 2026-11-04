@@ -394,6 +394,7 @@ impl NozhikUi {
 
     pub(crate) fn project_panel(&mut self, ui: &mut egui::Ui) {
         self.project_header(ui);
+        self.deployment.show(ui);
         self.expand_project_subtree();
         if self.project.is_none() {
             ui.horizontal(|ui| {
@@ -426,7 +427,11 @@ impl NozhikUi {
             ui.weak("Choose a folder or enter its path");
             return;
         };
-        let mut actions = TreeActions::default();
+        let mut actions = TreeActions {
+            deploy_available: self.config.sftp_deployment.is_some(),
+            deploy_busy: self.deployment.busy(),
+            ..TreeActions::default()
+        };
         #[cfg(test)]
         self.project_controls.rows.clear();
         egui::ScrollArea::both()
@@ -463,6 +468,9 @@ impl NozhikUi {
                 error: None,
             });
         }
+        if let Some(path) = actions.deploy {
+            self.deploy_path(path);
+        }
         if let Some(path) = actions.open {
             self.open_file(path);
         }
@@ -470,6 +478,9 @@ impl NozhikUi {
 }
 #[derive(Default)]
 struct TreeActions {
+    deploy_available: bool,
+    deploy_busy: bool,
+    deploy: Option<PathBuf>,
     loads: Vec<PathBuf>,
     open: Option<PathBuf>,
     show: Option<PathBuf>,
@@ -571,6 +582,14 @@ fn entry_menu(
         *selected = Some(path.to_path_buf());
     }
     row.context_menu(|ui| {
+        if actions.deploy_available
+            && ui
+                .add_enabled(!actions.deploy_busy, egui::Button::new("SFTP Deploy"))
+                .clicked()
+        {
+            actions.deploy = Some(path.to_path_buf());
+            ui.close();
+        }
         if ui.button("Show in File Manager").clicked() {
             actions.show = Some(path.to_path_buf());
             ui.close();
@@ -754,6 +773,101 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn deployment_menu_is_conditional_and_returns_exact_file_or_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        for directory in [false, true] {
+            for available in [false, true] {
+                let path = PathBuf::from(if directory {
+                    "/project/src"
+                } else {
+                    "/project/src/a.php"
+                });
+                let mut actions = TreeActions {
+                    deploy_available: available,
+                    ..TreeActions::default()
+                };
+                let mut selected = None;
+                let draw = |actions: &mut TreeActions, selected: &mut Option<PathBuf>, events| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(500.0, 300.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let row = ui.selectable_label(false, "entry");
+                                entry_menu(&row, &path, directory, selected, actions);
+                            });
+                        },
+                    )
+                };
+                let output = draw(&mut actions, &mut selected, vec![]);
+                let text = |output: &egui::FullOutput, label: &str| {
+                    output.shapes.iter().find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                };
+                let point = text(&output, "entry").ok_or("missing row")?;
+                for pressed in [true, false] {
+                    draw(
+                        &mut actions,
+                        &mut selected,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Secondary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                let output = draw(&mut actions, &mut selected, vec![]);
+                assert_eq!(text(&output, "SFTP Deploy").is_some(), available);
+                if let Some(point) = text(&output, "SFTP Deploy") {
+                    for pressed in [true, false] {
+                        draw(
+                            &mut actions,
+                            &mut selected,
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                        );
+                    }
+                    assert_eq!(actions.deploy, Some(path.clone()));
+                }
+                draw(
+                    &mut actions,
+                    &mut selected,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

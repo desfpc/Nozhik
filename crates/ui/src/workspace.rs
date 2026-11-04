@@ -256,6 +256,7 @@ impl Workspace {
             project.receive_files();
             project.receive_events();
             project.receive_remote(ctx);
+            project.deployment_tick();
             project.database_tick(ctx);
             project.language_tick(ctx);
             project.settings_tick(ctx);

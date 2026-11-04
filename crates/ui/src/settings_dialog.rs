@@ -24,6 +24,7 @@ pub struct SettingsDialog {
     pub php_stubs: Option<std::sync::Arc<nozhik_language_support::php_stubs::PhpVersionStubs>>,
     php_requested: String,
     category: usize,
+    deployment: crate::deployment::DeploymentSettings,
     extension: String,
     requests: mpsc::Sender<Request>,
     replies: mpsc::Receiver<Reply>,
@@ -80,6 +81,7 @@ impl SettingsDialog {
             php_stubs: None,
             php_requested: String::new(),
             category: 0,
+            deployment: crate::deployment::DeploymentSettings::default(),
             extension: "php".into(),
             requests,
             replies,
@@ -95,6 +97,7 @@ impl SettingsDialog {
         ui.selectable_value(&mut self.category, 2, "AI Assistant (Ollama)");
         ui.selectable_value(&mut self.category, 3, "Languages");
         ui.selectable_value(&mut self.category, 4, "Git");
+        ui.selectable_value(&mut self.category, 5, "SFTP Deployment");
         ui.button("Plugins…").clicked()
     }
 
@@ -104,6 +107,7 @@ impl SettingsDialog {
         config: &mut Config,
         size: egui::Vec2,
         vcs: &mut crate::vcs_panel::VcsPanel,
+        deployment_profiles: Option<&[nozhik_remote_ssh::SshProfile]>,
     ) {
         egui::ScrollArea::both()
             .id_salt(("settings_options", self.category))
@@ -120,6 +124,8 @@ impl SettingsDialog {
                         self.file_types(ui, config);
                     } else if self.category == 2 {
                         self.ai.show(ui, config);
+                    } else if self.category == 5 {
+                        self.deployment.show(ui, config, deployment_profiles);
                     } else if self.category == 4 {
                         vcs.git_settings_ui(ui);
                     } else {
@@ -135,13 +141,20 @@ impl SettingsDialog {
         config: &mut Config,
         size: egui::Vec2,
         vcs: &mut crate::vcs_panel::VcsPanel,
+        deployment_profiles: Option<&[nozhik_remote_ssh::SshProfile]>,
     ) -> bool {
         let compact = size.x < 560.0;
         let height = (size.y - if compact { 126.0 } else { 86.0 }).max(0.0);
         if compact {
             let plugins = ui.horizontal_wrapped(|ui| self.navigation(ui)).inner;
             ui.separator();
-            self.options(ui, config, egui::vec2(size.x, height), vcs);
+            self.options(
+                ui,
+                config,
+                egui::vec2(size.x, height),
+                vcs,
+                deployment_profiles,
+            );
             plugins
         } else {
             ui.horizontal_top(|ui| {
@@ -179,6 +192,7 @@ impl SettingsDialog {
                         height,
                     ),
                     vcs,
+                    deployment_profiles,
                 );
                 plugins
             })
@@ -452,10 +466,15 @@ impl crate::NozhikUi {
                     ui.small(project.root_path.display().to_string());
                 }
                 ui.separator();
-                if self
-                    .settings_dialog
-                    .content(ui, &mut config, size, &mut self.vcs)
-                {
+                if self.settings_dialog.content(
+                    ui,
+                    &mut config,
+                    size,
+                    &mut self.vcs,
+                    self.project
+                        .as_ref()
+                        .map(|_| self.remote.database_profiles()),
+                ) {
                     self.plugins_open = true;
                     self.settings_open = false;
                 }

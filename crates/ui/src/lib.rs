@@ -10,6 +10,7 @@ pub use data_grid::DataGrid;
 mod ai_inline;
 mod css_colors;
 mod database_panel;
+mod deployment;
 mod diff_view;
 mod docker_panel;
 mod editor_tabs;
@@ -109,6 +110,7 @@ pub struct NozhikUi {
     native_menu: Option<menu_bar::native::NativeMenu>,
     database: database_panel::DatabaseUi,
     remote: remote_panel::RemoteUi,
+    deployment: deployment::DeploymentUi,
     docker: docker_panel::DockerUi,
     terminal: Option<terminal_panel::TerminalPanel>,
     llm: Option<llm_panel::LlmPanel>,
@@ -191,6 +193,7 @@ impl NozhikUi {
             native_menu: None,
             database: database_panel::DatabaseUi::default(),
             remote: remote_panel::RemoteUi::default(),
+            deployment: deployment::DeploymentUi::default(),
             docker: docker_panel::DockerUi::default(),
             terminal: None,
             llm: None,

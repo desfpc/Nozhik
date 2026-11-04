@@ -1290,3 +1290,56 @@ fn opening_cloned_project_installs_session_authentication_after_repository_open(
     );
     Ok(())
 }
+
+#[test]
+fn history_deploy_uses_selected_paths_and_full_height_remote_menu()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_dir, repo, mut panel, ctx) = fixture()?;
+    panel.configure_deployment(true, false);
+    frame(&mut panel, &ctx, vec![]);
+    assert!(panel.toolbar_deploy_rect.is_none());
+    click(&mut panel, &ctx, "History")?;
+    settle(&mut panel, &ctx)?;
+    let sha = repo.head()?.peel_to_commit()?.id().to_string();
+    panel.select_commit(sha);
+    settle(&mut panel, &ctx)?;
+    assert!(panel.deploy_selection().is_some());
+    std::fs::write(
+        repo.workdir().ok_or("worktree")?.join("file.txt"),
+        "current local text",
+    )?;
+    let output = frame(&mut panel, &ctx, vec![]);
+    text_point(&output, "SFTP Deploy Files")?;
+    let menu = panel.toolbar_menu_rect.ok_or("menu rect")?;
+    let deploy = panel.toolbar_deploy_rect.ok_or("deploy rect")?;
+    assert_eq!(menu.height(), 50.0);
+    assert!(deploy.left() > menu.right());
+    assert!(deploy.right() < 1100.0);
+    click_at(
+        &mut panel,
+        &ctx,
+        deploy.center(),
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    let paths = panel.take_deploy_paths().ok_or("deploy request")?;
+    assert_eq!(
+        paths,
+        vec![
+            repo.workdir()
+                .ok_or("worktree")?
+                .canonicalize()?
+                .join("file.txt")
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(paths.first().ok_or("path")?)?,
+        "current local text"
+    );
+    panel.configure_deployment(true, true);
+    assert!(panel.deploy_selection().is_none());
+    panel.configure_deployment(false, false);
+    frame(&mut panel, &ctx, vec![]);
+    assert!(panel.toolbar_deploy_rect.is_none());
+    Ok(())
+}

@@ -3563,3 +3563,58 @@ build/Clippy и Windows-комплект не выполнялись/не обн
 108 MiB. Готовый native комплект, legal materials, исходники, история и прежние
 незакоммиченные правки сохранены. После очистки сборок не было; финальные native
 --check, git diff --check, размер и git status проверены.
+
+### URL и Base64 encode/decode в Tools (v0.1.37, 2026-11-04)
+
+Каталог Tools теперь содержит JSON, URL encode / decode и Base64 encode / decode.
+Оба новых инструмента используют прежнюю полноразмерную рабочую область: Decoded
+text сверху, Encoded text снизу, регулируемый разделитель и независимая прокрутка.
+Оба поля активны, Copy есть у каждого; Clear очищает только текущий инструмент.
+Правки автоматически пересчитывают противоположное поле; вводимая сторона не
+нормализуется, поэтому сохраняются её точные байты и курсор. Ошибочный/незавершённый
+ввод сохраняется вместе с последним корректным результатом другого поля.
+
+URL использует UTF-8 percent encoding для component (пробел=%20, плюс=%2B,
+unreserved -._~). Checkbox Form encoding (+ for spaces) включает form-urlencoded:
+пробел=+, буквальный плюс=%2B, * без escaping, ~=%7E. Декодирование строго проверяет
+%HH и UTF-8; в component-режиме '+' остаётся плюсом. Base64 использует стандартный
+алфавит и padding при encode. Decode принимает также отсутствие padding и ASCII
+whitespace/переносы, отклоняет неверные символы/trailing bits и non-UTF-8 output.
+Текст не отправляется в сеть и не сохраняется на диск; лимит ввода — 2 MiB.
+
+Tools теперь хранит выбор ToolKind и три независимых ToolEditor. Разделены тексты,
+ошибки, revisions, bounded worker queues, last-edited side/mode и split ratios;
+egui IDs включают ToolKind для независимых focus/selection/undo/scroll. Возврат
+в каталог сохраняет scratch buffers. URL-mode входит в snapshot job; stale replies
+и Clear не могут перезаписать новый ввод. Файловый перенос по-прежнему выбирает
+JSON; его форматирование, подсветка, cursor remap и semantic-index policy сохранены.
+
+UI переиспользует workspace base64 0.22.1 — пакет уже поставлялся через terminal,
+MIT OR Apache-2.0 разрешает такое использование. Новых Rust-пакетов нет; Cargo.lock
+получил только workspace patch и прямую dependency UI на прежний base64. Версия
+workspace/lock — 0.1.37, следующая — 0.1.38. README/architecture/coding standards
+обновлены.
+
+Проверки: native fmt, Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=1 — 324 passed, 0 failed,
+10 прежних optional ignored. Полный прогон с системным доступом использует только
+изолированные localhost/PTY fixtures. Codecs tests проверяют Unicode/emoji/NUL,
+standard Base64 vectors, unpadded/multiline input, form/component semantics,
+malformed escapes/Base64/non-UTF-8. Pointer/keyboard UI tests открывают оба пункта
+каталога, вставляют текст в обе стороны, нажимают обе Copy, удаляют ввод, проверяют
+mode checkbox, stale replies, независимость buffers и горизонтальную геометрию
+полей сверху вниз. Ручной native GUI и Windows build/Clippy в этой задаче не
+запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable/app archive; --check подтвердил source fingerprint и SHA-256. Проверены
+bundle 0.1.37, целостность обоих ZIP, четыре embedded legal sidecars и наличие
+base64 в лицензиях. Упаковщик выполнил codesign --verify --deep --strict. Сборки
+и проверки использовали локально закэшированные зависимости (--offline), новых
+скачиваний не требовалось. Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 8.2 GiB; журналы задачи
+удалены, untracked Finder files не обнаружены. Финальный размер проекта — 388 MiB,
+binaries — 108 MiB. Исходники, история и готовые бинарники/legal materials сохранены;
+после очистки сборок не было. Финальные native --check, git diff --check, размер
+и git status проверены.

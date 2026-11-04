@@ -249,3 +249,13 @@ buffers: no implicit file writes. Background results must match the latest revis
 invalid intermediate text remains editable. Keep the Tools catalog and selected tools in full-size central views.
 Stack JSON editors vertically; bound independent scroll areas and anchor overflow
 at the top left. Test long lines with actual galley positions and clip rectangles. Preserve cursor/selection positions through whitespace edits.
+
+
+### URL / Base64 tools
+
+ui may use the existing workspace base64 dependency for its text codec worker.
+Keep each tool's scratch state and egui IDs independent. Preserve exactly the
+edited side; transform only its counterpart, bound queued work and gate results
+by revision including mode changes. Reject malformed escapes, invalid Base64 and
+non-UTF-8 without lossy replacement or destroying the last valid counterpart.
+Keep URL component and form '+' semantics explicit in the UI and test both.

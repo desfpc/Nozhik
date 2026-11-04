@@ -115,7 +115,7 @@ impl NozhikUi {
                         }
                         "ui.tools" => {
                             self.left = Some(LeftTool::Tools);
-                            self.tools.json_open = false;
+                            self.tools.catalog();
                         }
                         "ui.plugins" => self.plugins_open = true,
                         "ui.git" => {
@@ -402,7 +402,7 @@ impl NozhikUi {
                         .clicked()
                     {
                         if tool == LeftTool::Tools {
-                            self.tools.json_open = false;
+                            self.tools.catalog();
                         }
                         self.left = if self.left == Some(tool) {
                             None

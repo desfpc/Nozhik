@@ -1878,3 +1878,27 @@ Config.language_catalog_version=1 маркирует сохранённую по
 JSON в непустой legacy enabled_languages и устанавливает маркер 1 в памяти. Пустой
 список остаётся пустым. Миграция не пишет файл; при обычном последующем сохранении
 маркер позволяет сохранять явный opt-out JSON. Остальные языки не изменяются.
+
+
+### URL / Base64 scratch tools (v0.1.37)
+
+ui::tools now owns Option<ToolKind> selection and three independent ToolEditor
+instances for JSON, URL and Base64. Each owns its two texts, spans, split ratio,
+revision, last-edited side, mode, bounded worker queue and pending input. Editor
+and ScrollArea IDs include ToolKind so focus, selection, undo and scroll state
+cannot leak between instruments. The JSON file-transfer action selects only JSON.
+The shared stacked UI retains top-left overflow and the full-size CentralPanel.
+
+Only JSON normalizes both source/destination and remaps token-relative cursors.
+Codecs preserve the edited source bytes/cursor and replace only the opposite
+representation. Background jobs carry URL mode and revision; stale results cannot
+replace newer input. Invalid escapes/Base64/non-UTF-8 leave edited input and last
+valid opposite text intact. Clear invalidates pending results for its own editor.
+
+URL conversion is strict UTF-8 component percent encoding (RFC 3986 unreserved)
+or form-urlencoded via the explicit mode checkbox (spaces/+ and * versus ~).
+Decoded '%' sequences require two hex digits; '+' is literal outside form mode.
+Base64 reuses workspace base64 0.22.1 (already shipped through terminal), with the
+standard alphabet/padded encoding. Decode accepts optional padding and ASCII
+whitespace but rejects invalid trailing bits, characters and non-UTF-8 output.
+No new packages, network calls, disk writes or language/index registrations.

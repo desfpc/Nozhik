@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+base64.workspace = true
 nozhik-docker.workspace = true
 reqwest.workspace = true
 webbrowser.workspace = true

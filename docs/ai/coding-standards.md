@@ -51,7 +51,7 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - docker: tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix-only nix signals; no UI/runtime dependency.
   File traversal, AST extraction and Docker CLI I/O belong to its project worker.
-- terminal: portable-pty, vt100 (vte), parking_lot, thiserror, Unix-only nix signals.
+- terminal: portable-pty, vt100 (vte), parking_lot, thiserror, base64 (bounded OSC 52 clipboard writes), Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
 - remote_ssh: russh/keys, russh-sftp, tokio, keyring (native OS stores), zeroize,
   serde/serde_json, tempfile, directories, thiserror.

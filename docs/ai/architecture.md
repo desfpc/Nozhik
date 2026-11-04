@@ -1758,3 +1758,34 @@ project panel, surviving hide/reopen and ending after terminal shutdown. Image
 paths use CLI-native bracketed-paste attachment recognition, verified for Codex;
 Grok's same route is documented in upstream paste.rs. Native model/file-format
 support remains the responsibility of the installed CLI.
+
+
+### Terminal mouse, frozen selection and glyph fallback (v0.1.32)
+
+TerminalGrid publishes negotiated xterm mouse mode/encoding, wrapped-row flags,
+normal history length, absolute viewport start and a selection epoch. The UI
+encodes ordered native press/release/motion and wheel events only on the active,
+enabled terminal surface. Shift overrides application capture. SGR coordinates
+support the full 500-column viewport; legacy X10 and UTF-8 bounds are enforced.
+Trackpad fractions and pointer capture are session-local. Fullscreen programs own
+their scrollback; without mouse negotiation wheel falls back to cursor keys.
+
+Emulator lazily clones its vt100 Screen for local review. Live parser/read/write
+continue independently while the worker presents frozen cells. No complete history
+is cloned during ordinary output. Text selection uses absolute frozen-buffer rows,
+so wheel/scrollbar/page navigation do not reset the anchor. CopyText is a bounded
+worker command guarded by epoch, joins soft wraps, and emits TerminalEvent::Copied.
+Normal scrollback retains at most 3000 rows; an alternate screen contributes only
+its visible buffer. Native TUI selection remains available for its internal history.
+Returning live or resizing discards the frozen clone and invalidates stale ranges.
+
+Native mouse input opens a 5-second OSC 52 copy window. Callbacks decode UTF-8
+using the existing locked base64 package (now a direct terminal dependency), cap
+text at 4 MiB, and retain at most one pending write. Workers publish Copied outside
+shared locks; TerminalPanel applies the requested OS clipboard write. No clipboard
+read query is answered and unsolicited OSC 52 writes are dropped.
+
+A dedicated Terminal family uses embedded unmodified JetBrains Mono, Noto Sans
+Symbols 2 and Noto Emoji, followed by stock egui fallbacks. Glyphs are fitted and
+clipped to one/two terminal cells; cell text and copy remain unchanged Unicode.
+OFL notices are retained with the assets and added to generated legal sidecars.

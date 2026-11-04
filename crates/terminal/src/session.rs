@@ -46,6 +46,12 @@ enum Input {
 enum Control {
     Resize(u16, u16),
     Scroll(i32),
+    Review,
+    ScrollTo(usize),
+    CopyText(
+        u64,
+        Option<(crate::grid::TextPosition, crate::grid::TextPosition)>,
+    ),
     AgentPaste(crate::agent::ForegroundAgent, Vec<u8>),
 }
 struct Shared {
@@ -55,10 +61,16 @@ struct Shared {
     live: AtomicBool,
     reader_done: AtomicBool,
     completed: AtomicBool,
+    clipboard_until: Mutex<Option<Instant>>,
 }
 impl Shared {
     fn publish(&self, emulator: &Emulator) {
         self.snapshot.lock().grid = Some(Arc::new(emulator.snapshot()));
+    }
+    fn clipboard(&self, emulator: &mut Emulator) -> Option<String> {
+        let text = emulator.take_clipboard()?;
+        let until = self.clipboard_until.lock().take()?;
+        (Instant::now() < until).then_some(text)
     }
     fn state(&self, state: SessionState) {
         self.snapshot.lock().state = state;
@@ -113,6 +125,7 @@ impl TerminalSession {
             live: AtomicBool::new(false),
             reader_done: AtomicBool::new(false),
             completed: AtomicBool::new(false),
+            clipboard_until: Mutex::new(None),
         });
         let (input, writes) = mpsc::sync_channel(64);
         let (control, commands) = mpsc::sync_channel(128);
@@ -194,6 +207,18 @@ impl TerminalSession {
         self.shared.live.store(true, Ordering::Release);
         Ok(())
     }
+    /// Sends native mouse bytes and briefly permits the application's resulting
+    /// OSC 52 copy. Clipboard contents are never read or sent to the process.
+    /// # Errors
+    /// Returns input size, backpressure or closed-session errors.
+    pub fn write_mouse(&self, bytes: Vec<u8>) -> Result<()> {
+        *self.shared.clipboard_until.lock() = Some(Instant::now() + Duration::from_secs(5));
+        if let Err(error) = self.write(bytes) {
+            *self.shared.clipboard_until.lock() = None;
+            return Err(error);
+        }
+        Ok(())
+    }
     /// Pastes context into the same local foreground agent, without pressing Enter.
     /// The worker revalidates process identity and bracketed-paste support.
     /// # Errors
@@ -221,6 +246,36 @@ impl TerminalSession {
     pub fn scroll(&self, rows: i32) -> Result<()> {
         self.control
             .try_send(Control::Scroll(rows))
+            .map_err(queue_error)
+    }
+    /// Schedules an absolute frozen-buffer scroll offset.
+    /// # Errors
+    /// Returns queue/closed errors.
+    pub fn scroll_to(&self, offset: usize) -> Result<()> {
+        self.control
+            .try_send(Control::ScrollTo(offset))
+            .map_err(queue_error)
+    }
+    /// Freezes the visible terminal text for selection; output continues in the background.
+    /// # Errors
+    /// Returns queue/closed errors.
+    pub fn review(&self) -> Result<()> {
+        self.control.try_send(Control::Review).map_err(queue_error)
+    }
+    /// Resumes live output without sending any bytes to the program.
+    pub fn live(&self) {
+        self.shared.live.store(true, Ordering::Release);
+    }
+    /// Requests a worker-owned copy from terminal history or the visible screen.
+    /// # Errors
+    /// Returns queue/closed errors; stale ranges are reported as terminal error events.
+    pub fn copy_text(
+        &self,
+        epoch: u64,
+        range: Option<(crate::grid::TextPosition, crate::grid::TextPosition)>,
+    ) -> Result<()> {
+        self.control
+            .try_send(Control::CopyText(epoch, range))
             .map_err(queue_error)
     }
     /// Requests termination independently of saturated I/O command queues.
@@ -404,6 +459,23 @@ fn worker(
                     wake();
                 }
             }
+            Ok(Control::ScrollTo(offset)) => {
+                let mut emulator = shared.emulator.lock();
+                emulator.scroll_to(offset);
+                shared.publish(&emulator);
+                drop(emulator);
+                wake();
+            }
+            Ok(Control::Review) => {
+                let mut emulator = shared.emulator.lock();
+                emulator.review();
+                shared.publish(&emulator);
+                drop(emulator);
+                wake();
+            }
+            Ok(Control::CopyText(epoch, range)) => {
+                copy_text(id, epoch, range, shared, wake, events);
+            }
             Ok(Control::Scroll(delta)) => {
                 let mut emulator = shared.emulator.lock();
                 emulator.scroll(delta);
@@ -477,8 +549,12 @@ fn read_output(
             Ok(count) => {
                 let mut emulator = shared.emulator.lock();
                 let response = emulator.process(&buffer[..count]);
+                let clipboard = shared.clipboard(&mut emulator);
                 shared.publish(&emulator);
                 drop(emulator);
+                if let Some(text) = clipboard {
+                    report(events, wake, TerminalEvent::Copied { id, text });
+                }
                 if !response.is_empty() && replies.try_send(response).is_err() {
                     report(
                         events,
@@ -611,6 +687,21 @@ fn external_worker(
                         shared.publish(&emulator);
                         drop(emulator);
                     }
+                    Control::ScrollTo(offset) => {
+                        let mut emulator = shared.emulator.lock();
+                        emulator.scroll_to(offset);
+                        shared.publish(&emulator);
+                        drop(emulator);
+                    }
+                    Control::Review => {
+                        let mut emulator = shared.emulator.lock();
+                        emulator.review();
+                        shared.publish(&emulator);
+                        drop(emulator);
+                    }
+                    Control::CopyText(epoch, range) => {
+                        copy_text(id, epoch, range, shared, wake, events);
+                    }
                     Control::Scroll(delta) => {
                         let mut emulator = shared.emulator.lock();
                         emulator.scroll(delta);
@@ -628,13 +719,17 @@ fn external_worker(
             for _ in 0..128 {
                 match transport.poll()? {
                     Some(ExternalOutput::Data(bytes)) => {
-                        let response = {
+                        let (response, clipboard) = {
                             let mut emulator = shared.emulator.lock();
                             let response = emulator.process(&bytes);
+                            let clipboard = shared.clipboard(&mut emulator);
                             shared.publish(&emulator);
                             drop(emulator);
-                            response
+                            (response, clipboard)
                         };
+                        if let Some(text) = clipboard {
+                            report(events, wake, TerminalEvent::Copied { id, text });
+                        }
                         if !response.is_empty() {
                             transport.write(response)?;
                         }
@@ -653,4 +748,29 @@ fn external_worker(
     })();
     transport.close();
     result
+}
+
+fn copy_text(
+    id: TerminalSessionId,
+    epoch: u64,
+    range: Option<(crate::grid::TextPosition, crate::grid::TextPosition)>,
+    shared: &Shared,
+    wake: &Wakeup,
+    events: &mpsc::Sender<TerminalEvent>,
+) {
+    let mut emulator = shared.emulator.lock();
+    let result = emulator.copy_text(epoch, range);
+    shared.publish(&emulator);
+    drop(emulator);
+    report(
+        events,
+        wake,
+        match result {
+            Ok(text) => TerminalEvent::Copied { id, text },
+            Err(error) => TerminalEvent::Error {
+                id,
+                message: error.to_string(),
+            },
+        },
+    );
 }

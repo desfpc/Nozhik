@@ -1,5 +1,17 @@
 //! VT100/vte state adapter and immutable, UI-independent cell snapshots.
 
+/// Negotiated xterm mouse tracking and coordinate encoding.
+pub use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+
+/// Position in the bounded terminal text buffer (history followed by screen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TextPosition {
+    /// Zero-based physical row, including scrollback.
+    pub row: usize,
+    /// Zero-based cell column; end positions may equal the column count.
+    pub col: u16,
+}
+
 /// Terminal color: default theme, ANSI 16/256 index, or 24-bit RGB.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalColor {
@@ -68,6 +80,8 @@ pub struct TerminalGrid {
     pub cols: u16,
     /// Row-major cells; exactly rows × cols entries.
     pub cells: Vec<TerminalCell>,
+    /// Rows joined to their successor by an automatic terminal wrap.
+    pub wrapped_rows: Vec<bool>,
     /// Zero-based live cursor row and column.
     pub cursor: (u16, u16),
     /// Cursor is painted only in the live viewport.
@@ -78,6 +92,18 @@ pub struct TerminalGrid {
     pub application_cursor: bool,
     /// Shell/application requests bracketed paste delimiters.
     pub bracketed_paste: bool,
+    /// Mouse events requested by the running program.
+    pub mouse_mode: MouseProtocolMode,
+    /// Encoding requested for mouse coordinates.
+    pub mouse_encoding: MouseProtocolEncoding,
+    /// Frozen text review; live output continues independently.
+    pub reviewing: bool,
+    /// Identifies selections invalidated by resize or returning to live output.
+    pub selection_epoch: u64,
+    /// Number of available history rows (at most 3000).
+    pub history_len: usize,
+    /// First visible row in the history + screen buffer.
+    pub viewport_start: usize,
     /// Actual scrollback offset, clamped to available history (zero is live).
     pub scrollback: usize,
     /// OSC window title, capped at 256 Unicode scalars.
@@ -97,12 +123,18 @@ impl TerminalGrid {
 /// Parser and terminal state; only background workers mutate this object.
 pub struct Emulator {
     parser: vt100::Parser<Callbacks>,
+    review: Option<vt100::Screen>,
+    history_len: usize,
+    selection_epoch: u64,
 }
 impl Emulator {
     /// Creates a bounded screen and 3000-line scrollback.
     #[must_use]
     pub fn new(rows: u16, cols: u16) -> Self {
         Self {
+            review: None,
+            history_len: 0,
+            selection_epoch: 0,
             parser: vt100::Parser::new_with_callbacks(
                 rows.clamp(1, 200),
                 cols.clamp(1, 500),
@@ -114,34 +146,106 @@ impl Emulator {
     /// Processes fragmented UTF-8/ANSI bytes. Returns bounded terminal query replies.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.parser.process(bytes);
+        if self.review.is_none() {
+            self.refresh_history_len();
+        }
         std::mem::take(&mut self.parser.callbacks_mut().replies)
+    }
+    /// Takes one bounded OSC 52 clipboard write; clipboard-read queries are unsupported.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.parser.callbacks_mut().clipboard.take()
     }
     /// Changes geometry, retaining the parser's screen/history semantics.
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        self.live();
         self.parser
             .screen_mut()
             .set_size(rows.clamp(1, 200), cols.clamp(1, 500));
+        self.refresh_history_len();
     }
-    /// Positive deltas move into history; negative deltas approach live output.
+    fn refresh_history_len(&mut self) {
+        let screen = self.parser.screen_mut();
+        screen.set_scrollback(usize::MAX);
+        self.history_len = screen.scrollback();
+        screen.set_scrollback(0);
+    }
+    /// Freezes the current terminal buffer for scrolling/selection without pausing output.
+    pub fn review(&mut self) {
+        if self.review.is_none() {
+            self.refresh_history_len();
+            self.review = Some(self.parser.screen().clone());
+        }
+    }
+    /// Positive deltas move into a frozen normal-screen history; negative approach bottom.
     pub fn scroll(&mut self, delta: i32) {
-        if self.parser.screen().alternate_screen() {
+        if self.parser.screen().alternate_screen() && self.review.is_none() {
             return;
         }
-        let next = self
-            .parser
-            .screen()
-            .scrollback()
-            .saturating_add_signed(delta as isize);
-        self.parser.screen_mut().set_scrollback(next);
+        self.review();
+        if let Some(screen) = &mut self.review {
+            let next = screen.scrollback().saturating_add_signed(delta as isize);
+            screen.set_scrollback(next);
+        }
     }
-    /// Returns to the live bottom of the terminal before user input.
+    /// Sets an absolute history offset in a frozen text view.
+    pub fn scroll_to(&mut self, offset: usize) {
+        self.review();
+        if let Some(screen) = &mut self.review {
+            screen.set_scrollback(offset);
+        }
+    }
+    /// Returns to live output and invalidates selections from the frozen buffer.
     pub fn live(&mut self) {
+        if self.review.take().is_some() {
+            self.selection_epoch = self.selection_epoch.wrapping_add(1);
+        }
         self.parser.screen_mut().set_scrollback(0);
+        self.refresh_history_len();
+    }
+    /// Copies a half-open cell range, or all available terminal text. No model input.
+    /// # Errors
+    /// Rejects stale selections, invalid ranges and clipboard results above 4 MiB.
+    pub fn copy_text(
+        &mut self,
+        epoch: u64,
+        range: Option<(TextPosition, TextPosition)>,
+    ) -> crate::Result<String> {
+        if epoch != self.selection_epoch {
+            return Err(crate::TerminalError::Invalid(
+                "Terminal selection expired; select the text again".into(),
+            ));
+        }
+        self.review();
+        let screen = self
+            .review
+            .as_mut()
+            .ok_or_else(|| crate::TerminalError::Invalid("Terminal text unavailable".into()))?;
+        let (rows, cols) = screen.size();
+        let total = self.history_len + usize::from(rows);
+        let (start, end) = range.map_or(
+            (
+                TextPosition { row: 0, col: 0 },
+                TextPosition {
+                    row: total - 1,
+                    col: cols,
+                },
+            ),
+            |(a, b)| (a.min(b), a.max(b)),
+        );
+        if end.row >= total || start.col > cols || end.col > cols {
+            return Err(crate::TerminalError::Invalid(
+                "Terminal selection outside text buffer".into(),
+            ));
+        }
+        let offset = screen.scrollback();
+        let result = copy_rows(screen, self.history_len, start, end);
+        screen.set_scrollback(offset);
+        result
     }
     /// Materializes the screen outside the UI thread.
     #[must_use]
     pub fn snapshot(&self) -> TerminalGrid {
-        let screen = self.parser.screen();
+        let screen = self.review.as_ref().unwrap_or_else(|| self.parser.screen());
         let (rows, cols) = screen.size();
         let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
         for row in 0..rows {
@@ -169,25 +273,91 @@ impl Emulator {
             rows,
             cols,
             cells,
+            wrapped_rows: (0..rows).map(|row| screen.row_wrapped(row)).collect(),
             cursor: (
                 screen.cursor_position().0.min(rows - 1),
                 screen.cursor_position().1.min(cols - 1),
             ),
-            cursor_visible: !screen.hide_cursor() && screen.scrollback() == 0,
+            cursor_visible: !screen.hide_cursor()
+                && screen.scrollback() == 0
+                && self.review.is_none(),
             alternate: screen.alternate_screen(),
             application_cursor: screen.application_cursor(),
             bracketed_paste: screen.bracketed_paste(),
+            mouse_mode: if self.review.is_some() {
+                MouseProtocolMode::None
+            } else {
+                screen.mouse_protocol_mode()
+            },
+            mouse_encoding: screen.mouse_protocol_encoding(),
+            reviewing: self.review.is_some(),
+            selection_epoch: self.selection_epoch,
+            history_len: self.history_len,
+            viewport_start: self.history_len.saturating_sub(screen.scrollback()),
             scrollback: screen.scrollback(),
             title: self.parser.callbacks().title.clone(),
         }
     }
 }
+fn copy_rows(
+    screen: &mut vt100::Screen,
+    history: usize,
+    start: TextPosition,
+    end: TextPosition,
+) -> crate::Result<String> {
+    let (_, cols) = screen.size();
+    let mut text = String::new();
+    for row in start.row..=end.row {
+        screen.set_scrollback(history.saturating_sub(row));
+        let visible = u16::try_from(row.saturating_sub(history))
+            .map_err(|_| crate::TerminalError::Invalid("Invalid terminal row".into()))?;
+        let from = if row == start.row { start.col } else { 0 };
+        let to = if row == end.row { end.col } else { cols };
+        let mut line = String::new();
+        for col in from..to {
+            if let Some(cell) = screen.cell(visible, col)
+                && !cell.is_wide_continuation()
+            {
+                if cell.contents().is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(cell.contents());
+                }
+            }
+        }
+        text.push_str(line.trim_end());
+        if row < end.row && !screen.row_wrapped(visible) {
+            text.push('\n');
+        }
+        if text.len() > 4 * 1024 * 1024 {
+            return Err(crate::TerminalError::Invalid(
+                "Terminal copy exceeds 4 MiB".into(),
+            ));
+        }
+    }
+    Ok(text)
+}
+
 #[derive(Default)]
 struct Callbacks {
     title: String,
     replies: Vec<u8>,
+    clipboard: Option<String>,
 }
 impl vt100::Callbacks for Callbacks {
+    fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, target: &[u8], data: &[u8]) {
+        use base64::Engine as _;
+        if (!target.is_empty() && !target.contains(&b'c')) || data.len() > 6 * 1024 * 1024 {
+            return;
+        }
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data)
+            && bytes.len() <= 4 * 1024 * 1024
+            && let Ok(text) = String::from_utf8(bytes)
+        {
+            self.clipboard = Some(text);
+        }
+    }
+
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         self.title = String::from_utf8_lossy(title)
             .chars()

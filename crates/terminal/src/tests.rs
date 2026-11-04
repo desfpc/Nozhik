@@ -442,3 +442,126 @@ fn local_agent_detection_paste_and_stale_process_rejection() -> TestResult {
     manager.shutdown();
     Ok(())
 }
+
+#[test]
+fn frozen_history_copy_spans_pages_while_live_output_continues() -> TestResult {
+    use crate::grid::TextPosition;
+    let mut emulator = Emulator::new(4, 30);
+    for n in 0..40 {
+        emulator.process(format!("line {n} Ж🙂\r\n").as_bytes());
+    }
+    let epoch = emulator.snapshot().selection_epoch;
+    emulator.scroll_to(usize::MAX);
+    let frozen = emulator.snapshot();
+    assert!(frozen.reviewing);
+    assert_eq!(frozen.viewport_start, 0);
+    assert!(frozen.history_len > 30);
+    assert!(!frozen.cursor_visible);
+    let copied = emulator.copy_text(
+        epoch,
+        Some((
+            TextPosition { row: 2, col: 0 },
+            TextPosition { row: 35, col: 8 },
+        )),
+    )?;
+    assert!(copied.starts_with("line 2 Ж🙂\nline 3"));
+    assert!(copied.ends_with("line 35 ".trim_end()));
+    for n in 0..100 {
+        emulator.process(format!("new output {n}\r\n").as_bytes());
+    }
+    assert_eq!(
+        emulator.copy_text(
+            epoch,
+            Some((
+                TextPosition { row: 2, col: 0 },
+                TextPosition { row: 35, col: 8 }
+            ))
+        )?,
+        copied
+    );
+    assert_eq!(emulator.snapshot().viewport_start, 0);
+    emulator.live();
+    assert!(!emulator.snapshot().reviewing);
+    assert!(emulator.copy_text(epoch, None).is_err());
+    let live = emulator.snapshot();
+    assert!(live.cells.iter().any(|c| c.character == 'n'));
+    let mut wrapped = Emulator::new(2, 5);
+    wrapped.process(b"abcdefg");
+    assert_eq!(
+        wrapped.copy_text(wrapped.snapshot().selection_epoch, None)?,
+        "abcdefg"
+    );
+    Ok(())
+}
+
+#[test]
+fn negotiated_mouse_modes_and_review_are_independent() {
+    use crate::grid::{MouseProtocolEncoding, MouseProtocolMode};
+    let mut emulator = Emulator::new(3, 30);
+    emulator.process(b"\x1b[?1049h\x1b[?1002h\x1b[?1006hfull screen");
+    assert_eq!(
+        emulator.snapshot().mouse_mode,
+        MouseProtocolMode::ButtonMotion
+    );
+    assert_eq!(
+        emulator.snapshot().mouse_encoding,
+        MouseProtocolEncoding::Sgr
+    );
+    emulator.review();
+    assert_eq!(emulator.snapshot().mouse_mode, MouseProtocolMode::None);
+    assert!(emulator.snapshot().reviewing);
+    emulator.process(b"\x1b[?1002l\x1b[?1003h\x1b[?1006l\x1b[?1005h");
+    emulator.live();
+    assert_eq!(emulator.snapshot().mouse_mode, MouseProtocolMode::AnyMotion);
+    assert_eq!(
+        emulator.snapshot().mouse_encoding,
+        MouseProtocolEncoding::Utf8
+    );
+}
+
+#[test]
+fn native_selection_osc52_copy_is_gated_and_never_reads_clipboard() -> TestResult {
+    use crate::external::{ExternalOutput, ExternalTransport};
+    struct CopyTransport(std::collections::VecDeque<Vec<u8>>);
+    impl ExternalTransport for CopyTransport {
+        fn poll(&mut self) -> crate::Result<Option<ExternalOutput>> {
+            Ok(self.0.pop_front().map(ExternalOutput::Data))
+        }
+        fn write(&mut self, _: Vec<u8>) -> crate::Result<()> {
+            self.0
+                .push_back(b"\x1b]52;c;c2VsZWN0aW9uIHRleHQ=\x07".to_vec());
+            Ok(())
+        }
+        fn resize(&mut self, _: u16, _: u16) -> crate::Result<()> {
+            Ok(())
+        }
+        fn close(&mut self) {}
+    }
+    let mut manager = TerminalManager::new(Arc::new(|| {}));
+    let id = manager.create_external(
+        SessionOptions::new(std::path::PathBuf::new()),
+        Box::new(CopyTransport(std::collections::VecDeque::from([
+            b"\x1b]52;c;dW5zb2xpY2l0ZWQ=\x07".to_vec(),
+        ]))),
+    )?;
+    let session = manager.session(id).ok_or("missing clipboard fixture")?;
+    wait_for(|| session.snapshot().is_some_and(|s| s.grid.is_some()))?;
+    assert!(
+        !manager
+            .drain()
+            .any(|e| matches!(e, TerminalEvent::Copied { .. }))
+    );
+    session.write_mouse(b"\x1b[<0;2;2m".to_vec())?;
+    wait_for(|| {
+        manager
+            .drain()
+            .any(|e| matches!(e, TerminalEvent::Copied { text, .. } if text == "selection text"))
+    })?;
+    let mut emulator = Emulator::new(2, 20);
+    assert_eq!(emulator.process(b"\x1b]52;c;?\x07"), Vec::<u8>::new());
+    assert!(emulator.take_clipboard().is_none());
+    emulator.process(b"\x1b]52;p;c2VsZWN0aW9uIHRleHQ=\x07");
+    assert!(emulator.take_clipboard().is_none());
+    manager.shutdown();
+    Ok(())
+}

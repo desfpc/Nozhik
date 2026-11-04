@@ -71,6 +71,34 @@ pub fn apply(ctx: &Context) {
         egui::FontFamily::Name("JetBrains Mono".into()),
         vec!["JetBrains Mono".into()],
     );
+    fonts.font_data.insert(
+        "Noto Sans Symbols 2".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSymbols2-Regular.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "Noto Emoji".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoEmoji.ttf"
+        ))),
+    );
+    let mut terminal = vec![
+        "JetBrains Mono".into(),
+        "Noto Sans Symbols 2".into(),
+        "Noto Emoji".into(),
+    ];
+    terminal.extend(
+        fonts
+            .families
+            .get(&egui::FontFamily::Monospace)
+            .into_iter()
+            .flatten()
+            .cloned(),
+    );
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("Terminal".into()), terminal);
     ctx.set_fonts(fonts);
 
     let mut visuals = Visuals::dark();
@@ -136,4 +164,28 @@ pub fn dock_frame(fill: Color32) -> egui::Frame {
 /// Compact rail surrounding the work area.
 pub fn rail_frame() -> egui::Frame {
     egui::Frame::new().fill(CHROME).inner_margin(4)
+}
+
+#[cfg(test)]
+mod terminal_font_tests {
+    #[test]
+    fn terminal_font_covers_braille_powerline_blocks_unicode_and_emoji() {
+        let ctx = egui::Context::default();
+        super::apply(&ctx);
+        let _output = ctx.run(egui::RawInput::default(), |ctx| {
+            let font = egui::FontId::new(14.0, egui::FontFamily::Name("Terminal".into()));
+            ctx.fonts(|f| {
+                for c in (0x2800..=0x28ff)
+                    .filter_map(char::from_u32)
+                    .chain("\u{e0a0}─│┌┐└┘█▓▒░Ж→✓🙂".chars())
+                {
+                    assert!(
+                        f.has_glyph(&font, c),
+                        "missing terminal glyph U+{:04X}",
+                        u32::from(c)
+                    );
+                }
+            });
+        });
+    }
 }

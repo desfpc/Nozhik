@@ -39,6 +39,12 @@ Cargo graph for the requested target, not a universal audit of every platform.
   SIL Open Font License 1.1. The original font license is in
   crates/ui/assets/fonts/OFL.txt and reproduced in the generated text.
   https://github.com/JetBrains/JetBrainsMono
+- Noto Sans Symbols 2 and Noto Emoji: SIL Open Font License 1.1. Unmodified
+  upstream fonts are embedded as terminal fallbacks. Original copyright notices
+  and license texts are in crates/ui/assets/fonts/NotoSansSymbols2-OFL.txt and
+  NotoEmoji-OFL.txt, and reproduced in the generated legal text.
+  https://github.com/notofonts/noto-fonts
+  https://github.com/google/fonts/tree/main/ofl/notoemoji
 - egui default fonts include Ubuntu, Noto Emoji, Hack and emoji-icon-font.
   Their original OFL, Ubuntu Font Licence, MIT and other supplied notices are
   reproduced from the locked `epaint_default_fonts` package.

@@ -9,6 +9,7 @@ use std::{collections::HashMap, path::Path};
 pub const TERMINAL_LABEL: &str = "⌘ Terminal";
 pub struct TerminalPanel {
     manager: TerminalManager,
+    context: egui::Context,
     llm: bool,
     active: Option<TerminalSessionId>,
     snapshots: HashMap<TerminalSessionId, SessionSnapshot>,
@@ -24,6 +25,7 @@ impl TerminalPanel {
     pub fn new(ctx: &egui::Context) -> Self {
         let ctx = ctx.clone();
         Self {
+            context: ctx.clone(),
             llm: false,
             manager: TerminalManager::new(std::sync::Arc::new(move || ctx.request_repaint())),
             active: None,
@@ -84,6 +86,7 @@ impl TerminalPanel {
                     eprintln!("Terminal {}: {error}", id.0);
                     message = Some(error);
                 }
+                TerminalEvent::Copied { text, .. } => self.context.copy_text(text),
                 TerminalEvent::Started { .. } => {}
             }
         }
@@ -351,6 +354,23 @@ impl TerminalPanel {
                 ui.colored_label(crate::theme::ERROR, message);
             } else {
                 let grid = snapshot.and_then(|s| s.grid.as_deref());
+                if let Some(grid) = grid {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.selectable_label(grid.reviewing, "Text selection").on_hover_text("Freeze visible terminal text for scrolling and copying; output continues in the background").clicked() {
+                                self.focus = true;
+                                if grid.reviewing { session.live(); } else if let Err(e) = session.review() { error = Some(e.to_string()); }
+                            }
+                            if ui.button("Copy all").on_hover_text("Copy available terminal history and screen; in a fullscreen TUI this includes the currently rendered screen").clicked()
+                                && let Err(e) = session.copy_text(grid.selection_epoch, None) { error = Some(e.to_string()); }
+                            if grid.reviewing {
+                                if ui.button("Live · Esc").clicked() { session.live(); self.focus = true; }
+                            } else if grid.mouse_mode != nozhik_terminal::grid::MouseProtocolMode::None {
+                                ui.weak("Mouse → agent · Shift+drag to select text");
+                            }
+                        });
+                    });
+                }
                 if let Some(message) = self.view.show(
                     ui,
                     session,

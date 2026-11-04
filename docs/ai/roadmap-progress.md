@@ -3318,3 +3318,60 @@ Windows-кэш не создавался, Windows-бинарники не обн
 
 Пользователь вручную проверил LLM-консоль с Grok Build и подтвердил корректную
 работу всего функционала: контекст редактора, файлы и скриншоты.
+
+### Мышь, выделение и Unicode LLM-терминала (v0.1.32, 2026-11-04)
+
+TerminalGrid передаёт negotiated mouse mode/encoding. UI отправляет точные
+press/release, drag/motion и wheel координаты в xterm SGR/UTF-8/X10; учитывает
+модификаторы, границы ячеек, отпускание за пределами области и блокирующие модальные
+окна. Shift оставляет локальное выделение; правый клик при native capture получает
+агент, в локальном режиме остаётся Copy/Cut/Paste. Wheel/trackpad дроби и capture
+разделены по сессиям. Alternate-screen программы без mouse reporting получают
+стрелки колёсом. Кнопки и ссылки Grok обслуживаются его родными обработчиками.
+
+Для большого копирования добавлены Text selection, Copy all и Live · Esc.
+Review лениво клонирует ограниченный vt100 Screen; живой parser и процесс
+продолжают работать отдельно. History scrollbar, wheel, Shift+PageUp/PageDown
+и drag auto-scroll сохраняют абсолютные endpoints выделения между страницами.
+Worker CopyText проверяет epoch, читает весь диапазон (до 4 MiB), склеивает soft
+wrap и возвращает отдельный Copied event. Выход в live/resize освобождают frozen
+snapshot и инвалидируют диапазон. Нормальная история ограничена 3000 строками;
+локальная копия alternate screen содержит только видимый экран. Внутреннюю
+многостраничную историю Grok выделяет и копирует сам через native mouse.
+
+Поддержан резервный OSC 52 copy, который использует Grok после drag/release.
+Только UTF-8, до 4 MiB, только запись системного clipboard и только в течение
+5 секунд после явного native mouse input. Clipboard-read queries не получают
+ответа; unsolicited OSC 52 отбрасывается. Обработка не держит shared locks при
+публикации событий. base64 0.22.1 — новая прямая зависимость terminal, пакет уже
+был в Cargo.lock; других новых Rust-пакетов нет.
+
+Отдельное семейство Terminal: JetBrains Mono + Noto Sans Symbols 2 + современный
+Noto Emoji + прежние egui fallbacks. Устранены квадраты для Braille логотипа,
+Powerline/стрелок/блоков и обычных emoji. Fallback glyphs вписываются/обрезаются
+по terminal cell без изменения исходного Unicode в clipboard. Оба добавленных
+шрифта включены без модификаций; upstream OFL сохранены и встроены в legal
+sidecars. Обновлены README, architecture, coding standards и версия/lock —
+0.1.32; следующая доработка — 0.1.33.
+
+Проверки: native workspace/all-features последовательно — 302 passed, 0 failed,
+10 прежних optional ignored. Регрессии проверяют настоящие egui pointer/wheel
+события и точные SGR bytes, Shift override/modal gates, negotiated modes, большой
+frozen copy во время живого вывода, soft wraps/stale epochs, gated OSC 52 и запрет
+clipboard reads, покрытие всех 256 Braille patterns, Powerline и Unicode/emoji.
+Параллельный прогон выявлял прежний нестабильный SQL UI-тест Missing UI label:
+edited; изолированный тест и полный последовательный прогон прошли без изменения
+SQL-кода. Native Clippy workspace/all-targets/all-features с -D warnings,
+rustfmt и git diff --check прошли. Ручной native GUI и вход/запрос к настоящим
+LLM в этой задаче не выполнялись; protocol fixtures не используют аккаунты,
+модели или пользовательские проекты. Windows build/Clippy, commit и push
+не выполнялись.
+
+Workspace release build и штатный update-binaries.py прошли. Обновлены macOS ARM64
+executable/app archive; --check подтвердил source fingerprint и SHA-256. Проверены
+bundle 0.1.32, оба ZIP, codesign --verify --deep --strict, все четыре embedded
+legal sidecars и наличие обоих новых font OFL в поставке. После проверок cargo
+clean удалил 9.7 GiB; удалены временные upstream downloads, логи задачи, packaging
+bytecode и шесть untracked Finder files. Размер проекта после очистки — 383 MiB.
+Готовый macOS комплект сохранён; Windows-кэш не создавался, Windows-комплект
+не обновлялся. Финальные git status и git diff --check проверены.

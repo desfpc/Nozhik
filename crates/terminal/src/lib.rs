@@ -3,6 +3,7 @@ pub mod agent;
 pub mod external;
 pub mod grid;
 pub mod manager;
+pub mod mouse;
 pub mod pty;
 pub mod session;
 
@@ -24,6 +25,13 @@ pub enum TerminalEvent {
         id: TerminalSessionId,
         /// OS child process identifier, if available.
         pid: Option<u32>,
+    },
+    /// Explicit text-copy request completed on the worker.
+    Copied {
+        /// Session requesting the copy.
+        id: TerminalSessionId,
+        /// Plain text selected from the bounded terminal buffer.
+        text: String,
     },
     /// Child reaped; all normal exit codes are represented, including nonzero.
     Exited {

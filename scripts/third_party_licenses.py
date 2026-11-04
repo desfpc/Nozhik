@@ -76,6 +76,10 @@ def collect(destination, target):
             text.append("")
     text.extend(["=" * 72, "JetBrains Mono Regular",
                  (ROOT / "crates/ui/assets/fonts/OFL.txt").read_text(encoding="utf-8")])
+    text.extend(["=" * 72, "Noto Sans Symbols 2 Regular",
+                 (ROOT / "crates/ui/assets/fonts/NotoSansSymbols2-OFL.txt").read_text(encoding="utf-8")])
+    text.extend(["=" * 72, "Noto Emoji",
+                 (ROOT / "crates/ui/assets/fonts/NotoEmoji-OFL.txt").read_text(encoding="utf-8")])
     (destination / "THIRD_PARTY_LICENSES.txt").write_text("\n".join(text), encoding="utf-8")
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         (destination / name).write_bytes((ROOT / name).read_bytes())

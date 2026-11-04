@@ -3,20 +3,31 @@ use crate::theme;
 use egui::{Color32, Event, FontId, Key, Modifiers, Sense, Stroke, Ui};
 use nozhik_terminal::{
     TerminalSession, TerminalSessionId,
-    grid::{TerminalColor, TerminalGrid},
+    grid::{MouseProtocolMode, TerminalColor, TerminalGrid, TextPosition},
+    mouse::MouseAction,
 };
 use std::collections::HashMap;
+#[path = "terminal_pointer.rs"]
+mod pointer;
+use pointer::{MouseState, mouse_bytes, scrollbar};
+fn terminal_font(size: f32) -> FontId {
+    FontId::new(size, egui::FontFamily::Name("Terminal".into()))
+}
 
 #[derive(Default)]
 pub struct TerminalView {
     sizes: HashMap<TerminalSessionId, (u16, u16)>,
-    scroll: f32,
+    scroll: HashMap<TerminalSessionId, f32>,
+    mouse: HashMap<TerminalSessionId, MouseState>,
+    auto_scroll: f64,
     selections: HashMap<TerminalSessionId, Selection>,
 }
 impl TerminalView {
     pub fn forget(&mut self, id: TerminalSessionId) {
         self.sizes.remove(&id);
         self.selections.remove(&id);
+        self.scroll.remove(&id);
+        self.mouse.remove(&id);
     }
     pub fn clipboard_action(
         &mut self,
@@ -33,9 +44,8 @@ impl TerminalView {
         if action == "ui.paste" {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
         } else if let Some(grid) = grid {
-            let text = selection.text(grid);
-            if !text.is_empty() {
-                ctx.copy_text(text);
+            if let Err(error) = selection.copy(ctx, session, grid) {
+                eprintln!("Terminal copy: {error}");
             }
             if action == "ui.cut"
                 && let Some(bytes) = selection.cut_bytes(grid)
@@ -63,13 +73,18 @@ impl TerminalView {
         enabled: bool,
         focus: bool,
     ) -> Option<String> {
-        let font = FontId::monospace(font_size);
+        let mut font = terminal_font(font_size);
+        if !ui.fonts(|f| f.families().contains(&font.family)) {
+            font = FontId::monospace(font_size);
+        }
         let cell_width = ui.fonts(|f| f.glyph_width(&font, 'M')).max(1.0);
         let cell_height = font_size + 4.0;
         let (rect, _) = ui.allocate_exact_size(
             ui.available_size().max(egui::vec2(cell_width, cell_height)),
             Sense::hover(),
         );
+        let whole_rect = rect;
+        let rect = egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(12.0, 0.0));
         let response = ui.interact(rect, terminal_id(session.id()), Sense::click_and_drag());
         if enabled && (focus || response.clicked() || response.drag_started()) {
             response.request_focus();
@@ -86,21 +101,81 @@ impl TerminalView {
             }
         }
         ui.painter().rect_filled(rect, 0.0, theme::BACKGROUND);
-        if response.hovered() && enabled {
-            self.scroll += ui.input(|i| i.raw_scroll_delta.y) / cell_height;
-            let delta = self.scroll.trunc() as i32;
-            if delta != 0 {
-                match session.scroll(delta) {
-                    Ok(()) => self.scroll -= self.scroll.trunc(),
-                    Err(e) => error = Some(e.to_string()),
+        let events = ui.input(|i| i.events.clone());
+        let mut mouse = self.mouse.remove(&session.id()).unwrap_or_default();
+        if let Some(grid) = grid {
+            if let Some(message) = mouse.route(
+                ui,
+                session,
+                grid,
+                rect,
+                cell_width,
+                cell_height,
+                enabled,
+                &events,
+            ) {
+                error = Some(message);
+            }
+            let tracking =
+                grid.mouse_mode != MouseProtocolMode::None && !ui.input(|i| i.modifiers.shift);
+            if response.hovered() && enabled {
+                let scroll = self.scroll.entry(session.id()).or_default();
+                *scroll += ui.input(|i| i.raw_scroll_delta.y) / cell_height;
+                let steps = scroll.trunc().clamp(-32.0, 32.0) as i16;
+                let delta = i32::from(steps);
+                if delta != 0 {
+                    let result = if tracking {
+                        let (row, col) = mouse.last_cell.unwrap_or((0, 0));
+                        let mut bytes = Vec::new();
+                        for _ in 0..delta.unsigned_abs() {
+                            if let Some(part) = mouse_bytes(
+                                grid,
+                                MouseAction::Wheel(delta > 0),
+                                row,
+                                col,
+                                ui.input(|i| i.modifiers),
+                            ) {
+                                bytes.extend(part);
+                            }
+                        }
+                        if bytes.is_empty() {
+                            Ok(())
+                        } else {
+                            session.write_mouse(bytes)
+                        }
+                    } else if grid.alternate && !grid.reviewing {
+                        let key = if delta > 0 {
+                            Key::ArrowUp
+                        } else {
+                            Key::ArrowDown
+                        };
+                        let bytes = key_bytes(key, Modifiers::NONE, grid.application_cursor)
+                            .unwrap_or_default()
+                            .repeat(delta.unsigned_abs() as usize);
+                        session.write(bytes)
+                    } else {
+                        session.scroll(delta)
+                    };
+                    match result {
+                        Ok(()) => *scroll -= f32::from(steps),
+                        Err(e) => error = Some(e.to_string()),
+                    }
                 }
             }
+            if let Some(message) = scrollbar(ui, session, grid, whole_rect, enabled) {
+                error = Some(message);
+            }
         }
+        let native_drag = mouse.pressed.is_some();
+        self.mouse.insert(session.id(), mouse);
         let selection = self.selections.entry(session.id()).or_default();
         if let Some(grid) = grid {
-            if selection.geometry != (grid.rows, grid.cols, grid.scrollback) {
+            if enabled && grid.mouse_mode != MouseProtocolMode::None && events.iter().any(|e| matches!(e, Event::PointerButton { pos, pressed: true, modifiers, .. } if rect.contains(*pos) && !modifiers.shift)) {
+                selection.end = selection.anchor;
+            }
+            if selection.geometry != (grid.rows, grid.cols, grid.alternate, grid.selection_epoch) {
                 *selection = Selection {
-                    geometry: (grid.rows, grid.cols, grid.scrollback),
+                    geometry: (grid.rows, grid.cols, grid.alternate, grid.selection_epoch),
                     ..Selection::default()
                 };
             }
@@ -117,7 +192,7 @@ impl TerminalView {
                 } else {
                     col
                 };
-                (row, col)
+                (grid.viewport_start + usize::from(row), col)
             };
             // Native input can deliver a complete drag between two frames. Replay
             // pointer events in order instead of relying on the final button state.
@@ -130,9 +205,16 @@ impl TerminalView {
                         modifiers,
                     } if enabled
                         && rect.contains(pos)
-                        && ui.ctx().layer_id_at(pos) == Some(ui.layer_id()) =>
+                        && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+                        && (grid.mouse_mode == MouseProtocolMode::None || modifiers.shift)
+                        && !native_drag =>
                     {
                         response.request_focus();
+                        if !grid.reviewing
+                            && let Err(e) = session.review()
+                        {
+                            error = Some(e.to_string());
+                        }
                         let point = position(pos);
                         if !modifiers.shift {
                             selection.anchor = point;
@@ -161,38 +243,65 @@ impl TerminalView {
             if !enabled {
                 selection.dragging = false;
             }
+            if selection.dragging
+                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+            {
+                selection.end = position(pos);
+                let delta = if pos.y < rect.top() + cell_height {
+                    2
+                } else if pos.y > rect.bottom() - cell_height {
+                    -2
+                } else {
+                    0
+                };
+                let time = ui.input(|i| i.time);
+                if delta != 0 {
+                    if time - self.auto_scroll >= 0.05 {
+                        if let Err(e) = session.scroll(delta) {
+                            error = Some(e.to_string());
+                        }
+                        self.auto_scroll = time;
+                    }
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(50));
+                }
+            }
         }
         response.clone().on_hover_cursor(egui::CursorIcon::Text);
         let mut clipboard = None;
-        response.context_menu(|ui| {
-            if ui
-                .add_enabled(
-                    enabled && selection.anchor != selection.end,
-                    egui::Button::new("Copy"),
-                )
-                .clicked()
-            {
-                clipboard = Some("ui.copy");
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    enabled && grid.is_some_and(|g| selection.cut_bytes(g).is_some()),
-                    egui::Button::new("Cut"),
-                )
-                .clicked()
-            {
-                clipboard = Some("ui.cut");
-                ui.close();
-            }
-            if ui
-                .add_enabled(enabled, egui::Button::new("Paste"))
-                .clicked()
-            {
-                clipboard = Some("ui.paste");
-                ui.close();
-            }
-        });
+        if grid.is_none_or(|g| g.mouse_mode == MouseProtocolMode::None)
+            || ui.input(|i| i.modifiers.shift)
+        {
+            response.context_menu(|ui| {
+                if ui
+                    .add_enabled(
+                        enabled && selection.anchor != selection.end,
+                        egui::Button::new("Copy"),
+                    )
+                    .clicked()
+                {
+                    clipboard = Some("ui.copy");
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        enabled && grid.is_some_and(|g| selection.cut_bytes(g).is_some()),
+                        egui::Button::new("Cut"),
+                    )
+                    .clicked()
+                {
+                    clipboard = Some("ui.cut");
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Paste"))
+                    .clicked()
+                {
+                    clipboard = Some("ui.paste");
+                    ui.close();
+                }
+            });
+        }
         if let Some(action) = clipboard {
             response.request_focus();
             self.clipboard_action(ui.ctx(), session, grid, action);
@@ -223,8 +332,11 @@ impl TerminalView {
                 }
                 let selection = self.selections.entry(session.id()).or_default();
                 if matches!(event, Event::Copy | Event::Cut) && selection.anchor != selection.end {
-                    ui.ctx()
-                        .copy_text(grid.map_or_else(String::new, |g| selection.text(g)));
+                    if let Some(grid) = grid
+                        && let Err(e) = selection.copy(ui.ctx(), session, grid)
+                    {
+                        error = Some(e.to_string());
+                    }
                     if matches!(event, Event::Cut)
                         && let Some(bytes) = grid.and_then(|g| selection.cut_bytes(g))
                     {
@@ -234,6 +346,28 @@ impl TerminalView {
                         selection.end = selection.anchor;
                     }
                     continue;
+                }
+                if let Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = &event
+                {
+                    if *key == Key::Escape && grid.is_some_and(|g| g.reviewing) {
+                        session.live();
+                        selection.end = selection.anchor;
+                        continue;
+                    }
+                    if modifiers.shift && matches!(key, Key::PageUp | Key::PageDown) {
+                        let lines = i32::from(rows.saturating_sub(1));
+                        if let Err(e) =
+                            session.scroll(if *key == Key::PageUp { lines } else { -lines })
+                        {
+                            error = Some(e.to_string());
+                        }
+                        continue;
+                    }
                 }
                 if let Some(bytes) = encode(
                     &event,
@@ -290,27 +424,12 @@ impl TerminalView {
                 if self
                     .selections
                     .get(&session.id())
-                    .is_some_and(|s| s.contains(row, col))
+                    .is_some_and(|s| s.contains(grid.viewport_start + usize::from(row), col))
                 {
                     painter.rect_filled(cell_rect, 0.0, theme::ACCENT);
                 }
                 if !cell.continuation && !cell.text.is_empty() {
-                    let mut job = egui::text::LayoutJob::default();
-                    job.append(
-                        &cell.text,
-                        0.0,
-                        egui::TextFormat {
-                            font_id: font.clone(),
-                            color: fg,
-                            italics: cell.style.italic,
-                            ..Default::default()
-                        },
-                    );
-                    let galley = ui.fonts(|f| f.layout_job(job));
-                    painter.galley(origin, galley.clone(), fg);
-                    if cell.style.bold {
-                        painter.galley(origin + egui::vec2(0.5, 0.0), galley, fg);
-                    }
+                    paint_text(ui, &painter, &font, cell_rect, &cell.text, fg, cell.style);
                 }
                 if cell.style.underline {
                     painter.line_segment(
@@ -344,22 +463,62 @@ impl TerminalView {
         error
     }
 }
+fn paint_text(
+    ui: &Ui,
+    painter: &egui::Painter,
+    font: &FontId,
+    rect: egui::Rect,
+    text: &str,
+    color: Color32,
+    style: nozhik_terminal::grid::CellStyle,
+) {
+    let layout = |font_id| {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat {
+                font_id,
+                color,
+                italics: style.italic,
+                ..Default::default()
+            },
+        );
+        ui.fonts(|f| f.layout_job(job))
+    };
+    let mut galley = layout(font.clone());
+    let scale = (rect.width() / galley.size().x.max(1.0))
+        .min(rect.height() / galley.size().y.max(1.0))
+        .min(1.0);
+    if scale < 1.0 {
+        let mut font = font.clone();
+        font.size *= scale;
+        galley = layout(font);
+    }
+    let origin = rect.min + (rect.size() - galley.size()).max(egui::Vec2::ZERO) * 0.5;
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(rect));
+    painter.galley(origin, galley.clone(), color);
+    if style.bold {
+        painter.galley(origin + egui::vec2(0.5, 0.0), galley, color);
+    }
+}
+
 fn terminal_id(id: TerminalSessionId) -> egui::Id {
     egui::Id::new(("terminal_input", id.0))
 }
 
 #[derive(Default)]
 struct Selection {
-    anchor: (u16, u16),
-    end: (u16, u16),
-    geometry: (u16, u16, usize),
+    anchor: (usize, u16),
+    end: (usize, u16),
+    geometry: (u16, u16, bool, u64),
     dragging: bool,
 }
 impl Selection {
-    fn bounds(&self) -> ((u16, u16), (u16, u16)) {
+    fn bounds(&self) -> ((usize, u16), (usize, u16)) {
         (self.anchor.min(self.end), self.anchor.max(self.end))
     }
-    fn contains(&self, row: u16, col: u16) -> bool {
+    fn contains(&self, row: usize, col: u16) -> bool {
         let (start, end) = self.bounds();
         (row, col) >= start && (row, col) < end
     }
@@ -368,11 +527,11 @@ impl Selection {
         if start == end {
             return String::new();
         }
-        let mut lines = Vec::new();
-        for row in start.0..=end.0.min(grid.rows.saturating_sub(1)) {
+        let mut selected = String::new();
+        for row in 0..grid.rows {
             let mut text = String::new();
             for col in 0..grid.cols {
-                if self.contains(row, col)
+                if self.contains(grid.viewport_start + usize::from(row), col)
                     && let Some(cell) = grid.cell(row, col)
                     && !cell.continuation
                 {
@@ -383,9 +542,50 @@ impl Selection {
                     }
                 }
             }
-            lines.push(text.trim_end().to_owned());
+            let absolute = grid.viewport_start + usize::from(row);
+            if absolute >= start.0 && absolute <= end.0 {
+                selected.push_str(text.trim_end());
+                if absolute < end.0
+                    && !grid
+                        .wrapped_rows
+                        .get(usize::from(row))
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    selected.push('\n');
+                }
+            }
         }
-        lines.join("\n")
+        selected
+    }
+    fn copy(
+        &self,
+        ctx: &egui::Context,
+        session: &TerminalSession,
+        grid: &TerminalGrid,
+    ) -> nozhik_terminal::Result<()> {
+        let (start, end) = self.bounds();
+        if start == end {
+            return Ok(());
+        }
+        if start.0 >= grid.viewport_start && end.0 < grid.viewport_start + usize::from(grid.rows) {
+            ctx.copy_text(self.text(grid));
+            Ok(())
+        } else {
+            session.copy_text(
+                grid.selection_epoch,
+                Some((
+                    TextPosition {
+                        row: start.0,
+                        col: start.1,
+                    },
+                    TextPosition {
+                        row: end.0,
+                        col: end.1,
+                    },
+                )),
+            )
+        }
     }
     // Only the live cursor row can be edited through a shell's line editor.
     // History and TUI output are immutable; Cut there remains Copy.
@@ -393,16 +593,20 @@ impl Selection {
         let (start, end) = self.bounds();
         if start == end
             || grid.alternate
+            || grid.reviewing
             || grid.scrollback != 0
             || start.0 != end.0
-            || end.0 != grid.cursor.0
+            || end.0 != grid.viewport_start + usize::from(grid.cursor.0)
             || end.1 > grid.cursor.1
         {
             return None;
         }
         let glyphs = |from, to| {
             (from..to)
-                .filter(|col| grid.cell(end.0, *col).is_some_and(|c| !c.continuation))
+                .filter(|col| {
+                    grid.cell(grid.cursor.0, *col)
+                        .is_some_and(|c| !c.continuation)
+                })
                 .count()
         };
         let mut bytes = b"\x1b[D".repeat(glyphs(end.1, grid.cursor.1));
@@ -646,7 +850,7 @@ mod tests {
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         rect = ui.available_rect_before_wrap();
-                        cell = ui.fonts(|f| f.glyph_width(&FontId::monospace(14.0), 'M'));
+                        cell = ui.fonts(|f| f.glyph_width(&terminal_font(14.0), 'M'));
                         assert!(
                             view.show(ui, session, Some(&grid), 14.0, enabled, false)
                                 .is_none()

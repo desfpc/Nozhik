@@ -976,6 +976,7 @@ mod tests {
             "a.html",
             "a.js",
             "a.yaml",
+            "a.JSON",
             "a.go",
             "a.png",
             "a.txt",

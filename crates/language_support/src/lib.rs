@@ -6,6 +6,7 @@ pub mod css_symbols;
 pub mod doc_provider;
 pub mod formatting;
 pub mod highlighter;
+pub mod json;
 pub mod lsp;
 pub mod php_stubs;
 mod php_symbols;
@@ -233,59 +234,40 @@ impl LanguageService {
         std::thread::spawn(move || {
             let mut parsers = HashMap::new();
             while let Ok(command) = input.recv() {
-                let result =
-                    match command {
-                        Command::Sync {
-                            uri,
-                            revision,
-                            text,
-                        } => {
-                            let parser = parsers
-                                .entry(uri.clone())
-                                .or_insert_with(|| highlighter::Highlighter::for_uri(&uri));
-                            match parser {
-                                Ok(parser) => parser.highlight(&text.to_string()).map(|spans| {
-                                    Event::Highlights {
-                                        uri: uri.clone(),
-                                        revision,
-                                        spans,
-                                        syntax: parser.diagnostics(),
-                                        colors: if css::is_css(&uri) {
-                                            css::colors(&text.to_string()).unwrap_or_default()
-                                        } else {
-                                            Vec::new()
-                                        },
-                                    }
-                                }),
-                                Err(error) => Err(Error::Protocol(error.to_string())),
-                            }
-                        }
-                        Command::Close(uri) => {
-                            parsers.remove(&uri);
-                            continue;
-                        }
-                        Command::Format {
+                let result = match command {
+                    Command::Sync {
+                        uri,
+                        revision,
+                        text,
+                    } => syntax_snapshot(&mut parsers, uri, revision, &text.to_string()),
+                    Command::Close(uri) => {
+                        parsers.remove(&uri);
+                        continue;
+                    }
+                    Command::Format {
+                        uri,
+                        revision,
+                        token,
+                        source,
+                        style,
+                        range,
+                    } => {
+                        let edits = if json::is_json(&uri) {
+                            json::format(&source, &style, range.as_ref())
+                        } else if yaml::is_yaml(&uri) {
+                            yaml::format(&source, &style, range.as_ref())
+                        } else {
+                            css::format(&source, &style, range.as_ref())
+                        };
+                        Ok(Event::Formatted {
                             uri,
                             revision,
                             token,
-                            source,
-                            style,
-                            range,
-                        } => {
-                            let edits = if yaml::is_yaml(&uri) {
-                                yaml::format(&source, &style, range.as_ref())
-                            } else {
-                                css::format(&source, &style, range.as_ref())
-                            };
-                            Ok(Event::Formatted {
-                                uri,
-                                revision,
-                                token,
-                                edits,
-                            })
-                        }
-                        Command::Request { .. } => continue,
-                    };
+                            edits,
+                        })
+                    }
+                    Command::Request { .. } => continue,
+                };
                 if output
                     .send(result.unwrap_or_else(|e| Event::Error(e.to_string())))
                     .is_err()
@@ -328,7 +310,7 @@ impl LanguageService {
             Command::Sync { uri, .. }
             | Command::Format { uri, .. }
             | Command::Request { uri, .. }
-            | Command::Close(uri) => css::is_css(uri) || yaml::is_yaml(uri),
+            | Command::Close(uri) => css::is_css(uri) || yaml::is_yaml(uri) || json::is_json(uri),
         };
         if local_command {
             return self.syntax.try_send(command).is_ok();
@@ -542,4 +524,38 @@ async fn format_document(
         }
     }
     formatting::php_edits(source, style, range.as_ref())
+}
+
+fn syntax_snapshot(
+    parsers: &mut HashMap<lsp_types::Url, Result<highlighter::Highlighter>>,
+    uri: lsp_types::Url,
+    revision: u64,
+    source: &str,
+) -> Result<Event> {
+    if json::is_json(&uri) {
+        return Ok(Event::Highlights {
+            uri,
+            revision,
+            spans: json::highlight(source),
+            syntax: Vec::new(),
+            colors: Vec::new(),
+        });
+    }
+    let parser = parsers
+        .entry(uri.clone())
+        .or_insert_with(|| highlighter::Highlighter::for_uri(&uri));
+    match parser {
+        Ok(parser) => parser.highlight(source).map(|spans| Event::Highlights {
+            uri: uri.clone(),
+            revision,
+            spans,
+            syntax: parser.diagnostics(),
+            colors: if css::is_css(&uri) {
+                css::colors(source).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+        }),
+        Err(error) => Err(Error::Protocol(error.to_string())),
+    }
 }

@@ -1844,3 +1844,37 @@ Dirty gate проверяет только запрошенные файлы, п
 возвращается ошибка до удалённых записей. Прогресс/отмена доступны также в Git.
 Remote actions dropdown использует square 36×50 chrome рядом с Pull/Push без
 рамки и межкнопочного разделителя, сохраняя popup и прежние Git actions.
+
+
+### JSON и Tools (v0.1.35)
+
+LanguageId::Json регистрирует .json без учёта регистра. Syntax worker использует
+language_support::json: UTF-8 lexer и serde IgnoredAny validation; JSON не передаётся
+PHP actor и не входит в список PHP/CSS index workers. JSON formatting через прежний
+Command::Format сохраняет BufferId/revision/profile gates и атомарный Undo.
+Форматтер меняет только промежутки между токенами, не пересериализует Value:
+порядок/дубли ключей, строковые escapes и числовые lexemes сохраняются.
+
+ui::tools принадлежит сессии проекта. LeftTool::Tools исключает боковой dock и
+занимает CentralPanel вместо файлового редактора, как Git center. Внутри — каталог
+либо выбранный JSON; Back to Tools возвращает каталог, переключение rail сохраняет
+scratch text. Плавающих Window для Tools/JSON нет. Minified JSON находится сверху,
+Formatted JSON снизу; drag splitter меняет соотношение высот. TextEdit размещается
+через show в top-down/Align::Min layout, без add_sized (centered overflow обрезает
+начало длинных строк). ScrollArea ограничивает обе оси каждой панели независимо.
+При переносе файла сбрасываются cursor/selection/undo и scroll offsets к началу.
+
+Open in Tools / JSON копирует текущий buffer snapshot. Отдельный worker с bounded
+input queue форматирует оба представления, возвращает spans и будит UI; revision
+gate отклоняет stale replies. Незавершённый ввод сохраняется до валидного результата.
+Cursor/selection remap следует позиции внутри токена, включая Unicode/пробелы в
+строках. Лимит 2 MiB; clipboard и scratch content не пишутся на диск, переключение
+раздела сохраняет текст до закрытия проекта. Новых зависимостей/semantic JSON cache нет.
+
+### Миграция языков (v0.1.36)
+
+Config.language_catalog_version=1 маркирует сохранённую политику с JSON. Отсутствующий
+маркер десериализуется как 0; ConfigManager::read после успешного разбора добавляет
+JSON в непустой legacy enabled_languages и устанавливает маркер 1 в памяти. Пустой
+список остаётся пустым. Миграция не пишет файл; при обычном последующем сохранении
+маркер позволяет сохранять явный opt-out JSON. Остальные языки не изменяются.

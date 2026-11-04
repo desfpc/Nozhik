@@ -599,7 +599,7 @@ pub fn paste_edit(
     text: &str,
     style: Option<&CodeStyle>,
 ) -> (Range<usize>, String) {
-    if style.is_some_and(|s| s.language == "yaml") {
+    if style.is_some_and(|s| matches!(s.language.as_str(), "yaml" | "json")) {
         return (range, text.into());
     }
     if text.is_empty()

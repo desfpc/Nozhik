@@ -38,6 +38,7 @@ mod terminal_panel;
 mod terminal_view;
 pub mod theme;
 mod tool_icons;
+mod tools;
 mod usages_popup;
 mod vcs_panel;
 
@@ -86,6 +87,8 @@ pub enum LeftTool {
     Database,
     /// Project Docker Compose containers.
     Docker,
+    /// Tools catalog and the selected full-size tool.
+    Tools,
     /// Notifications placeholder.
     Notifications,
 }
@@ -116,6 +119,7 @@ pub struct NozhikUi {
     llm: Option<llm_panel::LlmPanel>,
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
+    tools: tools::Tools,
     plugins_open: bool,
     plugin_tab: Option<String>,
     editor_focus: Option<egui::Id>,
@@ -199,6 +203,7 @@ impl NozhikUi {
             llm: None,
             language: language::LanguageUi::default(),
             plugins,
+            tools: tools::Tools::default(),
             plugins_open: false,
             plugin_tab: None,
             editor_focus: None,
@@ -241,15 +246,16 @@ impl NozhikUi {
 
     fn action_context(&self) -> ActionContext {
         ActionContext {
-            editor_open: self
-                .database
-                .active
-                .and_then(|i| self.database.tabs.get(i))
-                .is_some_and(|t| t.open)
-                || self
+            editor_open: self.left != Some(LeftTool::Tools)
+                && (self
+                    .database
                     .active
-                    .and_then(|i| self.documents.get(i))
-                    .is_some_and(|d| d.open && !d.binary),
+                    .and_then(|i| self.database.tabs.get(i))
+                    .is_some_and(|t| t.open)
+                    || self
+                        .active
+                        .and_then(|i| self.documents.get(i))
+                        .is_some_and(|d| d.open && !d.binary)),
             editor_focus: self.editor_focus.is_some() && !self.global_modal(),
             selected_file: self.selected_file.is_some(),
             project_open: self.project.is_some(),
@@ -257,6 +263,9 @@ impl NozhikUi {
     }
 
     fn open_document(&mut self, index: usize) {
+        if self.left == Some(LeftTool::Tools) {
+            self.left = Some(LeftTool::Project);
+        }
         self.database.active = None;
         if let Some(document) = self.documents.get_mut(index) {
             document.open = true;

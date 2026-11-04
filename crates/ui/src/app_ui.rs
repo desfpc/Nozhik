@@ -113,6 +113,10 @@ impl NozhikUi {
                                 panel.focus = true;
                             }
                         }
+                        "ui.tools" => {
+                            self.left = Some(LeftTool::Tools);
+                            self.tools.json_open = false;
+                        }
                         "ui.plugins" => self.plugins_open = true,
                         "ui.git" => {
                             self.left = if self.left == Some(LeftTool::Commit) {
@@ -387,6 +391,7 @@ impl NozhikUi {
                     (Icon::Database, "Database", LeftTool::Database),
                     (Icon::Docker, "Docker", LeftTool::Docker),
                     (Icon::Bell, "Notifications", LeftTool::Notifications),
+                    (Icon::Tools, "Tools", LeftTool::Tools),
                 ] {
                     if ui
                         .add_enabled_ui(
@@ -396,6 +401,9 @@ impl NozhikUi {
                         .inner
                         .clicked()
                     {
+                        if tool == LeftTool::Tools {
+                            self.tools.json_open = false;
+                        }
                         self.left = if self.left == Some(tool) {
                             None
                         } else {
@@ -440,7 +448,7 @@ impl NozhikUi {
         let viewport = ctx
             .input(|i| i.viewport().inner_rect)
             .unwrap_or_else(|| ctx.screen_rect());
-        if let Some(tool) = self.left {
+        if let Some(tool) = self.left.filter(|tool| *tool != LeftTool::Tools) {
             let dock_id = if tool == LeftTool::Commit {
                 "git_dock"
             } else {
@@ -484,6 +492,7 @@ impl NozhikUi {
                             LeftTool::Docker => "Docker",
                             LeftTool::Notifications => "Notifications",
                             LeftTool::Remote => "Remote Host / SSH",
+                            LeftTool::Tools => "Tools",
                         });
                         ui.separator();
                     }
@@ -519,6 +528,16 @@ impl NozhikUi {
         reason = "Routes existing file and database tabs through one central panel"
     )]
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
+        if self.left == Some(LeftTool::Tools) {
+            egui::CentralPanel::default()
+                .frame(theme::dock_frame(theme::BACKGROUND))
+                .show(ctx, |ui| {
+                    let enabled = !self.global_modal();
+                    ui.add_enabled_ui(enabled, |ui| self.tools.show(ui));
+                });
+            self.editor_focus = None;
+            return;
+        }
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
                 .frame(
@@ -561,6 +580,20 @@ impl NozhikUi {
                     if self.documents[index].binary {
                         ui.label("Binary file not supported");
                         return;
+                    }
+                    if nozhik_config::languages::language_for_path(&self.documents[index].path)
+                        == Some(nozhik_config::languages::LanguageId::Json)
+                    {
+                        ui.horizontal(|ui| {
+                            if ui.button("Open in Tools / JSON").clicked() {
+                                self.tools
+                                    .load(self.documents[index].buffer.rope().to_string());
+                                self.left = Some(LeftTool::Tools);
+                            }
+                            if ui.button("Reformat JSON").clicked() {
+                                self.reformat_code(ctx);
+                            }
+                        });
                     }
                     let editor_id = ui
                         .id()

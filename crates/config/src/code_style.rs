@@ -141,6 +141,10 @@ impl CodeStyles {
             "css_default.json".into(),
             CodeStyle::parse(include_str!("../code_styles/css/css_default.json"))?,
         );
+        catalog.0.entry("json".into()).or_default().insert(
+            "json_default.json".into(),
+            CodeStyle::parse(include_str!("../code_styles/json/json_default.json"))?,
+        );
         let yaml = CodeStyle::parse(include_str!("../code_styles/yaml/yaml_default.json"))?;
         for extension in ["yaml", "yml"] {
             catalog
@@ -201,6 +205,7 @@ impl CodeStyles {
 pub fn default_profile(extension: &str) -> Option<&'static str> {
     match extension {
         "php" | "phtml" => Some("php_psr12.json"),
+        "json" => Some("json_default.json"),
         "css" => Some("css_default.json"),
         "yaml" | "yml" => Some("yaml_default.json"),
         _ => None,

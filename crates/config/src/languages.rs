@@ -18,6 +18,8 @@ pub enum LanguageId {
     Html,
     /// YAML syntax and local formatting (no semantic index).
     Yaml,
+    /// JSON syntax and local formatting (no semantic index).
+    Json,
     /// Go (reserved).
     #[serde(alias = "Go")]
     Go,
@@ -47,6 +49,12 @@ pub const LANGUAGES: &[LanguageSpec] = &[
         id: LanguageId::Php,
         label: "PHP",
         extensions: PHP_EXTENSIONS,
+        available: true,
+    },
+    LanguageSpec {
+        id: LanguageId::Json,
+        label: "JSON",
+        extensions: &["json"],
         available: true,
     },
     LanguageSpec {
@@ -118,6 +126,7 @@ mod tests {
             "a.PHP",
             "template.phtml",
             "template.PHTML",
+            "a.JSON",
             "a.YAML",
             "a.yml",
         ] {

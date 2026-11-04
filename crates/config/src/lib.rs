@@ -35,6 +35,9 @@ pub struct Config {
     pub php_language_level: String,
     /// Enabled language services/indexers. Empty means plain-text editing only.
     pub enabled_languages: std::collections::BTreeSet<languages::LanguageId>,
+    /// Language catalog migration marker. Zero identifies settings predating JSON support.
+    #[serde(default)]
+    pub language_catalog_version: u8,
     /// Enable local Ollama ghost completions.
     pub ai_enabled: bool,
     /// Ollama model name; downloads are always explicit.
@@ -57,6 +60,7 @@ impl Default for Config {
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
             enabled_languages: languages::default_enabled(),
+            language_catalog_version: 1,
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 1000,
@@ -191,7 +195,7 @@ impl ConfigManager {
 
     fn read(path: &Path) -> Result<Config, ConfigError> {
         let format = Format::from_path(path)?;
-        let config = match fs::read_to_string(path) {
+        let mut config: Config = match fs::read_to_string(path) {
             Ok(source) => match format {
                 Format::Toml => toml::from_str(&source)?,
                 Format::Json => serde_json::from_str(&source)?,
@@ -199,6 +203,14 @@ impl ConfigManager {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Config::default(),
             Err(error) => return Err(error.into()),
         };
+        if config.language_catalog_version == 0 {
+            // Old explicit lists could not express an opt-out of the new JSON backend.
+            // Keep an intentionally empty (all services disabled) selection unchanged.
+            if !config.enabled_languages.is_empty() {
+                config.enabled_languages.insert(languages::LanguageId::Json);
+            }
+            config.language_catalog_version = 1;
+        }
         config.validate()?;
         Ok(config)
     }
@@ -330,6 +342,49 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn legacy_json_policy_migrates_once_and_explicit_opt_out_survives() -> Result<(), Box<dyn Error>>
+    {
+        let dir = tempfile::tempdir()?;
+        for (extension, source) in [
+            ("toml", "enabled_languages = ['php','css','yaml']"),
+            ("json", r#"{"enabled_languages":["php","css","yaml"]}"#),
+        ] {
+            let path = dir.path().join(format!("settings.{extension}"));
+            fs::write(&path, source)?;
+            let manager = ConfigManager::from_path(path.clone(), EventBus::new(8)?)?;
+            let mut config = manager.snapshot()?;
+            assert!(
+                config
+                    .enabled_languages
+                    .contains(&languages::LanguageId::Json)
+            );
+            assert_eq!(config.language_catalog_version, 1);
+            assert_eq!(
+                fs::read_to_string(&path)?,
+                source,
+                "migration must not write implicitly"
+            );
+            config
+                .enabled_languages
+                .remove(&languages::LanguageId::Json);
+            manager.replace(config.clone())?;
+            manager.save()?;
+            assert_eq!(
+                ConfigManager::from_path(path, EventBus::new(8)?)?.snapshot()?,
+                config
+            );
+        }
+        let path = dir.path().join("disabled.toml");
+        fs::write(&path, "enabled_languages = []")?;
+        assert!(
+            ConfigManager::from_path(path, EventBus::new(8)?)?
+                .snapshot()?
+                .enabled_languages
+                .is_empty()
+        );
+        Ok(())
+    }
     #[test]
     fn validates_and_publishes_after_commit() -> Result<(), Box<dyn Error>> {
         let dir = tempfile::tempdir()?;

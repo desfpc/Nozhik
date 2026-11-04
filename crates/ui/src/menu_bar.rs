@@ -81,7 +81,10 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
         ],
     ),
     ("Terminal", &[("ui.new_terminal", "New Terminal", "")]),
-    ("Tools", &[("ui.plugins", "Plugins", "")]),
+    (
+        "Tools",
+        &[("ui.tools", "Tools", ""), ("ui.plugins", "Plugins", "")],
+    ),
     ("Help", &[("ui.about", "About Nozhik", "")]),
 ];
 pub fn shortcut(id: &str, bindings: &[nozhik_plugin_host::keymap::KeyBinding]) -> String {

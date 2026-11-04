@@ -3469,3 +3469,97 @@ Windows-комплект не обновлялся.
 packaging bytecode и семь untracked Finder files. Размер проекта — 386 MiB;
 исходники, незакоммиченные правки и готовый комплект сохранены. Финальные
 размер/git status/git diff --check проверены.
+
+### JSON и каталог Tools (v0.1.35, 2026-11-04)
+
+.json (включая .JSON) получает лексическую подсветку ключей, строк, чисел,
+boolean/null и пунктуации. Reformat Code / Reformat JSON форматирует весь файл
+или самостоятельное JSON-значение в выделении по профилю JSON из File Types.
+Учитываются отступ окружающего блока, выбранные spaces/tabs и CRLF. Форматтер
+валидирует через IgnoredAny и меняет только whitespace: порядок/повторы ключей,
+Unicode/escapes и числовые lexemes, включая большие экспоненты, сохраняются.
+JSON не входит в semantic index, не получает PHP stubs и не запускает PHP LSP.
+
+Tools в левом rail и верхнем меню открывает каталог инструментов. JSON из каталога
+открывает отдельное плавающее окно, которое остаётся открытым после закрытия
+каталога. Два активных поля Minified JSON / Formatted JSON синхронизируются после
+валидных правок и автоматически форматируются; у каждого есть Copy. Clear очищает
+оба. Ошибочный/незавершённый ввод сохраняется с подсветкой и ошибкой; другое поле
+хранит последний корректный результат. Background worker имеет bounded input queue,
+revision gate, callback wake; cursor/selection remap сохраняет позицию в токенах.
+Лимит ввода — 2 MiB. Текст принадлежит сессии проекта, не сохраняется на диск.
+
+Open in Tools → JSON в редакторе переносит текущий буфер, включая несохранённый
+текст; исходный файл инструмент не меняет. Новая регистрация сохраняет прежний
+порядок языков в компактных Settings. Версия workspace/lock/UI/bundle — 0.1.35;
+следующая доработка — 0.1.36. Новых зависимостей нет.
+
+Проверки: cargo fmt --all -- --check; native Clippy workspace/all-targets/all-features
+с -D warnings; cargo test --workspace --all-features -- --test-threads=1 — 318 passed,
+0 failed, 10 прежних optional ignored; cargo build --workspace --release. Новый
+pointer/keyboard UI test открывает JSON из файла, вставляет текст в оба поля,
+проверяет Copy и сохранность исходника; отдельные тесты проверяют каталог/отдельное
+окно, синхронизацию, malformed/stale replies, Unicode cursor mapping, size limit,
+подсветку файла, atomic Undo, lossless formatting, profiles/ranges/CRLF. Полный
+sandbox прогон блокировал localhost/PTY fixtures; итоговый прогон с системным
+доступом прошёл. Native GUI вручную и Windows build/Clippy не запускались.
+
+Штатный update-binaries.py обновил macOS ARM64; --check подтвердил source fingerprint
+и SHA-256. Проверены версия bundle 0.1.35, ZIP integrity и четыре embedded legal
+sidecars; упаковщик выполнил codesign --verify --deep --strict. Windows-комплект
+не обновлялся. Commit и push не выполнялись.
+
+После проверки готового комплекта cargo clean удалил 9.4 GiB; удалены task logs
+и шесть untracked Finder files. Финальный размер проекта — 387 MiB, binaries —
+108 MiB. Исходники, незакоммиченные правки, история и готовые бинарники/legal
+materials сохранены. После очистки сборки не запускались; native --check,
+git diff --check, размер и git status проверены.
+
+### Исправление JSON и полноразмерный Tools (v0.1.36, 2026-11-04)
+
+Старые project settings с явно сохранённым списком PHP/CSS/YAML исключали JSON
+из language worker, поэтому JSON открывался без подсветки и Reformat не работал.
+ConfigManager::read теперь мигрирует непустой legacy список: добавляет JSON и
+устанавливает language_catalog_version=1 в памяти. Пустой список не меняется;
+явное отключение JSON после миграции сохраняется при reload. Безуспешный разбор
+настроек по-прежнему не меняет файл; сама миграция не выполняет запись на диск.
+
+Tools — самостоятельный раздел CentralPanel с каталогом инструментов вместо
+плавающего окна. Выбранный JSON занимает ту же полноразмерную рабочую область,
+Back to Tools возвращает каталог. Rail/menu открывают каталог; перенос из файла
+сразу открывает JSON. Hidden file editor исключён из action_context.editor_open,
+чтобы команды закрытия/форматирования не меняли скрытый файл. Явное открытие файла
+возвращает файловый редактор. Scratch buffers сохраняются при смене разделов.
+
+Minified JSON находится сверху, Formatted JSON — снизу; между ними draggable
+разделитель. Устранено centered overflow от add_sized: TextEdit теперь расположен
+слева сверху, независимо прокручивается в ограниченном ScrollArea. Начало длинных
+строк больше не оказывается левее поля. Перенос/очистка сбрасывают просмотр и
+курсор к началу. Замена стрелки в Open in Tools / JSON устранила missing glyph.
+Синхронизация, фоновые revision gates, подсветка и редактирование обоих полей
+сохранены. JSON по-прежнему не индексируется. Новых зависимостей нет.
+
+Проверки native: fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=1 — 320 passed, 0 failed,
+10 прежних optional ignored; cargo build --workspace --release. Добавлены legacy
+migration tests обеих сериализаций/явного opt-out, проверка реальной раскраски
+файлового редактора после форматирования и геометрии длинных строк обоих полей
+при 1400×900 и 800×600. Каталог/возврат, ввод/Copy/перенос проверены pointer/keyboard
+UI-тестами. Первый полный прогон совпал с release compilation и превысил deadline
+прежнего lifecycle fixture; итоговый прогон после сборки прошёл. В новом тесте
+отрисовки исправлено ожидание точной revision после форматирования.
+
+macOS GUI запущен через временный app wrapper с отдельными settings и проектом
+в /tmp, без пользовательских данных и AI. Визуально подтверждены подсветка JSON
+со старым списком языков, перенос длинного JSON, начало обоих полей, расположение
+сверху вниз, полноразмерные JSON/каталог и возврат. Тестовое приложение закрыто
+Cmd+Q. Штатный update-binaries.py обновил macOS ARM64 executable/app archive до
+0.1.36; --check проверяет source fingerprint/SHA-256. ZIP integrity, bundle version,
+четыре legal sidecars и codesign --verify --deep --strict проверены. Windows
+build/Clippy и Windows-комплект не выполнялись/не обновлялись. Commit/push нет.
+
+После проверок cargo clean удалил 8.6 GiB; удалены временный GUI-проект/app wrapper,
+журналы задачи и семь untracked Finder files. Размер проекта — 387 MiB, binaries —
+108 MiB. Готовый native комплект, legal materials, исходники, история и прежние
+незакоммиченные правки сохранены. После очистки сборок не было; финальные native
+--check, git diff --check, размер и git status проверены.

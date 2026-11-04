@@ -238,3 +238,14 @@ Bound CLI output and time, support cancellation, and preserve stdout/stderr logs
 Console commands use the existing PTY infrastructure and carry the container name
 in their tab. Tests must use a mock CLI or an explicitly isolated disposable project
 with no user mounts/ports; never mutate existing user containers to verify behavior.
+
+
+### JSON / Tools
+
+JSON syntax and formatting never start PHP LSP or semantic extraction. Validate with
+IgnoredAny and preserve original tokens, duplicate key order, numeric lexemes and
+string escapes. Never reserialize through serde_json::Value. Tool edits are scratch
+buffers: no implicit file writes. Background results must match the latest revision;
+invalid intermediate text remains editable. Keep the Tools catalog and selected tools in full-size central views.
+Stack JSON editors vertically; bound independent scroll areas and anchor overflow
+at the top left. Test long lines with actual galley positions and clip rectangles. Preserve cursor/selection positions through whitespace edits.

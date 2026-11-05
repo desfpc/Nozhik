@@ -361,6 +361,199 @@ fn sparse_file_rows_and_footer_keep_their_geometry_across_popup_and_refresh()
     Ok(())
 }
 
+fn copied_text(output: &egui::FullOutput) -> Vec<&str> {
+    output
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn select_field(ctx: &Context, id: egui::Id, start: usize, end: usize) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
+        )));
+    state.store(ctx, id);
+    ctx.memory_mut(|memory| memory.request_focus(id));
+}
+
+fn drag_pointer(panel: &mut VcsPanel, ctx: &Context, from: Pos2, to: Pos2) {
+    let _down = frame(
+        panel,
+        ctx,
+        vec![
+            Event::PointerMoved(from),
+            Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let _move = frame(panel, ctx, vec![Event::PointerMoved(to)]);
+    let _up = frame(
+        panel,
+        ctx,
+        vec![
+            Event::PointerMoved(to),
+            Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let _settle = frame(panel, ctx, vec![]);
+}
+
+#[test]
+fn commit_splitter_scrollbars_and_copy_shortcuts() -> Result<(), Box<dyn std::error::Error>> {
+    let (dir, _repo, mut panel, ctx) = fixture()?;
+    std::fs::write(
+        dir.path().join(format!("{}.txt", "n".repeat(180))),
+        "long\n",
+    )?;
+    for index in 0..24 {
+        std::fs::write(dir.path().join(format!("row-{index}.txt")), "row\n")?;
+    }
+    panel.summary = "alpha beta gamma".to_owned();
+    panel.body = "keep\nthe description\n".repeat(30);
+    panel.submit(Task::Refresh);
+    settle(&mut panel, &ctx)?;
+    let before = frame(&mut panel, &ctx, vec![]);
+    let summary = text_point(&before, "alpha beta gamma")?;
+    let viewport = panel.commit_form_viewport.ok_or("commit form viewport")?;
+    let handle = Pos2::new(viewport.center().x, viewport.top() - 4.0);
+    drag_pointer(&mut panel, &ctx, handle, handle + Vec2::new(0.0, -100.0));
+    let raised = frame(&mut panel, &ctx, vec![]);
+    let moved = text_point(&raised, "alpha beta gamma")?;
+    assert!(
+        moved.y < summary.y - 60.0,
+        "dragging the splitter up should enlarge the commit form: {summary:?} -> {moved:?}"
+    );
+    let form_content = panel.commit_form_content.ok_or("form content")?;
+    let form_viewport = panel
+        .commit_form_viewport
+        .ok_or("form viewport after drag")?;
+    assert!(
+        form_content.y > form_viewport.height() + 40.0,
+        "a long description must overflow the commit form: content={form_content:?} viewport={form_viewport:?}"
+    );
+    let list_content = panel.changes_content.ok_or("changes content")?;
+    assert!(
+        list_content.x > form_viewport.width() + 40.0,
+        "a long path must overflow the changes list: content={list_content:?} viewport={form_viewport:?}"
+    );
+    scroll_overflowing_panes(&mut panel, &ctx, form_viewport.center(), &raised)?;
+    copy_focused_commit_text(&mut panel, &ctx)?;
+    Ok(())
+}
+
+fn scroll_overflowing_panes(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+    form_center: Pos2,
+    list_frame: &egui::FullOutput,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let form_scroll = panel.commit_form_scroll.ok_or("form scroll")?;
+    let _wheel = frame(
+        panel,
+        ctx,
+        vec![
+            Event::PointerMoved(form_center),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -800.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let form_offset = egui::scroll_area::State::load(ctx, form_scroll)
+        .ok_or("form scroll state")?
+        .offset
+        .y;
+    assert!(
+        form_offset > 0.0,
+        "the commit form should scroll when it does not fit, offset={form_offset}"
+    );
+    let list_scroll = panel.changes_scroll.ok_or("changes scroll")?;
+    let row = text_point(list_frame, "row-0.txt")?;
+    let _sideways = frame(
+        panel,
+        ctx,
+        vec![
+            Event::PointerMoved(row),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(-200.0, 0.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let list_offset = egui::scroll_area::State::load(ctx, list_scroll)
+        .ok_or("changes scroll state")?
+        .offset;
+    assert!(
+        list_offset.x > 0.0,
+        "a long path should scroll horizontally: {list_offset:?}"
+    );
+    Ok(())
+}
+
+fn copy_focused_commit_text(
+    panel: &mut VcsPanel,
+    ctx: &Context,
+) -> Result<(), Box<dyn std::error::Error>> {
+    select_field(ctx, super::commit_summary_id(), 6, 10);
+    let copied = frame(panel, ctx, vec![Event::Copy]);
+    assert!(
+        copied_text(&copied).contains(&"beta"),
+        "copy shortcut: {:?}",
+        copied_text(&copied)
+    );
+    select_field(ctx, super::commit_description_id(), 0, 4);
+    let mut menu_copied = false;
+    let menu = run_copy(panel, ctx, &mut menu_copied);
+    assert!(menu_copied);
+    assert!(
+        copied_text(&menu).contains(&"keep"),
+        "edit menu copy: {:?}",
+        copied_text(&menu)
+    );
+    select_field(ctx, super::commit_summary_id(), 0, 0);
+    let mut empty_focused = false;
+    let empty = run_copy(panel, ctx, &mut empty_focused);
+    assert!(empty_focused);
+    assert_eq!(copied_text(&empty).len(), 0);
+    click(panel, ctx, "History")?;
+    let mut history_copy = true;
+    let _history = run_copy(panel, ctx, &mut history_copy);
+    assert!(!history_copy);
+    Ok(())
+}
+
+fn run_copy(panel: &VcsPanel, ctx: &Context, copied: &mut bool) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 800.0))),
+            ..Default::default()
+        },
+        |ctx| {
+            *copied = panel.copy_commit_fields(ctx);
+        },
+    )
+}
+
 #[test]
 fn history_full_width_rows_select_commits_and_files_in_separate_columns()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -973,6 +1166,61 @@ fn changes_ignore_folder_label_and_submenu_target_the_clicked_file()
     Ok(())
 }
 
+async fn read_http(
+    socket: &mut tokio::net::TcpStream,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use tokio::io::AsyncReadExt;
+    let mut request = Vec::new();
+    loop {
+        let mut buffer = [0; 4096];
+        let count =
+            tokio::time::timeout(Duration::from_secs(3), socket.read(&mut buffer)).await??;
+        assert!(count > 0, "closed before a complete HTTP request");
+        request.extend_from_slice(&buffer[..count]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+            let length = headers.lines().find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .and_then(|value| value.parse::<usize>().ok())
+            });
+            if length.is_some_and(|length| body.len() >= length) {
+                break;
+            }
+        }
+        assert!(
+            request.len() < 64 * 1024,
+            "commit prompt grew past the test limit"
+        );
+    }
+    Ok(String::from_utf8(request)?)
+}
+async fn write_http(
+    socket: &mut tokio::net::TcpStream,
+    status: &str,
+    body: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::AsyncWriteExt;
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await?;
+    socket.shutdown().await?;
+    Ok(())
+}
+fn ollama_json(payload: &serde_json::Value) -> String {
+    serde_json::json!({
+        "response": payload.to_string(),
+        "done": true,
+        "done_reason": "stop"
+    })
+    .to_string()
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(
     clippy::too_many_lines,
@@ -980,7 +1228,7 @@ fn changes_ignore_folder_label_and_submenu_target_the_clicked_file()
 )]
 async fn commit_ai_button_generates_editable_fields_and_protects_newer_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncReadExt;
     for scenario in [
         "success",
         "form edit",
@@ -1025,29 +1273,10 @@ async fn commit_ai_button_generates_editable_fields_and_protects_newer_state()
         assert!(panel.commit_ai.busy());
         let (mut socket, _) =
             tokio::time::timeout(Duration::from_secs(3), listener.accept()).await??;
-        let mut request = Vec::new();
-        loop {
-            let mut buffer = [0; 4096];
-            let count =
-                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut buffer)).await??;
-            assert!(count > 0);
-            request.extend_from_slice(&buffer[..count]);
-            let text = String::from_utf8_lossy(&request);
-            if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                let length = headers.lines().find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length: ")
-                        .and_then(|n| n.parse::<usize>().ok())
-                });
-                if length.is_some_and(|length| body.len() >= length) {
-                    break;
-                }
-            }
-            assert!(request.len() < 16 * 1024);
-        }
-        let request = String::from_utf8_lossy(&request);
+        let request = read_http(&mut socket).await?;
         assert!(request.contains("+staged changes"));
         assert!(!request.contains("unstaged changes"));
+        assert!(request.contains("Summarize each staged file"));
         match scenario {
             "form edit" => panel.summary = "My newer title".into(),
             "index edit" => {
@@ -1062,16 +1291,37 @@ async fn commit_ai_button_generates_editable_fields_and_protects_newer_state()
             }
             _ => {}
         }
-        if !matches!(scenario, "cancel" | "disable") {
-            let message = serde_json::json!({"summary":"Generated title","description":"Generated description"}).to_string();
-            let body = serde_json::json!({"response":message,"done":true,"done_reason":"stop"})
-                .to_string();
-            let status = if scenario == "error" {
-                "503 Unavailable"
-            } else {
-                "200 OK"
-            };
-            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+        if scenario == "error" {
+            write_http(
+                &mut socket,
+                "503 Unavailable",
+                "{\"error\":\"unavailable\"}",
+            )
+            .await?;
+        } else if !matches!(scenario, "cancel" | "disable") {
+            let note = "Record the prepared file contents.";
+            write_http(
+                &mut socket,
+                "200 OK",
+                &ollama_json(&serde_json::json!({"files":[{"path":"file.txt","note":note}]})),
+            )
+            .await?;
+            let (mut socket, _) =
+                tokio::time::timeout(Duration::from_secs(3), listener.accept()).await??;
+            let request = read_http(&mut socket).await?;
+            assert!(request.contains("Write a Git commit message"));
+            assert!(request.contains(note));
+            assert!(request.contains("file.txt"));
+            assert!(!request.contains("+staged changes"));
+            assert!(!request.contains("unstaged changes"));
+            write_http(
+                &mut socket,
+                "200 OK",
+                &ollama_json(
+                    &serde_json::json!({"summary":"Generated title","description":"Generated description"}),
+                ),
+            )
+            .await?;
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         while panel.commit_ai.busy() || !panel.pending.is_empty() {

@@ -133,6 +133,12 @@ cargo build --workspace --release
 - Generation/debounce and model downloads must remain cancellable and off the
   UI thread. No implicit model download or polling repaint. Service launch is authorized
   when AI is enabled; only owned child processes may be terminated.
+- Commit-message generation reads every staged path. Do not collapse the commit into
+  one truncated diff: summarize files in small batches, fold those notes only when they
+  no longer fit, and write the title from the notes. A failed file note stays in the
+  evidence as a factual fallback. If the final reply copies prompt instructions or
+  repeats the title as the description, discard it and fill the form from the notes.
+  The Git worker does not call the model.
 
 ### Project symbols
 

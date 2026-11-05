@@ -976,22 +976,54 @@ fn commit_context_reads_only_staged_contents_and_bounds_large_patches()
     let Outcome::CommitContext(first) = worker.execute(Task::CommitContext)? else {
         return Err("missing context".into());
     };
-    assert!(first.patch.contains("+staged version"));
-    assert!(!first.patch.contains("unstaged secret"));
-    assert!(!first.patch.contains("unselected"));
+    let chosen = first
+        .files
+        .iter()
+        .find(|file| file.path == "chosen.txt")
+        .ok_or("chosen file")?;
+    assert!(chosen.patch.contains("+staged version"));
+    assert!(!chosen.patch.contains("unstaged secret"));
+    assert!(first.files.iter().all(|file| file.path != "unselected.txt"
+        && !file.patch.contains("unselected")
+        && !file.patch.contains("unstaged secret")));
     assert_eq!(fs::read(repo.path().join("index"))?, before);
     let Outcome::CommitContext(same) = worker.execute(Task::CommitContext)? else {
         return Err("missing context".into());
     };
     assert_eq!(same.fingerprint, first.fingerprint);
     fs::write(dir.path().join("large.txt"), "unicode 🦀\n".repeat(10_000))?;
-    stage(&repo, &["large.txt".into()], true)?;
+    fs::write(dir.path().join("later.txt"), "after the large file\n")?;
+    stage(&repo, &["large.txt".into(), "later.txt".into()], true)?;
     let Outcome::CommitContext(large) = worker.execute(Task::CommitContext)? else {
         return Err("missing context".into());
     };
     assert_ne!(large.fingerprint, first.fingerprint);
-    assert!(large.patch.len() < 25 * 1024);
-    assert!(large.patch.contains("[Staged diff truncated"));
+    let large_file = large
+        .files
+        .iter()
+        .find(|file| file.path == "large.txt")
+        .ok_or("large file")?;
+    assert!(large_file.truncated);
+    assert!(large_file.patch.len() < 12 * 1024);
+    assert!(
+        large_file
+            .patch
+            .contains("[Further changes in this file were omitted]")
+    );
+    let kept = large
+        .files
+        .iter()
+        .find(|file| file.path == "chosen.txt")
+        .ok_or("chosen file disappeared")?;
+    assert!(kept.patch.contains("+staged version"));
+    assert!(!kept.truncated);
+    let later = large
+        .files
+        .iter()
+        .find(|file| file.path == "later.txt")
+        .ok_or("file staged after the large diff")?;
+    assert!(later.patch.contains("+after the large file"));
+    assert!(!later.truncated);
     fs::write(
         dir.path().join("large.txt"),
         "changed beyond limit\n".repeat(10_000),
@@ -1001,6 +1033,48 @@ fn commit_context_reads_only_staged_contents_and_bounds_large_patches()
         return Err("missing context".into());
     };
     assert_ne!(large.fingerprint, changed.fingerprint);
+    Ok(())
+}
+
+#[test]
+fn commit_context_keeps_rename_binary_and_text_together()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, repo) = repository()?;
+    fs::write(dir.path().join("a.txt"), "original\n")?;
+    stage(&repo, &["a.txt".into()], true)?;
+    commit(&repo, "Base", "")?;
+    fs::rename(dir.path().join("a.txt"), dir.path().join("b.txt"))?;
+    fs::write(dir.path().join("c.txt"), "text\n")?;
+    fs::write(dir.path().join("bin.dat"), [0, 1, 2, 0])?;
+    let paths: Vec<_> = status(&repo)?.changes.into_iter().map(|c| c.path).collect();
+    stage(&repo, &paths, true)?;
+    let mut worker = GitWorker::default();
+    worker.execute(Task::Open(dir.path().into()))?;
+    let Outcome::CommitContext(context) = worker.execute(Task::CommitContext)? else {
+        return Err("missing context".into());
+    };
+    let renamed = context
+        .files
+        .iter()
+        .find(|file| file.path == "b.txt")
+        .ok_or("renamed file")?;
+    assert_eq!(renamed.status, crate::model::StagedStatus::Renamed);
+    assert_eq!(renamed.old_path.as_deref(), Some("a.txt"));
+    let text = context
+        .files
+        .iter()
+        .find(|file| file.path == "c.txt")
+        .ok_or("text file")?;
+    assert!(text.patch.contains("+text"));
+    assert!(!text.binary);
+    let binary = context
+        .files
+        .iter()
+        .find(|file| file.path == "bin.dat")
+        .ok_or("binary file")?;
+    assert!(binary.binary);
+    assert_eq!(binary.patch, "");
+    assert_eq!(context.files.len(), 3);
     Ok(())
 }
 

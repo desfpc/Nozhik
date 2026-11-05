@@ -55,6 +55,18 @@ pub struct VcsPanel {
     toolbar_menu_rect: Option<egui::Rect>,
     #[cfg(test)]
     toolbar_deploy_rect: Option<egui::Rect>,
+    #[cfg(test)]
+    changes_scroll: Option<egui::Id>,
+    #[cfg(test)]
+    changes_content: Option<egui::Vec2>,
+    #[cfg(test)]
+    commit_form_scroll: Option<egui::Id>,
+    #[cfg(test)]
+    commit_form_content: Option<egui::Vec2>,
+    #[cfg(test)]
+    commit_form_viewport: Option<egui::Rect>,
+    /// User-chosen commit-form height in points. `None` uses the preferred height.
+    commit_form_height: Option<f32>,
     repo: Option<GitRepoStatus>,
     mode: Mode,
     filter: String,
@@ -111,6 +123,17 @@ impl Default for VcsPanel {
             toolbar_menu_rect: None,
             #[cfg(test)]
             toolbar_deploy_rect: None,
+            #[cfg(test)]
+            changes_scroll: None,
+            #[cfg(test)]
+            changes_content: None,
+            #[cfg(test)]
+            commit_form_scroll: None,
+            #[cfg(test)]
+            commit_form_content: None,
+            #[cfg(test)]
+            commit_form_viewport: None,
+            commit_form_height: None,
             repo: None,
             mode: Mode::Changes,
             filter: String::new(),
@@ -143,6 +166,76 @@ impl Default for VcsPanel {
         }
     }
 }
+/// Drag handle between the changed-file list and the commit form, in points.
+const COMMIT_SPLITTER: f32 = 8.0;
+/// Smallest list or form pane while the sidebar is tall enough, in points.
+const COMMIT_PANE_MIN: f32 = 48.0;
+
+fn commit_summary_id() -> egui::Id {
+    egui::Id::new("git_commit_summary")
+}
+
+fn commit_description_id() -> egui::Id {
+    egui::Id::new("git_commit_description")
+}
+
+fn text_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.fonts(|fonts| {
+        fonts
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(13.0),
+                controls::TEXT,
+            )
+            .size()
+            .x
+    })
+}
+
+fn preferred_commit_form_height(ui: &egui::Ui) -> f32 {
+    let text = ui.text_style_height(&egui::TextStyle::Body);
+    let gap = ui.spacing().item_spacing.y;
+    // Auto-fill, summary, five description rows, commit button, and the gaps between them.
+    text.mul_add(7.0, gap.mul_add(4.0, 78.0))
+}
+
+fn commit_pane_heights(available: f32, preferred: f32, chosen: Option<f32>) -> (f32, f32) {
+    let split = (available - COMMIT_SPLITTER).max(0.0);
+    let form = if split <= COMMIT_PANE_MIN * 2.0 {
+        split * 0.5
+    } else {
+        chosen
+            .unwrap_or(preferred)
+            .clamp(COMMIT_PANE_MIN, split - COMMIT_PANE_MIN)
+    };
+    (split - form, form)
+}
+
+fn commit_splitter(ui: &mut egui::Ui, form_height: f32, available: f32) -> Option<f32> {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), COMMIT_SPLITTER),
+        egui::Sense::drag(),
+    );
+    let response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical);
+    let color = if response.hovered() || response.dragged() {
+        theme::TEXT
+    } else {
+        theme::BORDER
+    };
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        egui::Stroke::new(1.0_f32, color),
+    );
+    if !response.dragged() {
+        return None;
+    }
+    let split = (available - COMMIT_SPLITTER).max(0.0);
+    let min_pane = COMMIT_PANE_MIN.min(split * 0.5);
+    let max_form = (split - min_pane).max(min_pane);
+    Some((form_height - response.drag_delta().y).clamp(min_pane, max_form))
+}
+
 impl VcsPanel {
     /// Git operation and settings failures for the project problem log.
     pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
@@ -567,69 +660,145 @@ impl VcsPanel {
         }
         let filter = self.filter.to_lowercase();
         let filter_mode = self.filter_mode;
-        let footer_height = (ui.text_style_height(&egui::TextStyle::Body)
-            + ui.spacing().item_spacing.y)
-            .mul_add(7.0, 35.0);
-        let list_height = (ui.available_height() - footer_height).max(60.0);
-        egui::ScrollArea::vertical()
+        let gap = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let available = ui.available_height();
+        let (list_height, form_height) = commit_pane_heights(
+            available,
+            preferred_commit_form_height(ui),
+            self.commit_form_height,
+        );
+        self.changes_scroll(ui, &changes, &filter, filter_mode, busy, list_height);
+        if let Some(height) = commit_splitter(ui, form_height, available) {
+            self.commit_form_height = Some(height);
+        }
+        let staged = changes.iter().filter(|change| change.is_staged).count();
+        self.commit_form(ui, &branch, busy, staged, form_height, gap);
+        ui.spacing_mut().item_spacing.y = gap;
+    }
+    fn changes_scroll(
+        &mut self,
+        ui: &mut egui::Ui,
+        changes: &[FileChange],
+        filter: &str,
+        filter_mode: controls::FilterMode,
+        busy: bool,
+        height: f32,
+    ) {
+        let output = egui::ScrollArea::both()
             .id_salt("git_changes")
-            .max_height(list_height)
-            .min_scrolled_height(list_height)
+            .max_height(height)
+            .min_scrolled_height(height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for change in changes.iter().filter(|c| {
-                    filter_mode.matches(c)
-                        && c.path.to_string_lossy().to_lowercase().contains(&filter)
-                }) {
-                    self.change_row(ui, change, busy);
+                let pane_width = ui.available_width();
+                let visible = changes
+                    .iter()
+                    .filter(|change| {
+                        filter_mode.matches(change)
+                            && change
+                                .path
+                                .to_string_lossy()
+                                .to_lowercase()
+                                .contains(filter)
+                    })
+                    .collect::<Vec<_>>();
+                let mut widest = 0.0_f32;
+                for change in &visible {
+                    widest =
+                        widest.max(text_width(ui, change.path.to_string_lossy().as_ref()) + 60.0);
                 }
-                if changes.is_empty() {
+                ui.set_width(widest.max(pane_width));
+                if visible.is_empty() {
                     ui.weak("No local changes");
                 }
+                for change in &visible {
+                    self.change_row(ui, change, busy);
+                }
             });
-        ui.add_space((ui.max_rect().bottom() - footer_height - ui.cursor().top()).max(0.0));
-        ui.separator();
-        let staged = changes.iter().filter(|c| c.is_staged).count();
-        self.commit_ai_button(ui, staged);
-        ui.add(
-            egui::TextEdit::singleline(&mut self.summary)
-                .hint_text("Summary (required)")
-                .desired_width(f32::INFINITY),
-        );
-        ui.add(
-            egui::TextEdit::multiline(&mut self.body)
-                .hint_text("Description")
-                .desired_width(f32::INFINITY)
-                .desired_rows(5),
-        );
-        let allowed = !busy
-            && staged > 0
-            && !self.summary.trim().is_empty()
-            && self.repo.as_ref().is_some_and(|r| {
-                r.operation.is_none()
-                    && !r
-                        .changes
-                        .iter()
-                        .any(|c| c.status == ChangeStatus::Conflicted)
-            });
-        if ui
-            .add_enabled(
-                allowed,
-                egui::Button::new((
-                    egui::Atom::grow(),
-                    format!("Commit {staged} files to {branch}"),
-                    egui::Atom::grow(),
-                ))
-                .fill(controls::BLUE)
-                .min_size(egui::vec2(ui.available_width(), 30.0)),
-            )
-            .clicked()
+        #[cfg(test)]
         {
-            self.submit(Task::Commit {
-                summary: self.summary.clone(),
-                body: self.body.clone(),
+            self.changes_scroll = Some(output.id);
+            self.changes_content = Some(output.content_size);
+        }
+        #[cfg(not(test))]
+        {
+            let _ = (output.id, output.content_size);
+        }
+    }
+    fn commit_form(
+        &mut self,
+        ui: &mut egui::Ui,
+        branch: &str,
+        busy: bool,
+        staged: usize,
+        height: f32,
+        gap: f32,
+    ) {
+        let output = egui::ScrollArea::both()
+            .id_salt("git_commit_form")
+            .max_height(height)
+            .min_scrolled_height(height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = gap;
+                let pane_width = ui.available_width();
+                let summary_width = text_width(ui, &self.summary).max(pane_width);
+                ui.set_width(summary_width);
+                self.commit_ai_button(ui, staged);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.summary)
+                        .id(commit_summary_id())
+                        .hint_text("Summary (required)")
+                        .desired_width(summary_width)
+                        .clip_text(false),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.body)
+                        .id(commit_description_id())
+                        .hint_text("Description")
+                        .desired_width(pane_width)
+                        .desired_rows(5),
+                );
+                let allowed = !busy
+                    && staged > 0
+                    && !self.summary.trim().is_empty()
+                    && self.repo.as_ref().is_some_and(|repo| {
+                        repo.operation.is_none()
+                            && !repo
+                                .changes
+                                .iter()
+                                .any(|change| change.status == ChangeStatus::Conflicted)
+                    });
+                if ui
+                    .add_enabled(
+                        allowed,
+                        egui::Button::new((
+                            egui::Atom::grow(),
+                            format!("Commit {staged} files to {branch}"),
+                            egui::Atom::grow(),
+                        ))
+                        .fill(controls::BLUE)
+                        .min_size(egui::vec2(pane_width, 30.0)),
+                    )
+                    .clicked()
+                {
+                    self.submit(Task::Commit {
+                        summary: self.summary.clone(),
+                        body: self.body.clone(),
+                    });
+                }
             });
+        #[cfg(test)]
+        {
+            self.commit_form_scroll = Some(output.id);
+            self.commit_form_content = Some(output.content_size);
+            self.commit_form_viewport = Some(output.inner_rect);
+        }
+        #[cfg(not(test))]
+        {
+            let _ = (output.id, output.content_size, output.inner_rect);
         }
     }
     fn select_commit(&mut self, sha: String) {
@@ -784,6 +953,35 @@ impl VcsPanel {
     }
     pub(crate) fn configure_diff(&mut self, config: &nozhik_config::Config) {
         self.diff.configure(config);
+    }
+    /// Copy the selection in Summary or Description.
+    ///
+    /// Returns true when one of those fields has keyboard focus, including an
+    /// empty selection. The native Edit menu owns the copy accelerator, so this
+    /// runs before the diff and the editor.
+    pub(crate) fn copy_commit_fields(&self, ctx: &Context) -> bool {
+        if self.mode != Mode::Changes {
+            return false;
+        }
+        let fields = [
+            (commit_summary_id(), self.summary.as_str()),
+            (commit_description_id(), self.body.as_str()),
+        ];
+        let Some((id, text)) = fields
+            .into_iter()
+            .find(|(id, _)| ctx.memory(|memory| memory.has_focus(*id)))
+        else {
+            return false;
+        };
+        if let Some(state) = egui::TextEdit::load_state(ctx, id)
+            && let Some(range) = state.cursor.char_range()
+        {
+            let selected = range.slice_str(text);
+            if !selected.is_empty() {
+                ctx.copy_text(selected.to_owned());
+            }
+        }
+        true
     }
     pub(crate) fn copy_diff(&self, ctx: &Context) -> bool {
         self.diff.copy(ctx)

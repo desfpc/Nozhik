@@ -350,6 +350,12 @@ impl NozhikUi {
                     }
                     if action == "ui.copy"
                         && self.left == Some(crate::LeftTool::Commit)
+                        && self.vcs.copy_commit_fields(ctx)
+                    {
+                        continue;
+                    }
+                    if action == "ui.copy"
+                        && self.left == Some(crate::LeftTool::Commit)
                         && self.vcs.copy_diff(ctx)
                     {
                         continue;

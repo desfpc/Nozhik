@@ -1,8 +1,10 @@
 //! Local Ollama FIM generation and explicit model management. No UI or filesystem I/O.
+pub mod commit_message;
 pub mod fim;
 pub mod lifecycle;
 pub mod ollama;
 
+pub use commit_message::{CommitProgress, StagedFile};
 pub use ollama::{Error, Ollama, PullProgress};
 use std::time::Duration;
 use tokio::{runtime::Handle, sync::oneshot, task::AbortHandle};
@@ -109,16 +111,85 @@ mod tests {
                     return Ok(body.as_bytes().to_vec());
                 }
             }
-            assert!(request.len() < 8192);
+            assert!(request.len() < 512 * 1024);
         }
+    }
+
+    fn staged(path: &str, diff: &str) -> StagedFile {
+        StagedFile {
+            path: path.into(),
+            old_path: None,
+            status: "modified".into(),
+            binary: false,
+            insertions: 1,
+            deletions: 1,
+            patch: diff.into(),
+            truncated: false,
+            hunks: vec!["fn kept".into()],
+        }
+    }
+
+    fn prompt_of(json: &serde_json::Value) -> &str {
+        json["prompt"].as_str().unwrap_or("")
+    }
+
+    fn requires(json: &serde_json::Value, field: &str) -> bool {
+        json["format"]["required"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(field)))
+    }
+
+    async fn serve_commit(
+        listener: tokio::net::TcpListener,
+        prompts: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        respond: impl Fn(&serde_json::Value) -> (String, bool, &'static str) + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        loop {
+            let accepted = tokio::time::timeout(Duration::from_secs(2), listener.accept()).await;
+            let Ok(Ok((mut socket, _))) = accepted else {
+                break;
+            };
+            let body = request_body(&mut socket).await?;
+            let json: serde_json::Value = serde_json::from_slice(&body)?;
+            assert_eq!(json["model"], "selected-local-model");
+            assert_eq!(json["stream"], false);
+            assert!(json["options"]["stop"].is_null());
+            assert_eq!(json["options"]["num_ctx"], 16384);
+            prompts
+                .lock()
+                .map_err(|_| "prompt lock")?
+                .push(json.clone());
+            let (response, done, reason) = respond(&json);
+            let body =
+                serde_json::json!({"response": response, "done": done, "done_reason": reason})
+                    .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     #[ignore = "Requires a running local Ollama and the installed default model"]
     async fn live_ollama_commit_message() -> Result<(), Box<dyn std::error::Error>> {
         let client = Ollama::new(DEFAULT_ENDPOINT)?;
-        let message = client.commit_message(DEFAULT_MODEL,
-            "diff --git a/math.rs b/math.rs\n--- a/math.rs\n+++ b/math.rs\n@@ -1 +1 @@\n-fn add(a: i32, b: i32) -> i32 { a - b }\n+fn add(a: i32, b: i32) -> i32 { a + b }\n").await?;
+        let message = client
+            .commit_message(
+                DEFAULT_MODEL,
+                &[staged(
+                    "math.rs",
+                    "@@ -1 +1 @@ fn add\n-fn add(a: i32, b: i32) -> i32 { a - b }\n+fn add(a: i32, b: i32) -> i32 { a + b }\n",
+                )],
+                |_| {},
+            )
+            .await?;
         assert_ne!(message.summary, "");
         assert_ne!(message.description, "");
         println!("{}\n\n{}", message.summary, message.description);
@@ -126,8 +197,103 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_message_uses_structured_output_and_rejects_invalid_replies()
+    async fn commit_message_summarizes_every_file_before_the_title()
     -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = prompts.clone();
+        let server = tokio::spawn(serve_commit(listener, prompts, |json| {
+            let prompt = prompt_of(json);
+            if requires(json, "files") {
+                let notes = if prompt.contains("ALPHA_ONLY_IN_PATCH") {
+                    serde_json::json!({"files":[{"path":"alpha.rs","note":"FILE_NOTE alpha.rs"}]})
+                } else {
+                    serde_json::json!({"files":[
+                        {"path":"beta.rs","note":"FILE_NOTE beta.rs"},
+                        {"path":"gamma.rs","note":"FILE_NOTE gamma.rs"}
+                    ]})
+                };
+                return (notes.to_string(), true, "stop");
+            }
+            (
+                serde_json::json!({
+                    "summary": "Fix alpha, beta, and gamma",
+                    "description": "- Update alpha.rs\n- Update beta.rs\n- Update gamma.rs"
+                })
+                .to_string(),
+                true,
+                "stop",
+            )
+        }));
+        let mut labels = Vec::new();
+        let message = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.commit_message(
+                "selected-local-model",
+                &[
+                    staged(
+                        "alpha.rs",
+                        &format!("+first\n{}\n", "ALPHA_ONLY_IN_PATCH".repeat(400)),
+                    ),
+                    staged("beta.rs", "+second BETA_ONLY_IN_PATCH\n"),
+                    staged("gamma.rs", "+third GAMMA_ONLY_IN_PATCH\n"),
+                ],
+                |progress| labels.push(progress.label),
+            ),
+        )
+        .await??;
+        assert_eq!(message.summary, "Fix alpha, beta, and gamma");
+        {
+            let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+            let maps = prompts
+                .iter()
+                .filter(|json| requires(json, "files"))
+                .collect::<Vec<_>>();
+            let finals = prompts
+                .iter()
+                .filter(|json| requires(json, "description"))
+                .collect::<Vec<_>>();
+            let map_prompt = maps.first().ok_or("missing file summary")?;
+            let final_prompt = finals.first().ok_or("missing final prompt")?;
+            assert_eq!(maps.len(), 2);
+            assert_eq!(finals.len(), 1);
+            let map_text = maps
+                .iter()
+                .copied()
+                .map(prompt_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let final_text = prompt_of(final_prompt);
+            assert!(map_text.contains("ALPHA_ONLY_IN_PATCH"));
+            assert!(map_text.contains("BETA_ONLY_IN_PATCH"));
+            assert!(map_text.contains("GAMMA_ONLY_IN_PATCH"));
+            assert!(final_text.contains("FILE_NOTE alpha.rs"));
+            assert!(final_text.contains("FILE_NOTE beta.rs"));
+            assert!(final_text.contains("FILE_NOTE gamma.rs"));
+            assert!(!final_text.contains("ALPHA_ONLY_IN_PATCH"));
+            assert!(!final_text.contains("BETA_ONLY_IN_PATCH"));
+            assert_eq!(final_prompt["options"]["num_predict"], 1024);
+            assert_eq!(final_prompt["options"]["temperature"], 0.2);
+            assert_eq!(map_prompt["options"]["temperature"], 0.1);
+        }
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("Summarizing files (1/2)"))
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("Writing commit message"))
+        );
+        server.await?.map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_message_rejects_invalid_final_replies() -> Result<(), Box<dyn std::error::Error>>
+    {
         for (summary, done, reason, valid) in [
             ("Add folder ignores", true, "stop", true),
             ("", true, "stop", false),
@@ -137,42 +303,372 @@ mod tests {
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await?;
-                let body = request_body(&mut socket).await?;
-                let json: serde_json::Value = serde_json::from_slice(&body)?;
-                assert_eq!(json["model"], "selected-local-model");
-                assert_eq!(json["stream"], false);
-                assert_eq!(
-                    json["format"]["required"],
-                    serde_json::json!(["summary", "description"])
-                );
-                assert!(json["options"]["stop"].is_null());
-                assert_eq!(json["options"]["num_predict"], 512);
-                assert!(
-                    json["prompt"]
-                        .as_str()
-                        .is_some_and(|text| text.contains("+staged change"))
-                );
-                let message = serde_json::json!({"summary":summary,"description":"Explain changes\nwith details"}).to_string();
-                let body = serde_json::json!({"response":message,"done":done,"done_reason":reason})
-                    .to_string();
-                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-            });
-            let result = tokio::time::timeout(
-                Duration::from_secs(3),
-                client.commit_message("selected-local-model", "+staged change"),
+            let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let server = tokio::spawn(serve_commit(listener, prompts, move |json| {
+                if requires(json, "files") {
+                    return (
+                        serde_json::json!({"files":[{"path":"kept.rs","note":"FILE_NOTE kept.rs"}]})
+                            .to_string(),
+                        true,
+                        "stop",
+                    );
+                }
+                (
+                    serde_json::json!({"summary": summary, "description": "Explain changes\nwith details"})
+                        .to_string(),
+                    done,
+                    reason,
+                )
+            }));
+            let message = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.commit_message(
+                    "selected-local-model",
+                    &[staged("kept.rs", "+staged change\n")],
+                    |_| {},
+                ),
             )
-            .await?;
-            assert_eq!(result.is_ok(), valid);
+            .await??;
             if valid {
-                let message = result?;
                 assert_eq!(message.summary, summary);
                 assert_eq!(message.description, "Explain changes\nwith details");
+            } else {
+                assert_ne!(message.summary, summary);
+                assert!(message.description.contains("kept.rs"));
+                assert!(
+                    !message
+                        .summary
+                        .to_ascii_lowercase()
+                        .contains("previous reply")
+                );
             }
             server.await?.map_err(|error| error.to_string())?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn echoed_prompt_instruction_is_replaced_by_the_file_notes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let echo =
+            "The previous reply omitted or renamed a path. Copy each required path unchanged.";
+        for note_is_echo in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+            let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorded = prompts.clone();
+            let echo_note = echo.to_owned();
+            let server = tokio::spawn(serve_commit(listener, prompts, move |json| {
+                if requires(json, "files") {
+                    let note = if note_is_echo {
+                        echo_note.clone()
+                    } else {
+                        "FILE_NOTE kept.rs".to_owned()
+                    };
+                    return (
+                        serde_json::json!({"files":[{"path":"kept.rs","note":note}]}).to_string(),
+                        true,
+                        "stop",
+                    );
+                }
+                (
+                    serde_json::json!({
+                        "summary": echo_note.clone(),
+                        "description": echo_note.clone()
+                    })
+                    .to_string(),
+                    true,
+                    "stop",
+                )
+            }));
+            let message = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.commit_message(
+                    "selected-local-model",
+                    &[staged("kept.rs", "@@ -1 +1 @@ fn kept\n-a\n+b\n")],
+                    |_| {},
+                ),
+            )
+            .await??;
+            assert!(
+                !message
+                    .summary
+                    .to_ascii_lowercase()
+                    .contains("previous reply")
+            );
+            assert!(
+                !message
+                    .description
+                    .to_ascii_lowercase()
+                    .contains("previous reply")
+            );
+            assert!(message.description.contains("kept.rs"));
+            {
+                let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+                let final_text = prompts
+                    .iter()
+                    .filter(|json| requires(json, "description"))
+                    .map(prompt_of)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!final_text.to_ascii_lowercase().contains("previous reply"));
+                if note_is_echo {
+                    assert!(final_text.contains("The patch was not summarized"));
+                    assert!(message.description.contains("fn kept"));
+                } else {
+                    assert!(final_text.contains("FILE_NOTE kept.rs"));
+                    assert!(message.description.contains("FILE_NOTE kept.rs"));
+                }
+            }
+            server.await?.map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unreadable_file_note_still_reaches_the_commit_message()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = prompts.clone();
+        let server = tokio::spawn(serve_commit(listener, prompts, |json| {
+            if requires(json, "files") {
+                return (
+                    serde_json::json!({"files":[{"path":"other.rs","note":"wrong path"}]})
+                        .to_string(),
+                    true,
+                    "stop",
+                );
+            }
+            (
+                serde_json::json!({
+                    "summary": "Keep the staged parser",
+                    "description": "The visible hunk was preserved for kept.rs."
+                })
+                .to_string(),
+                true,
+                "stop",
+            )
+        }));
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.commit_message(
+                "selected-local-model",
+                &[staged("kept.rs", "@@ -1 +1 @@ fn kept\n-a\n+b\n")],
+                |_| {},
+            ),
+        )
+        .await??;
+        {
+            let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+            let final_text = prompts
+                .iter()
+                .filter(|json| requires(json, "description"))
+                .map(prompt_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(final_text.contains("kept.rs"));
+            assert!(final_text.contains("fn kept"));
+            assert!(final_text.contains("The patch was not summarized"));
+        }
+        server.await?.map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn vague_commit_message_is_rewritten_from_the_same_notes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = prompts.clone();
+        let finals = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let final_count = finals.clone();
+        let server = tokio::spawn(serve_commit(listener, prompts, move |json| {
+            if requires(json, "files") {
+                return (
+                    serde_json::json!({"files":[
+                        {"path":"crates/ui/panel.rs","note":"FILE_NOTE panel"},
+                        {"path":"crates/vcs/context.rs","note":"FILE_NOTE context"}
+                    ]})
+                    .to_string(),
+                    true,
+                    "stop",
+                );
+            }
+            if final_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return (
+                    serde_json::json!({"summary":"Update files","description":"Update files"})
+                        .to_string(),
+                    true,
+                    "stop",
+                );
+            }
+            (
+                serde_json::json!({
+                    "summary": "Refresh Git commit text",
+                    "description": "- Show panel state in crates/ui\n- Read staged files in crates/vcs"
+                })
+                .to_string(),
+                true,
+                "stop",
+            )
+        }));
+        let message = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.commit_message(
+                "selected-local-model",
+                &[
+                    staged("crates/ui/panel.rs", "+panel\n"),
+                    staged("crates/vcs/context.rs", "+context\n"),
+                ],
+                |_| {},
+            ),
+        )
+        .await??;
+        assert_eq!(message.summary, "Refresh Git commit text");
+        assert!(message.description.contains("crates/vcs"));
+        {
+            let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+            let final_prompts = prompts
+                .iter()
+                .filter(|json| requires(json, "description"))
+                .map(prompt_of)
+                .collect::<Vec<_>>();
+            let retry = final_prompts.get(1).ok_or("missing rewritten prompt")?;
+            assert_eq!(final_prompts.len(), 2);
+            assert!(retry.contains("missed these areas"));
+            assert!(retry.contains("crates/vcs"));
+        }
+        assert_eq!(finals.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.await?.map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn binary_file_does_not_request_a_file_summary() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = prompts.clone();
+        let server = tokio::spawn(serve_commit(listener, prompts, |_| {
+            (
+                serde_json::json!({
+                    "summary": "Add the logo",
+                    "description": "Add binary assets/logo.png."
+                })
+                .to_string(),
+                true,
+                "stop",
+            )
+        }));
+        let mut logo = staged("assets/logo.png", "");
+        logo.binary = true;
+        logo.status = "added".into();
+        logo.insertions = 0;
+        logo.deletions = 0;
+        logo.hunks.clear();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.commit_message("selected-local-model", &[logo], |_| {}),
+        )
+        .await??;
+        {
+            let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+            let only = prompts.first().ok_or("missing commit prompt")?;
+            assert_eq!(prompts.len(), 1);
+            assert!(!requires(only, "files"));
+            assert!(prompt_of(only).contains("assets/logo.png"));
+            assert!(prompt_of(only).contains("binary"));
+        }
+        server.await?.map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn large_commit_reduces_file_notes_before_the_title()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = Ollama::new(&format!("http://{}", listener.local_addr()?))?;
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = prompts.clone();
+        let groups = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let group_count = groups.clone();
+        let server = tokio::spawn(serve_commit(listener, prompts, move |json| {
+            if requires(json, "files") {
+                let notes = prompt_of(json)
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("path: "))
+                    .filter(|path| path.starts_with("src/file"))
+                    .map(|path| {
+                        serde_json::json!({"path": path, "note": format!("FILE_NOTE {path}")})
+                    })
+                    .collect::<Vec<_>>();
+                return (
+                    serde_json::json!({"files": notes}).to_string(),
+                    true,
+                    "stop",
+                );
+            }
+            if !requires(json, "description") {
+                let index = group_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                return (
+                    serde_json::json!({"summary": format!("GROUP_SUMMARY {index}")}).to_string(),
+                    true,
+                    "stop",
+                );
+            }
+            (
+                serde_json::json!({
+                    "summary": "Update the src file group",
+                    "description": "Apply the grouped src changes."
+                })
+                .to_string(),
+                true,
+                "stop",
+            )
+        }));
+        let files = (0..25)
+            .map(|index| staged(&format!("src/file{index:02}.rs"), "+a ONLY_PATCH_TOKEN\n"))
+            .collect::<Vec<_>>();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.commit_message("selected-local-model", &files, |_| {}),
+        )
+        .await??;
+        {
+            let prompts = recorded.lock().map_err(|_| "prompt lock")?.clone();
+            let map_text = prompts
+                .iter()
+                .filter(|json| requires(json, "files"))
+                .map(prompt_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let final_text = prompts
+                .iter()
+                .filter(|json| requires(json, "description"))
+                .map(prompt_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                prompts
+                    .iter()
+                    .filter(|json| requires(json, "files"))
+                    .count(),
+                7
+            );
+            assert!(map_text.contains("ONLY_PATCH_TOKEN"));
+            assert!(map_text.contains("path: src/file00.rs"));
+            assert!(map_text.contains("path: src/file24.rs"));
+            assert!(final_text.contains("GROUP_SUMMARY 1"));
+            assert!(final_text.contains("GROUP_SUMMARY 2"));
+            assert!(!final_text.contains("ONLY_PATCH_TOKEN"));
+            assert!(!final_text.contains("FILE_NOTE"));
+        }
+        assert_eq!(groups.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.await?.map_err(|error| error.to_string())?;
         Ok(())
     }
 

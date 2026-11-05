@@ -238,8 +238,16 @@ conservative line-prefix check, not a language parser.
 `VcsPanel` separates mutation requests from background reads. Only mutations gate
 controls. It retains the current diff during async loading, labels previous
 content while an uncached target loads, keeps eight bounded display patches and
-checks project generation/request IDs before installing replies. Fixed row/footer
-geometry and stable scroll IDs prevent status polling from moving controls.
+checks project generation/request IDs before installing replies. File rows stay
+28 points. The strip above the commit form is a vertical splitter: dragging it
+resizes the changes list and the commit form. Each pane keeps a stable scroll id
+and shows a scrollbar when its content is wider or taller than the pane, so a
+long path, summary, or description does not push the other pane off screen.
+Status polling does not reset that scroll position. Summary and Description copy
+the current selection with the standard copy shortcut. On macOS the native Edit
+menu owns that accelerator, so the copy action reads the focused commit field
+before the diff or the editor. An empty selection does not fall through to
+another surface.
 `Layout.git` defaults to 27% and is persisted separately from the Project dock;
 older layout files receive the serde default. File menus support real multi-path
 staging/discard/ignore and worker-side OS open/reveal; editor-open requests return
@@ -1300,24 +1308,36 @@ UI использует стандартный egui submenu: клик по на�
 папку файла, стрелка выбирает одного из предков от ближайшего к верхнему,
 исключая корень. При multiselect папка относится к файлу под контекстным кликом.
 
-## Генерация сообщения коммита (v0.1.11)
+## Генерация сообщения коммита (v0.1.39)
 
-`Task::CommitContext` / `Outcome::CommitContext(model::CommitContext)` читают
-на serial Git worker HEAD→index diff (24 KiB + truncation marker, binary metadata).
-Index принудительно перечитывается с диска; snapshot fingerprint учитывает HEAD/ref
-и path/OID/mode/flags всех entries, в том числе за пределами prompt limit.
-Конфликты, Git operation и пустой staged diff отклоняются. Чтение не меняет index
-и не сохраняет worktree; Repository остаётся на Git worker.
+`Task::CommitContext` читает на serial Git worker полный список staged-файлов
+HEAD→index, с rename detection. У каждого файла свой unified patch: не больше
+8 KiB, общий бюджет patch-текста 512 KiB. Сначала укорачиваются самые большие
+патчи, поэтому один большой файл не скрывает остальные. Бинарный файл остаётся
+в списке без тела патча. Заголовки hunk сохраняются даже при усечении тела.
+Файл больше 8 MiB Git относит к binary. Index перечитывается с диска; fingerprint
+учитывает HEAD/ref и path/OID/mode/flags всех entries. Конфликты, Git operation
+и пустой staged diff отклоняются. Чтение не меняет index и worktree.
 
-`Ollama::commit_message` использует выбранную ai_model и `/api/generate` с JSON
-schema summary/description, stream=false, num_predict=512 и deadline 120s.
-Это отдельный запрос от FIM: stop tokens автокомплита к нему не применяются.
-Ответ ограничен 64 KiB, проверяется завершённость и пригодность полей для формы.
-Prompt просит английское imperative название и описание по diff, трактует diff
-как данные и явно отмечает возможное усечение. Автозагрузки модели нет.
+`Ollama::commit_message` не отправляет сырой diff одним запросом. Локальная
+модель сначала получает пачки до 4 файлов и около 6 KiB патча и возвращает
+фактическую заметку на каждый путь. Если заметок больше 24 или они длиннее
+12 000 символов, заметки одной директории сжимаются отдельным запросом; файлы
+из разных корней не склеиваются вслепую. Итоговое название и описание пишутся
+только по заметкам, списку путей и областям. Слишком общий черновик
+переписывается один раз, и в повторный запрос не вставляется текст плохого
+черновика. Если ответ копирует служебную инструкцию промпта или повторяет
+название в описании, форма заполняется самими заметками: описание — список
+заметок, название — короткая строка по областям или по единственной заметке.
+Заметка, которая сама является служебной фразой, заменяется статусом и именами
+hunk. Бинарный или пустой patch не занимает запрос модели.
+Непрочитанный ответ модели заменяется заметкой со статусом и именами hunk и
+не выбрасывает файл. Каждый `/api/generate` идёт с JSON schema, stream=false,
+num_ctx=16384 и deadline 120s; stop tokens автокомплита не применяются.
+Ответ ограничен 64 KiB. Автозагрузки модели нет. Кнопка показывает шаг.
 
 `vcs_panel::commit_ai` владеет abort-on-drop HTTP task/oneshot на app runtime;
-worker и HTTP completion будят egui без polling repaint. Кнопка над формой активна
+worker, шаги генерации и HTTP completion будят egui без polling repaint. Кнопка над формой активна
 только при ai_enabled/model/runtime, staged files и свободном mutation gate.
 Текст формы сохраняется в snapshot: ручные правки отменяют ответ. Любая Git mutation,
 смена проекта/AI settings, Cancel и shutdown прерывают запрос. После HTTP-ответа

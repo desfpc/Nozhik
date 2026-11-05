@@ -37,7 +37,7 @@ pub enum Task {
     Open(PathBuf),
     /// Recompute status and local branches.
     Refresh,
-    /// Read a bounded HEAD-to-index patch and identity for commit-message generation.
+    /// Read per-file HEAD-to-index evidence and identity for commit-message generation.
     CommitContext,
     /// Read origin, author identity and non-secret connection preferences.
     GitSettings,

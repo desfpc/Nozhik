@@ -4,10 +4,59 @@ use std::path::PathBuf;
 /// Immutable staged input for commit-message generation.
 #[derive(Debug, Clone)]
 pub struct CommitContext {
-    /// Identity of HEAD/ref and every index entry, including changes beyond the patch limit.
+    /// Identity of HEAD/ref and every index entry, including changes beyond any patch limit.
     pub fingerprint: u64,
-    /// HEAD-to-index unified patch, bounded to 24 KiB, with an explicit truncation marker.
+    /// Every staged file. A large patch is shortened per file and never drops another file.
+    pub files: Vec<StagedFileChange>,
+}
+/// How a staged path differs from HEAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagedStatus {
+    /// New path in the index.
+    Added,
+    /// Content or mode change.
+    Modified,
+    /// Path removed from the index.
+    Deleted,
+    /// Path renamed, with `old_path` set when known.
+    Renamed,
+    /// Path copied from `old_path`.
+    Copied,
+}
+impl StagedStatus {
+    /// Stable English label stored with the generation prompt.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+            Self::Renamed => "renamed",
+            Self::Copied => "copied",
+        }
+    }
+}
+/// One staged file, with a bounded unified patch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedFileChange {
+    /// Repository-relative path after the change, using `/`.
+    pub path: String,
+    /// Previous path for a rename or copy.
+    pub old_path: Option<String>,
+    /// Index change relative to HEAD.
+    pub status: StagedStatus,
+    /// Git classified the blob as binary. `patch` is then empty.
+    pub binary: bool,
+    /// Added lines in the staged diff. Zero for a binary file.
+    pub insertions: u32,
+    /// Removed lines in the staged diff. Zero for a binary file.
+    pub deletions: u32,
+    /// Unified patch for this file only. Empty for a binary file.
     pub patch: String,
+    /// Hunk bodies past the per-file or commit budget were omitted.
+    pub truncated: bool,
+    /// Labels from hunk headers, capped. Kept even when the patch body is omitted.
+    pub hunks: Vec<String>,
 }
 
 /// Display category for a Git delta.

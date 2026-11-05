@@ -12,6 +12,7 @@ webbrowser.workspace = true
 nozhik-ai-completion.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 nozhik-database.workspace = true
 zeroize.workspace = true
 nozhik-remote-ssh.workspace = true

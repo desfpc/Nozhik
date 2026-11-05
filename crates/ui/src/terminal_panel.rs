@@ -4,7 +4,11 @@ use nozhik_terminal::{
     SessionSnapshot, SessionState, TerminalEvent, TerminalManager, TerminalSessionId,
     pty::SessionOptions,
 };
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 pub const TERMINAL_LABEL: &str = "⌘ Terminal";
 pub struct TerminalPanel {
@@ -18,9 +22,27 @@ pub struct TerminalPanel {
     shown_active: Option<TerminalSessionId>,
     labels: HashMap<TerminalSessionId, String>,
     pub focus: bool,
+    pending_paste: Option<PendingPaste>,
+    paste_notice: Option<String>,
     #[cfg(test)]
     actions_rect: Option<egui::Rect>,
 }
+
+struct PendingPaste {
+    text: String,
+    started: Instant,
+}
+
+/// How a snippet paste was handed to the terminal.
+pub enum PasteDelivery {
+    /// Bytes are already queued for the running session.
+    Sent,
+    /// Multiline text is held until the shell enables bracketed paste.
+    Waiting,
+}
+
+const PASTE_LIMIT: usize = 64 * 1024;
+const PASTE_WAIT: Duration = Duration::from_secs(2);
 impl TerminalPanel {
     /// Failed terminal sessions for the project problem log.
     pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
@@ -52,6 +74,8 @@ impl TerminalPanel {
             shown_active: None,
             labels: HashMap::new(),
             focus: true,
+            pending_paste: None,
+            paste_notice: None,
             #[cfg(test)]
             actions_rect: None,
         }
@@ -112,7 +136,116 @@ impl TerminalPanel {
                 self.snapshots.insert(session.id(), snapshot);
             }
         }
+        let paste_notice = self.paste_notice.take().or_else(|| self.flush_paste());
+        if let Some(notice) = paste_notice {
+            if message.is_none() {
+                message = Some(notice);
+            } else {
+                self.paste_notice = Some(notice);
+            }
+        }
         message
+    }
+
+    /// True when the active session can accept input now or as soon as it starts.
+    pub(crate) fn has_running_session(&self) -> bool {
+        self.active.is_some_and(|id| self.accepts_input(id))
+    }
+
+    /// Copies `text` into the active session.
+    ///
+    /// A single line is sent immediately and does not press Enter. A multiline
+    /// snippet is sent with bracketed paste when the shell has enabled it, and
+    /// otherwise waits up to two seconds. Raw newlines are never used as Enter.
+    ///
+    /// # Errors
+    /// Returns when there is no running session, the text contains control
+    /// characters other than tab and newline, or the encoded paste exceeds 64 KiB.
+    pub(crate) fn queue_paste(&mut self, text: &str) -> Result<PasteDelivery, String> {
+        let normalized = normalize_newlines(text);
+        reject_paste(&normalized)?;
+        let Some(id) = self.active else {
+            return Err("No terminal session is open".into());
+        };
+        if !self.accepts_input(id) {
+            return Err("The terminal is not running".into());
+        }
+        let bracketed = self.bracketed(id);
+        if normalized.contains('\n') && !bracketed {
+            self.pending_paste = Some(PendingPaste {
+                text: normalized,
+                started: Instant::now(),
+            });
+            self.context
+                .request_repaint_after(Duration::from_millis(50));
+            return Ok(PasteDelivery::Waiting);
+        }
+        self.pending_paste = None;
+        let bytes = encode_paste(&normalized, bracketed)?;
+        self.write_session(id, bytes)?;
+        Ok(PasteDelivery::Sent)
+    }
+
+    fn accepts_input(&self, id: TerminalSessionId) -> bool {
+        if self.manager.session(id).is_none() {
+            return false;
+        }
+        match self.snapshots.get(&id).map(|snapshot| &snapshot.state) {
+            None | Some(SessionState::Starting | SessionState::Running(_)) => true,
+            Some(SessionState::Exited(_) | SessionState::Failed(_) | SessionState::Closed) => false,
+        }
+    }
+
+    fn bracketed(&self, id: TerminalSessionId) -> bool {
+        self.snapshots
+            .get(&id)
+            .and_then(|snapshot| snapshot.grid.as_ref())
+            .is_some_and(|grid| grid.bracketed_paste)
+    }
+
+    fn write_session(&self, id: TerminalSessionId, bytes: Vec<u8>) -> Result<(), String> {
+        self.manager
+            .session(id)
+            .ok_or_else(|| "The terminal session closed".to_owned())?
+            .write(bytes)
+            .map_err(|error| error.to_string())
+    }
+
+    fn flush_paste(&mut self) -> Option<String> {
+        let (started, text) = {
+            let pending = self.pending_paste.as_ref()?;
+            (pending.started, pending.text.clone())
+        };
+        let Some(id) = self.active else {
+            self.pending_paste = None;
+            return Some(
+                "snippet-paste:The terminal closed before the snippet could be pasted".into(),
+            );
+        };
+        if !self.accepts_input(id) {
+            self.pending_paste = None;
+            return Some("snippet-paste:The terminal is not running".into());
+        }
+        if text.contains('\n') && !self.bracketed(id) {
+            if started.elapsed() >= PASTE_WAIT {
+                self.pending_paste = None;
+                return Some(
+                    "snippet-paste:The terminal did not enable paste mode. The snippet stays on the clipboard."
+                        .into(),
+                );
+            }
+            self.context
+                .request_repaint_after(Duration::from_millis(50));
+            return None;
+        }
+        self.pending_paste = None;
+        match encode_paste(&text, self.bracketed(id)) {
+            Ok(bytes) => match self.write_session(id, bytes) {
+                Ok(()) => Some("snippet-pasted".into()),
+                Err(error) => Some(format!("snippet-paste:{error}")),
+            },
+            Err(error) => Some(format!("snippet-paste:{error}")),
+        }
     }
     pub fn create_remote(
         &mut self,
@@ -158,6 +291,10 @@ impl TerminalPanel {
         }
     }
     fn remove(&mut self, id: TerminalSessionId) {
+        if self.active == Some(id) && self.pending_paste.take().is_some() {
+            self.paste_notice =
+                Some("snippet-paste:The terminal closed before the snippet could be pasted".into());
+        }
         let _closed = self.manager.remove(id);
         self.snapshots.remove(&id);
         self.labels.remove(&id);
@@ -406,6 +543,48 @@ impl TerminalPanel {
     }
 }
 
+/// Encodes a snippet for the terminal.
+///
+/// Bracketed mode wraps the text. Without it, only a single line is accepted,
+/// and that line is not followed by Enter.
+///
+/// # Errors
+/// Rejects control characters other than tab and newline, multiline text when
+/// bracketed paste is off, and batches larger than 64 KiB.
+pub fn encode_paste(text: &str, bracketed: bool) -> Result<Vec<u8>, String> {
+    let normalized = normalize_newlines(text);
+    reject_paste(&normalized)?;
+    if normalized.contains('\n') && !bracketed {
+        return Err("The terminal is not ready for a multiline paste".into());
+    }
+    let bytes = if bracketed {
+        format!("\u{1b}[200~{normalized}\u{1b}[201~").into_bytes()
+    } else {
+        normalized.into_bytes()
+    };
+    if bytes.len() > PASTE_LIMIT {
+        return Err("Snippet is larger than 64 KiB and was not sent to the terminal".into());
+    }
+    Ok(bytes)
+}
+
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn reject_paste(text: &str) -> Result<(), String> {
+    if text
+        .chars()
+        .any(|symbol| symbol.is_control() && symbol != '\n' && symbol != '\t')
+    {
+        return Err("Snippet contains control characters and was not sent to the terminal".into());
+    }
+    if text.len() > PASTE_LIMIT {
+        return Err("Snippet is larger than 64 KiB and was not sent to the terminal".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +662,38 @@ mod tests {
         frame(&mut panel, &ctx, dir.path(), vec![]);
         assert!(panel.active.is_some_and(|id| id != first));
         assert_eq!(panel.manager.sessions().count(), 1);
+        panel.shutdown();
+        Ok(())
+    }
+
+    #[test]
+    fn encode_paste_keeps_single_lines_raw_and_brackets_multiline() -> Result<(), String> {
+        let single = encode_paste("echo hi", false)?;
+        assert_eq!(single, b"echo hi");
+        assert!(!single.contains(&b'\r'));
+        let lines = encode_paste("echo a\r\necho b", true)?;
+        assert!(lines.starts_with(b"\x1b[200~"));
+        assert!(lines.ends_with(b"\x1b[201~"));
+        let text = String::from_utf8(lines).map_err(|error| error.to_string())?;
+        assert!(text.contains("echo a\necho b"));
+        assert!(!text.contains('\r'));
+        assert!(encode_paste("echo hi\necho there", false).is_err());
+        assert!(encode_paste("echo \u{1}hi", false).is_err());
+        let huge = "x".repeat(PASTE_LIMIT + 1);
+        assert!(encode_paste(&huge, true).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn queue_paste_without_a_session_reports_an_error_and_starts_nothing() -> Result<(), String> {
+        let ctx = egui::Context::default();
+        let mut panel = TerminalPanel::new(&ctx);
+        match panel.queue_paste("echo hi") {
+            Err(error) => assert!(error.contains("No terminal"), "{error}"),
+            Ok(_) => return Err("paste was accepted without a session".into()),
+        }
+        assert!(panel.active.is_none());
+        assert!(panel.pending_paste.is_none());
         panel.shutdown();
         Ok(())
     }

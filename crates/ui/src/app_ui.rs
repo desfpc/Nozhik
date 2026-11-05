@@ -8,6 +8,16 @@ use nozhik_event_bus::{Event, FileEvent};
 use nozhik_fs_model::Command;
 use tokio::sync::broadcast::error::TryRecvError;
 
+const fn dock_title(tool: LeftTool) -> Option<&'static str> {
+    match tool {
+        LeftTool::Project | LeftTool::Commit | LeftTool::Snippets => None,
+        LeftTool::Database => Some("Database"),
+        LeftTool::Docker => Some("Docker"),
+        LeftTool::Remote => Some("Remote Host / SSH"),
+        LeftTool::Tools => Some("Tools"),
+    }
+}
+
 impl NozhikUi {
     pub(crate) fn shortcuts(&mut self, ctx: &Context) {
         let (shift, time, used) = ctx.input(|i| {
@@ -71,6 +81,16 @@ impl NozhikUi {
                     alt: chord.alt,
                     shift: chord.shift,
                 };
+                if self.left == Some(LeftTool::Snippets) {
+                    let editing = matches!(
+                        binding.action.as_str(),
+                        "ui.undo" | "ui.redo" | "ui.cut" | "ui.copy" | "ui.paste"
+                    );
+                    let find = matches!(binding.action.as_str(), "ui.find" | "ui.replace");
+                    if find || (editing && self.snippets.editor_focused(ctx)) {
+                        continue;
+                    }
+                }
                 if ctx.input_mut(|i| i.consume_key(modifiers, key))
                     && let Err(error) = keymap.dispatch(chord, context, &actions)
                 {
@@ -92,6 +112,10 @@ impl NozhikUi {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One frame drains the project bus, including snippet file reloads"
+    )]
     pub(crate) fn receive_events(&mut self) {
         // Bound per-frame work so continuous producers cannot starve rendering.
         for _ in 0..1024 {
@@ -130,6 +154,13 @@ impl NozhikUi {
                                 Some(LeftTool::Commit)
                             };
                         }
+                        "ui.snippets" => {
+                            self.left = if self.left == Some(LeftTool::Snippets) {
+                                None
+                            } else {
+                                Some(LeftTool::Snippets)
+                            };
+                        }
                         "ui.project" => {
                             self.left = if self.left == Some(LeftTool::Project) {
                                 None
@@ -146,8 +177,15 @@ impl NozhikUi {
                             .as_ref()
                             .is_some_and(|p| path.starts_with(&p.root_path))
                         {
-                            self.status =
-                                format!("Disk changed: {} (open buffers retained)", path.display());
+                            let snippet_file = self.snippets.is_store_path(path);
+                            if snippet_file {
+                                self.snippets.note_disk_change();
+                            } else {
+                                self.status = format!(
+                                    "Disk changed: {} (open buffers retained)",
+                                    path.display()
+                                );
+                            }
                             self.refresh_project();
                             self.vcs.invalidate();
                         }
@@ -421,6 +459,7 @@ impl NozhikUi {
                     (Icon::Remote, "Remote Host / SSH", LeftTool::Remote),
                     (Icon::Database, "Database", LeftTool::Database),
                     (Icon::Docker, "Docker", LeftTool::Docker),
+                    (Icon::Snippets, "Snippets", LeftTool::Snippets),
                     (Icon::Tools, "Tools", LeftTool::Tools),
                 ] {
                     if ui
@@ -479,15 +518,15 @@ impl NozhikUi {
             .input(|i| i.viewport().inner_rect)
             .unwrap_or_else(|| ctx.screen_rect());
         if let Some(tool) = self.left.filter(|tool| *tool != LeftTool::Tools) {
-            let dock_id = if tool == LeftTool::Commit {
-                "git_dock"
-            } else {
-                "left_dock"
+            let dock_id = match tool {
+                LeftTool::Commit => "git_dock",
+                LeftTool::Snippets => "snippets_dock",
+                _ => "left_dock",
             };
-            let proportion = if tool == LeftTool::Commit {
-                self.layout.value.git
-            } else {
-                self.layout.value.left
+            let proportion = match tool {
+                LeftTool::Commit => self.layout.value.git,
+                LeftTool::Snippets => self.layout.value.snippets,
+                _ => self.layout.value.left,
             };
             crate::layout::seed(
                 ctx,
@@ -499,30 +538,30 @@ impl NozhikUi {
                 .resizable(true)
                 .default_width(viewport.width() * proportion)
                 .width_range(
-                    (if tool == LeftTool::Project {
-                        180.0
-                    } else {
-                        150.0
+                    (match tool {
+                        LeftTool::Project => 180.0,
+                        LeftTool::Snippets => 200.0,
+                        _ => 150.0,
                     })..=viewport.width() * 0.4,
                 )
                 .show_separator_line(false)
-                .frame(if tool == LeftTool::Commit {
-                    egui::Frame::new()
+                .frame(match tool {
+                    LeftTool::Commit => egui::Frame::new()
                         .fill(egui::Color32::from_rgb(35, 42, 48))
-                        .inner_margin(0)
-                } else {
-                    theme::dock_frame(theme::PANEL)
+                        .inner_margin(0),
+                    LeftTool::Snippets => crate::snippets::sidebar_frame(),
+                    _ => theme::dock_frame(theme::PANEL),
                 })
                 .show(ctx, |ui| {
-                    if !matches!(tool, LeftTool::Commit | LeftTool::Project) {
-                        ui.label(match tool {
-                            LeftTool::Project => "Project v",
-                            LeftTool::Commit => "Commit",
-                            LeftTool::Database => "Database",
-                            LeftTool::Docker => "Docker",
-                            LeftTool::Remote => "Remote Host / SSH",
-                            LeftTool::Tools => "Tools",
-                        });
+                    if tool == LeftTool::Snippets {
+                        let enabled = !self.global_modal();
+                        let root = self
+                            .project
+                            .as_ref()
+                            .map(|project| project.root_path.as_path());
+                        self.snippets.show_nav(ui, root, enabled);
+                    } else if let Some(title) = dock_title(tool) {
+                        ui.label(title);
                         ui.separator();
                     }
                     if tool == LeftTool::Project {
@@ -539,10 +578,10 @@ impl NozhikUi {
                 });
             let mut layout = self.layout.value;
             let width = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
-            if tool == LeftTool::Commit {
-                layout.git = width;
-            } else {
-                layout.left = width;
+            match tool {
+                LeftTool::Commit => layout.git = width,
+                LeftTool::Snippets => layout.snippets = width,
+                _ => layout.left = width,
             }
             if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
@@ -576,6 +615,24 @@ impl NozhikUi {
                     self.vcs.configure_diff(&self.config);
                     self.vcs.center(ui, f32::from(self.config.font_size));
                 });
+            return;
+        }
+        if self.left == Some(LeftTool::Snippets) {
+            egui::CentralPanel::default()
+                .frame(crate::snippets::editor_frame())
+                .show(ctx, |ui| {
+                    let enabled = !self.global_modal();
+                    let root = self
+                        .project
+                        .as_ref()
+                        .map(|project| project.root_path.as_path());
+                    if let Some(crate::snippets::SnippetCommand::OpenInConsole(text)) =
+                        self.snippets.show_main(ui, root, enabled)
+                    {
+                        self.open_snippet_in_console(ctx, &text);
+                    }
+                });
+            self.editor_focus = None;
             return;
         }
         egui::CentralPanel::default()
@@ -700,6 +757,65 @@ impl NozhikUi {
                 }
             });
     }
+
+    fn open_snippet_in_console(&mut self, ctx: &Context, text: &str) {
+        ctx.copy_text(text.to_owned());
+        let Some(root) = self
+            .project
+            .as_ref()
+            .map(|project| project.root_path.clone())
+        else {
+            self.status = "Snippet copied".into();
+            self.note_status(
+                "snippets",
+                "Snippets",
+                crate::problems::Severity::Error,
+                "Open a project before sending a snippet to the terminal",
+            );
+            return;
+        };
+        self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
+        let outcome = {
+            let panel = self
+                .terminal
+                .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+            panel.focus = true;
+            let needs_session = !panel.has_running_session();
+            if needs_session && let Some(error) = panel.create(&root) {
+                ConsolePaste::Failed(error)
+            } else {
+                match panel.queue_paste(text) {
+                    Ok(crate::terminal_panel::PasteDelivery::Sent) => ConsolePaste::Sent,
+                    Ok(crate::terminal_panel::PasteDelivery::Waiting) => ConsolePaste::Waiting,
+                    Err(error) => ConsolePaste::Failed(error),
+                }
+            }
+        };
+        match outcome {
+            ConsolePaste::Sent => {
+                self.status = "Snippet copied into the terminal".into();
+            }
+            ConsolePaste::Waiting => {
+                self.status =
+                    "Snippet copied. Waiting for the terminal to accept the paste.".into();
+            }
+            ConsolePaste::Failed(error) => {
+                self.status = "Snippet copied".into();
+                self.note_status(
+                    "snippets",
+                    "Snippets",
+                    crate::problems::Severity::Warning,
+                    error,
+                );
+            }
+        }
+    }
+}
+
+enum ConsolePaste {
+    Sent,
+    Waiting,
+    Failed(String),
 }
 
 impl eframe::App for NozhikUi {
@@ -725,6 +841,7 @@ impl NozhikUi {
         self.fs.set_wakeup(move || wake_context.request_repaint());
         self.receive_files();
         if self.project.is_none() {
+            self.snippets.finish();
             self.receive_events();
             self.integration_tick(ctx);
             #[cfg(target_os = "macos")]
@@ -749,7 +866,16 @@ impl NozhikUi {
         if let Some(panel) = &mut self.terminal
             && let Some(message) = panel.tick()
         {
-            if message.contains("exited with code 0") {
+            if let Some(detail) = message.strip_prefix("snippet-paste:") {
+                self.note_status(
+                    "snippets",
+                    "Snippets",
+                    crate::problems::Severity::Warning,
+                    detail,
+                );
+            } else if message == "snippet-pasted" {
+                self.status = "Snippet copied into the terminal".into();
+            } else if message.contains("exited with code 0") {
                 self.status = message;
             } else {
                 let severity = if message.contains("exited with code") {
@@ -765,6 +891,10 @@ impl NozhikUi {
         }
         self.vcs.configure_commit_ai(&self.config);
         self.vcs.tick(ctx, self.left == Some(LeftTool::Commit));
+        self.snippets.tick(ctx);
+        if let Some((severity, message)) = self.snippets.take_problem() {
+            self.note_problem("snippets", "Snippets", severity, &message);
+        }
         if let Some(paths) = self.vcs.take_deploy_paths() {
             self.deploy_files(paths);
         }
@@ -1058,10 +1188,11 @@ mod tests {
         let rail = egui::containers::panel::PanelState::load(&ctx, egui::Id::new("left_strip"))
             .ok_or("missing rail")?
             .rect;
-        // Sixth top button is Tools, where Notifications used to open. The next slot is empty.
+        // Sixth top button is Snippets. Seventh is Tools. The next slot is empty.
         for (index, position) in [
             rail.left_top() + vec2(18.0, 178.0),
             rail.left_top() + vec2(18.0, 210.0),
+            rail.left_top() + vec2(18.0, 242.0),
         ]
         .into_iter()
         .enumerate()
@@ -1082,6 +1213,8 @@ mod tests {
                 );
             }
             if index == 0 {
+                assert!(shell.left == Some(LeftTool::Snippets));
+            } else if index == 1 {
                 assert!(shell.left == Some(LeftTool::Tools));
             } else {
                 assert!(shell.left == before);

@@ -13,6 +13,8 @@ pub enum Icon {
     Remote,
     Database,
     Docker,
+    Snippets,
+    Copy,
     Settings,
     Search,
     Debug,
@@ -208,6 +210,33 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 Stroke::NONE,
             ));
             painter.circle_filled(point(4.0, 15.0), 0.7, theme::PANEL);
+        }
+        Icon::Snippets => {
+            painter.add(Shape::closed_line(
+                vec![
+                    point(3.5, 6.0),
+                    point(11.0, 6.0),
+                    point(17.0, 10.0),
+                    point(11.0, 14.0),
+                    point(3.5, 14.0),
+                ],
+                stroke,
+            ));
+            circle(7.2, 10.0, 1.2);
+        }
+        Icon::Copy => {
+            painter.rect_stroke(
+                Rect::from_min_max(point(7.0, 3.5), point(16.0, 13.0)),
+                1.5,
+                stroke,
+                StrokeKind::Inside,
+            );
+            painter.rect_stroke(
+                Rect::from_min_max(point(4.0, 7.0), point(13.0, 16.5)),
+                1.5,
+                stroke,
+                StrokeKind::Inside,
+            );
         }
         Icon::Settings => {
             circle(10.0, 10.0, 5.0);

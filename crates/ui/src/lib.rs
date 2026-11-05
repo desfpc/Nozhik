@@ -32,6 +32,7 @@ mod remote_shell;
 mod remote_worker;
 pub mod search_everywhere;
 mod settings_dialog;
+mod snippets;
 mod sql_console;
 mod sql_support;
 mod table_editor;
@@ -88,6 +89,8 @@ pub enum LeftTool {
     Database,
     /// Project Docker Compose containers.
     Docker,
+    /// Project notes, commands and code fragments.
+    Snippets,
     /// Tools catalog and the selected full-size tool.
     Tools,
 }
@@ -114,6 +117,7 @@ pub struct NozhikUi {
     remote: remote_panel::RemoteUi,
     deployment: deployment::DeploymentUi,
     docker: docker_panel::DockerUi,
+    snippets: snippets::Snippets,
     terminal: Option<terminal_panel::TerminalPanel>,
     llm: Option<llm_panel::LlmPanel>,
     language: language::LanguageUi,
@@ -200,6 +204,7 @@ impl NozhikUi {
             remote: remote_panel::RemoteUi::default(),
             deployment: deployment::DeploymentUi::default(),
             docker: docker_panel::DockerUi::default(),
+            snippets: snippets::Snippets::default(),
             terminal: None,
             llm: None,
             language: language::LanguageUi::default(),
@@ -265,7 +270,7 @@ impl NozhikUi {
     }
 
     fn open_document(&mut self, index: usize) {
-        if self.left == Some(LeftTool::Tools) {
+        if matches!(self.left, Some(LeftTool::Tools | LeftTool::Snippets)) {
             self.left = Some(LeftTool::Project);
         }
         self.database.active = None;

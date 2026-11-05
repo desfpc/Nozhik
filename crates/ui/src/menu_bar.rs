@@ -41,6 +41,7 @@ pub const MENUS: &[(&str, &[MenuEntry])] = &[
         &[
             ("ui.project", "Project", ""),
             ("ui.git", "Git", ""),
+            ("ui.snippets", "Snippets", "projectOpen"),
             ("ui.database", "Database", ""),
             ("ui.terminal", "Terminal", ""),
             ("ui.remote", "Remote SSH", ""),

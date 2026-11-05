@@ -20,6 +20,8 @@ pub struct Layout {
     pub bottom: f32,
     /// SQL editor share of console height.
     pub sql: f32,
+    /// Snippets tag sidebar width / viewport width, independent of the project dock.
+    pub snippets: f32,
 }
 impl Default for Layout {
     fn default() -> Self {
@@ -29,12 +31,13 @@ impl Default for Layout {
             right: 0.22,
             bottom: 0.40,
             sql: 0.45,
+            snippets: 0.18,
         }
     }
 }
 impl Layout {
     fn valid(self) -> bool {
-        [self.left, self.git, self.right, self.sql]
+        [self.left, self.git, self.right, self.sql, self.snippets]
             .into_iter()
             .all(|v| v.is_finite() && (0.1..=0.8).contains(&v))
             && self.bottom.is_finite()

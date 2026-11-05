@@ -313,6 +313,9 @@ impl NozhikUi {
                 }
                 "ui.exit" => self.request_close(CloseTarget::Window, ctx),
                 "ui.undo" | "ui.redo" => {
+                    if self.left == Some(LeftTool::Snippets) {
+                        continue;
+                    }
                     if let Some(buffer) = self.active_buffer() {
                         let result = if action == "ui.undo" {
                             buffer.undo()
@@ -360,6 +363,10 @@ impl NozhikUi {
                     {
                         continue;
                     }
+                    if self.left == Some(LeftTool::Snippets) {
+                        let _handled = self.snippets.handle_clipboard(ctx, action.as_str());
+                        continue;
+                    }
                     if action == "ui.copy"
                         && let Some(text) = self
                             .database
@@ -399,7 +406,11 @@ impl NozhikUi {
                     }
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
-                "ui.find" | "ui.replace" => self.integration.find = true,
+                "ui.find" | "ui.replace" => {
+                    if self.left != Some(LeftTool::Snippets) {
+                        self.integration.find = true;
+                    }
+                }
                 "ui.database" => {
                     self.left = if self.left == Some(LeftTool::Database) {
                         None
@@ -780,6 +791,7 @@ impl NozhikUi {
         }
         self.settings_dialog.finish();
         self.layout.finish();
+        self.snippets.finish();
         self.recent_projects.finish();
         self.shutdown_language();
         if let Some(panel) = &mut self.terminal {

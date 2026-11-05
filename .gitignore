@@ -8,3 +8,5 @@
 
 # Python build helpers
 __pycache__/
+
+/.nozhik/

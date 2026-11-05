@@ -79,9 +79,6 @@ impl VcsPanel {
         if busy {
             ui.label("Working…");
         }
-        if let Some(error) = &self.git_settings.error {
-            ui.colored_label(crate::theme::ERROR, error);
-        }
         if !self.git_settings.notice.is_empty() {
             ui.label(&self.git_settings.notice);
         }
@@ -136,6 +133,10 @@ impl VcsPanel {
             }
         }
     }
+    pub(crate) fn settings_problem(&self) -> Option<String> {
+        self.git_settings.error.clone()
+    }
+
     pub(crate) fn clear_git_secrets(&mut self) {
         self.git_settings.auth.clear_secrets();
     }

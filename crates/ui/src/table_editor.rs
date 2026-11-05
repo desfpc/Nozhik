@@ -30,6 +30,7 @@ pub struct TableEditor {
     pub pending_page: Option<(usize, usize)>,
     selected: BTreeSet<usize>,
     preview: bool,
+    preview_error: String,
     inputs: HashMap<(usize, usize), String>,
     reveal_row: Option<usize>,
 }
@@ -51,6 +52,7 @@ impl TableEditor {
             pending_page: None,
             selected: BTreeSet::new(),
             preview: false,
+            preview_error: String::new(),
             inputs: HashMap::new(),
             reveal_row: None,
         }
@@ -271,6 +273,17 @@ impl TableEditor {
     pub fn dirty(&self) -> bool {
         self.changes.as_ref().is_some_and(TableChanges::is_dirty)
     }
+    /// DML preview failure from the latest open preview, if SQL could not be built.
+    #[must_use]
+    pub fn preview_problem(&self) -> Option<&str> {
+        let trimmed = self.preview_error.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "One table toolbar controls the staged grid and SQL preview"
@@ -443,6 +456,7 @@ impl TableEditor {
                 if let Some(changes) = &self.changes {
                     match changes.statements() {
                         Ok(statements) => {
+                            self.preview_error.clear();
                             let mut sql = format!("BEGIN;\n{}\nCOMMIT;", statements.join("\n"));
                             egui::ScrollArea::both().max_height(360.0).show(ui, |ui| {
                                 ui.add(
@@ -469,7 +483,7 @@ impl TableEditor {
                             });
                         }
                         Err(e) => {
-                            ui.colored_label(crate::theme::ERROR, e.to_string());
+                            self.preview_error = e.to_string();
                             if ui.button("Close").clicked() {
                                 close = true;
                             }

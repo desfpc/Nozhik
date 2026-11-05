@@ -18,6 +18,18 @@ pub struct Inline {
     pub status: Option<String>,
 }
 impl Inline {
+    /// Completion failure. Progress strings stay in the status bar.
+    #[must_use]
+    pub fn problem(&self) -> Option<&str> {
+        self.status.as_deref().filter(|status| {
+            status.starts_with("AI: ")
+                && !matches!(
+                    *status,
+                    "AI: Tab to accept" | "AI: no suggestion here" | "AI: generating…"
+                )
+        })
+    }
+
     #[cfg(test)]
     pub fn at_endpoint(endpoint: &str) -> Result<Self, nozhik_ai_completion::Error> {
         Ok(Self {
@@ -164,6 +176,18 @@ impl Drop for Models {
     }
 }
 impl Models {
+    /// Last model-service failure, when the background check did not succeed.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&str> {
+        match &self.state {
+            ModelState::Failed(error) => Some(error.as_str()),
+            ModelState::Unknown
+            | ModelState::Offline
+            | ModelState::Connected(_)
+            | ModelState::Pulling(_) => None,
+        }
+    }
+
     pub fn stop(&mut self) {
         if let Some(task) = self.task.take() {
             task.abort();
@@ -247,9 +271,7 @@ impl Models {
             ModelState::Unknown => {
                 ui.weak("Checking service…");
             }
-            ModelState::Failed(error) => {
-                ui.colored_label(crate::theme::ERROR, error);
-            }
+            ModelState::Failed(_) => {}
             ModelState::Connected(models) => {
                 ui.colored_label(egui::Color32::from_rgb(90, 180, 100), "● Connected");
                 let canonical = |name: &str| {

@@ -31,6 +31,16 @@ pub(super) struct Dialog {
     message: String,
 }
 impl Dialog {
+    /// Stored table-design failure, without surrounding whitespace.
+    pub(super) fn failure(&self) -> Option<String> {
+        let trimmed = self.error.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    }
+
     pub(super) fn accepts(&self, id: u64) -> bool {
         self.pending.as_ref().is_some_and(|(i, _, _)| *i == id)
     }
@@ -275,10 +285,19 @@ impl NozhikUi {
         let mut controls = Controls::default();
         let modal = egui::Modal::new(egui::Id::new("modify_table"))
             .show(ctx, |ui| draw_dialog(ui, ctx, dialog, &mut controls));
+        let sql_error = controls.sql_error.take();
         if controls.close || modal.should_close() {
             self.database.table_designer = None;
         } else if let Some((task, applying)) = controls.request {
             self.queue_table_design(task, applying);
+        }
+        if let Some(error) = sql_error {
+            self.note_problem(
+                "table-design-sql",
+                "Table definition",
+                crate::problems::Severity::Error,
+                &error,
+            );
         }
     }
 }
@@ -286,6 +305,7 @@ impl NozhikUi {
 struct Controls {
     close: bool,
     request: Option<(Task, bool)>,
+    sql_error: Option<String>,
 }
 #[allow(
     clippy::too_many_lines,
@@ -402,9 +422,7 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
                         }
                     });
                 }
-                Err(error) => {
-                    ui.colored_label(crate::theme::ERROR, error.to_string());
-                }
+                Err(error) => controls.sql_error = Some(error.to_string()),
             }
         }
         if draft.driver == DbDriverType::Mysql {
@@ -420,9 +438,6 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
                 "Loading table definition…"
             });
         });
-    }
-    if !d.error.is_empty() {
-        ui.colored_label(crate::theme::ERROR, &d.error);
     }
     if !d.message.is_empty() {
         ui.colored_label(crate::theme::SUCCESS, &d.message);

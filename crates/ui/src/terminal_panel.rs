@@ -22,6 +22,23 @@ pub struct TerminalPanel {
     actions_rect: Option<egui::Rect>,
 }
 impl TerminalPanel {
+    /// Failed terminal sessions for the project problem log.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let mut incidents = Vec::new();
+        for (id, snapshot) in &self.snapshots {
+            if let SessionState::Failed(message) = &snapshot.state {
+                incidents.push(crate::problems::incident(
+                    format!("terminal-{}", id.0),
+                    crate::problems::severity_of(message),
+                    "Terminal",
+                    message,
+                ));
+            }
+        }
+        incidents
+    }
+}
+impl TerminalPanel {
     pub fn new(ctx: &egui::Context) -> Self {
         let ctx = ctx.clone();
         Self {
@@ -350,8 +367,8 @@ impl TerminalPanel {
             && let Some(session) = self.manager.session(id)
         {
             let snapshot = self.snapshots.get(&id);
-            if let Some(SessionState::Failed(message)) = snapshot.map(|s| &s.state) {
-                ui.colored_label(crate::theme::ERROR, message);
+            if let Some(SessionState::Failed(_)) = snapshot.map(|s| &s.state) {
+                ui.weak("Session failed. Open Problems for the details.");
             } else {
                 let grid = snapshot.and_then(|s| s.grid.as_deref());
                 if let Some(grid) = grid {

@@ -75,7 +75,117 @@ impl Drop for DatabaseUi {
         self.password.zeroize();
     }
 }
+fn catalog_object_incidents(
+    trees: &HashMap<String, DatabaseSchemaTree>,
+) -> Vec<crate::problems::Incident> {
+    let mut incidents = Vec::new();
+    for (profile, tree) in trees {
+        for schema in &tree.schemas {
+            for table in &schema.tables {
+                if let Some(error) = table.objects.error.as_deref() {
+                    incidents.push(crate::problems::incident(
+                        format!("table-objects:{profile}:{}:{}", schema.name, table.name),
+                        crate::problems::Severity::Error,
+                        "Table metadata",
+                        format!("Keys/DDL unavailable: {error}"),
+                    ));
+                }
+            }
+        }
+    }
+    incidents
+}
+
 impl DatabaseUi {
+    /// Connection, console and metadata failures for the project problem log.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let mut incidents = Vec::new();
+        if !self.error.is_empty() && self.error != "Connection test succeeded" {
+            incidents.push(crate::problems::incident(
+                "database",
+                crate::problems::severity_of(&self.error),
+                "Database",
+                &self.error,
+            ));
+        }
+        if let Some(error) = self
+            .schema_dialog
+            .as_ref()
+            .and_then(schema::Dialog::failure)
+            && error != self.error
+        {
+            incidents.push(crate::problems::incident(
+                "database-schema",
+                crate::problems::severity_of(&error),
+                "Database schema",
+                error,
+            ));
+        }
+        if let Some(error) = self
+            .table_designer
+            .as_ref()
+            .and_then(designer::Dialog::failure)
+            && error != self.error
+        {
+            incidents.push(crate::problems::incident(
+                "database-designer",
+                crate::problems::severity_of(&error),
+                "Table definition",
+                error,
+            ));
+        }
+        for (index, tab) in self.tabs.iter().enumerate() {
+            if !tab.error.trim().is_empty() && tab.error != self.error {
+                let title = if tab.title.is_empty() {
+                    "SQL".to_owned()
+                } else {
+                    format!("SQL · {}", tab.title)
+                };
+                incidents.push(crate::problems::incident(
+                    format!("sql-{index}"),
+                    crate::problems::Severity::Error,
+                    title,
+                    tab.error.trim(),
+                ));
+            }
+            if let Some(error) = tab
+                .table
+                .as_ref()
+                .and_then(crate::table_editor::TableEditor::preview_problem)
+                && error != tab.error
+            {
+                incidents.push(crate::problems::incident(
+                    format!("sql-{index}-dml"),
+                    crate::problems::Severity::Error,
+                    "Table data",
+                    error,
+                ));
+            }
+            for (result_index, editor) in tab.result_editors.iter().enumerate() {
+                if let Some(error) = editor.preview_problem() {
+                    incidents.push(crate::problems::incident(
+                        format!("sql-{index}-result-{result_index}"),
+                        crate::problems::Severity::Error,
+                        "SQL result",
+                        error,
+                    ));
+                }
+            }
+        }
+        for ((profile, schema_name, table), error) in &self.table_errors {
+            if !error.trim().is_empty() {
+                incidents.push(crate::problems::incident(
+                    format!("table:{profile}:{schema_name}:{table}"),
+                    crate::problems::Severity::Error,
+                    "Table metadata",
+                    error.trim(),
+                ));
+            }
+        }
+        incidents.extend(catalog_object_incidents(&self.trees));
+        incidents
+    }
+
     pub(crate) fn new_connection(&mut self) {
         self.form = Some(Form::default());
         self.error.clear();
@@ -463,9 +573,6 @@ impl NozhikUi {
                 self.database.error.clear();
             }
         });
-        if !self.database.error.is_empty() {
-            ui.colored_label(crate::theme::ERROR, &self.database.error);
-        }
         let mut selected = self.database.selected_object;
         let actions = egui::ScrollArea::both()
             .show(ui, |ui| tree::show(ui, &self.database, &mut selected))
@@ -1092,9 +1199,6 @@ impl NozhikUi {
                                 "Database"
                             });
                             ui.text_edit_singleline(&mut form.profile.database);
-                            if !self.database.error.is_empty() {
-                                ui.label(&self.database.error);
-                            }
                             if form.tested {
                                 ui.colored_label(crate::theme::SUCCESS, "Test succeeded");
                             }

@@ -63,7 +63,7 @@ impl crate::NozhikUi {
         match pick(kind, self.project.as_ref().map(|p| p.root_path.as_path())) {
             Ok(Some(path)) => self.queue(nozhik_fs_model::Command::OpenPath(path)),
             Ok(None) => {}
-            Err(e) => self.status = e,
+            Err(e) => self.note_status("picker", "Open", crate::problems::Severity::Error, e),
         }
         ctx.request_repaint();
     }

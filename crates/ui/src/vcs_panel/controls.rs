@@ -600,7 +600,6 @@ impl VcsPanel {
                 }
                 Dialog::None => {}
             }
-            if let Some(error)=&self.error {ui.colored_label(theme::ERROR,error);}
         });
         if modal.should_close() {
             self.dialog = Dialog::None;

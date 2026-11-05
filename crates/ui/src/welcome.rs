@@ -25,6 +25,10 @@ impl NozhikUi {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title("Nozhik".into()));
         }
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Welcome layout owns the logo, open actions and recent-project list"
+    )]
     pub(crate) fn welcome_screen(&mut self, ctx: &egui::Context) {
         if let Some((path, auth)) = self.welcome.clone.tick() {
             if self.workspace.managed {
@@ -116,7 +120,9 @@ impl NozhikUi {
                     });
             });
             ui.separator();
-            ui.weak(&self.status);
+            if !self.problems.hides_status(&self.status) {
+                ui.weak(&self.status);
+            }
         });
         if open {
             self.choose_project_folder(ctx);

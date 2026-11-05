@@ -94,7 +94,12 @@ impl crate::NozhikUi {
     pub(crate) fn reformat_code(&mut self, ctx: &egui::Context) {
         self.language_tick(ctx);
         if self.database.active.is_some() {
-            self.status = "No formatting standard for this buffer".into();
+            self.note_status(
+                "format",
+                "Reformat Code",
+                crate::problems::Severity::Error,
+                "No formatting standard for this buffer",
+            );
             return;
         }
         let Some(document) = self
@@ -113,7 +118,12 @@ impl crate::NozhikUi {
             &self.config.enabled_languages,
             &document.path,
         ) {
-            self.status = "Language support is disabled or unavailable for this file".into();
+            self.note_status(
+                "format",
+                "Reformat Code",
+                crate::problems::Severity::Warning,
+                "Language support is disabled or unavailable for this file",
+            );
             return;
         }
         let Some(style) = self
@@ -122,7 +132,12 @@ impl crate::NozhikUi {
             .selected(extension, &self.config.file_types)
             .cloned()
         else {
-            self.status = "Formatting disabled: no code style selected".into();
+            self.note_status(
+                "format",
+                "Reformat Code",
+                crate::problems::Severity::Warning,
+                "Formatting disabled: no code style selected",
+            );
             return;
         };
         let Ok(uri) = Url::from_file_path(&document.path) else {
@@ -155,7 +170,12 @@ impl crate::NozhikUi {
             .is_some_and(|service| service.send(command))
         {
             self.language.formats.remove(&token);
-            self.status = "Language worker unavailable; retry Reformat Code".into();
+            self.note_status(
+                "format",
+                "Reformat Code",
+                crate::problems::Severity::Error,
+                "Language worker unavailable; retry Reformat Code",
+            );
         }
     }
 
@@ -432,6 +452,7 @@ impl crate::NozhikUi {
                 }
             }
         }
+        let mut notes: Vec<(&str, &str, crate::problems::Severity, String)> = Vec::new();
         for event in service.drain() {
             match event {
                 Event::Formatted {
@@ -459,17 +480,43 @@ impl crate::NozhikUi {
                                 edits,
                             ) {
                                 Ok(()) => self.status = "Reformat Code completed".into(),
-                                Err(e) => self.status = e.to_string(),
+                                Err(e) => {
+                                    let detail = e.to_string();
+                                    notes.push((
+                                        "format",
+                                        "Reformat Code",
+                                        crate::problems::severity_of(&detail),
+                                        detail,
+                                    ));
+                                }
                             },
-                            Err(e) => self.status = e.to_string(),
+                            Err(e) => {
+                                let detail = e.to_string();
+                                notes.push((
+                                    "format",
+                                    "Reformat Code",
+                                    crate::problems::severity_of(&detail),
+                                    detail,
+                                ));
+                            }
                         }
                     } else {
-                        self.status = "Reformat discarded: document or code style changed".into();
+                        notes.push((
+                            "format",
+                            "Reformat Code",
+                            crate::problems::Severity::Warning,
+                            "Reformat discarded: document or code style changed".to_owned(),
+                        ));
                     }
                 }
                 Event::Error(error) => {
                     eprintln!("Language support: {error}");
-                    self.status = error;
+                    notes.push((
+                        "language",
+                        "Language support",
+                        crate::problems::severity_of(&error),
+                        error,
+                    ));
                 }
                 Event::Highlights {
                     uri,
@@ -611,7 +658,12 @@ impl crate::NozhikUi {
                         self.language.navigation =
                             Some((path, nozhik_language_support::position(&source, byte)));
                     } else {
-                        self.status = "Symbol location changed; wait for indexing and retry".into();
+                        notes.push((
+                            "navigation",
+                            "Navigation",
+                            crate::problems::Severity::Warning,
+                            "Symbol location changed; wait for indexing and retry".to_owned(),
+                        ));
                     }
                 }
                 self.language.local_navigation = None;
@@ -628,12 +680,21 @@ impl crate::NozhikUi {
                         .buffer
                         .set_cursors(vec![nozhik_buffer::Cursor { anchor: head, head }])
                     {
-                        self.status = error.to_string();
+                        let detail = error.to_string();
+                        notes.push((
+                            "navigation",
+                            "Navigation",
+                            crate::problems::severity_of(&detail),
+                            detail,
+                        ));
                     }
                     self.editor.reveal_line = Some(pos.line as usize);
                 }
                 self.language.navigation = None;
             }
+        }
+        for (source, title, severity, detail) in notes {
+            self.note_status(source, title, severity, detail);
         }
     }
 }
@@ -736,6 +797,7 @@ fn append_stubs(view: &mut EditorLanguage, source: &str, byte: usize) {
 impl crate::NozhikUi {
     fn project_index_tick(&mut self) {
         use nozhik_language_support::project_indexer::IndexEvent;
+        let mut index_error = None;
         if let Some(indexer) = &self.language.indexer {
             for event in indexer.drain() {
                 match event {
@@ -756,10 +818,18 @@ impl crate::NozhikUi {
                     IndexEvent::Finished => self.language.indexing = None,
                     IndexEvent::Error(error) => {
                         self.language.indexing = None;
-                        self.status = format!("Project index: {error}");
+                        index_error = Some(error);
                     }
                 }
             }
+        }
+        if let Some(error) = index_error {
+            self.note_status(
+                "index",
+                "Project index",
+                crate::problems::severity_of(&error),
+                format!("Project index: {error}"),
+            );
         }
     }
     pub(crate) fn index_changed(&self, path: PathBuf) {

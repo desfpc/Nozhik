@@ -5,6 +5,7 @@ impl NozhikUi {
         if !self.plugins_open {
             return;
         }
+        let mut plugin_errors = Vec::new();
         egui::Window::new("Plugins")
             .open(&mut self.plugins_open)
             .default_width(600.0)
@@ -17,7 +18,7 @@ impl NozhikUi {
                     && let Err(error) =
                         manager.scan(self.project.as_ref().map(|p| p.root_path.clone()))
                 {
-                    self.status = error.to_string();
+                    plugin_errors.push(error.to_string());
                 }
                 let snapshot = manager.snapshot();
                 if snapshot.plugins.is_empty() {
@@ -36,7 +37,7 @@ impl NozhikUi {
                                         && let Err(error) =
                                             manager.set_enabled(&plugin.manifest.id, enabled)
                                     {
-                                        self.status = error.to_string();
+                                        plugin_errors.push(error.to_string());
                                     }
                                 });
                                 ui.label(format!(
@@ -72,5 +73,13 @@ impl NozhikUi {
                         }
                     });
             });
+        for error in plugin_errors {
+            self.note_status(
+                "plugins",
+                "Plugins",
+                crate::problems::Severity::Error,
+                error,
+            );
+        }
     }
 }

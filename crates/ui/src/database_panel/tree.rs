@@ -225,12 +225,11 @@ impl Tree<'_> {
                             |tree, ui| {
                                 if table.details_loaded {
                                     tree.details(ui, id, depth + 2, profile, &schema.name, table);
-                                } else if let Some(error) = db.table_errors.get(&(
+                                } else if db.table_errors.contains_key(&(
                                     profile.name.clone(),
                                     schema.name.clone(),
                                     table.name.clone(),
                                 )) {
-                                    ui.colored_label(crate::theme::ERROR, error);
                                     if ui.button("Retry table metadata").clicked() {
                                         tree.actions.push(Action::Describe(
                                             profile.name.clone(),
@@ -359,11 +358,7 @@ impl Tree<'_> {
                 }
             },
         );
-        if let Some(error) = &table.objects.error {
-            ui.colored_label(
-                crate::theme::ERROR,
-                format!("Keys/DDL unavailable: {error}"),
-            );
+        if table.objects.error.is_some() {
             if ui.button("Retry table metadata").clicked() {
                 self.actions.push(Action::Describe(
                     profile.name.clone(),

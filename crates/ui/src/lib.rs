@@ -21,6 +21,7 @@ mod layout;
 mod llm_panel;
 mod menu_bar;
 mod plugins;
+mod problems;
 mod project;
 mod project_badge;
 mod project_dialog;
@@ -148,6 +149,8 @@ pub struct NozhikUi {
     last_shift: Option<f64>,
     status: String,
     editor: editor_view::TextEditorView,
+    /// Session problems and their bottom-right toasts. Cleared with the project shell.
+    problems: problems::ProblemLog,
 }
 
 impl NozhikUi {
@@ -231,6 +234,7 @@ impl NozhikUi {
             last_shift: None,
             status: "Open a project folder".into(),
             editor: editor_view::TextEditorView::default(),
+            problems: problems::ProblemLog::default(),
         }
     }
 

@@ -144,6 +144,28 @@ impl Default for VcsPanel {
     }
 }
 impl VcsPanel {
+    /// Git operation and settings failures for the project problem log.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let mut incidents = Vec::new();
+        if let Some(error) = &self.error {
+            incidents.push(crate::problems::incident(
+                "git",
+                crate::problems::severity_of(error),
+                "Git",
+                error,
+            ));
+        }
+        if let Some(error) = self.settings_problem() {
+            incidents.push(crate::problems::incident(
+                "git-settings",
+                crate::problems::severity_of(&error),
+                "Git settings",
+                error,
+            ));
+        }
+        incidents
+    }
+
     pub(crate) fn set_project(&mut self, root: &std::path::Path) {
         if self.project.as_deref() == Some(root) {
             return;
@@ -488,9 +510,6 @@ impl VcsPanel {
             }
         });
         ui.separator();
-        if let Some(error) = &self.error {
-            ui.colored_label(crate::theme::ERROR, error);
-        }
         let Some(_repo) = &self.repo else {
             ui.weak("No Git repository found in this project");
             return;

@@ -74,7 +74,12 @@ impl NozhikUi {
                 if ctx.input_mut(|i| i.consume_key(modifiers, key))
                     && let Err(error) = keymap.dispatch(chord, context, &actions)
                 {
-                    self.status = error.to_string();
+                    self.note_status(
+                        "keymap",
+                        "Keymap",
+                        crate::problems::Severity::Error,
+                        error.to_string(),
+                    );
                 }
             }
         }
@@ -148,12 +153,22 @@ impl NozhikUi {
                         }
                     }
                     Event::File(FileEvent::Error(error)) => {
-                        self.status.clone_from(error);
+                        self.note_status(
+                            "watcher",
+                            "File watcher",
+                            crate::problems::severity_of(error),
+                            error.clone(),
+                        );
                         eprintln!("Watcher: {error}");
                     }
                     Event::ConfigChanged(_) => match self.settings.snapshot() {
                         Ok(config) => self.config = config,
-                        Err(error) => self.status = error.to_string(),
+                        Err(error) => self.note_status(
+                            "settings",
+                            "Settings",
+                            crate::problems::Severity::Error,
+                            error.to_string(),
+                        ),
                     },
                     _ => {}
                 },
@@ -163,7 +178,12 @@ impl NozhikUi {
                             nozhik_language_support::project_indexer::IndexCommand::Reconcile,
                         );
                     }
-                    self.status = format!("Missed {count} notifications; current buffers retained");
+                    self.note_status(
+                        "events",
+                        "Events",
+                        crate::problems::Severity::Warning,
+                        format!("Missed {count} notifications; current buffers retained"),
+                    );
                     self.refresh_project();
                     self.vcs.invalidate();
                     if let Ok(config) = self.settings.snapshot() {
@@ -256,8 +276,12 @@ impl NozhikUi {
                         .count();
                     ui.label(format!("Errors: {errors}  Warnings: {warnings}"))
                         .on_hover_text("Diagnostics in open language buffers");
-                    ui.weak(&self.status);
-                    if let Some(status) = &self.editor.ai.status {
+                    if !self.problems.hides_status(&self.status) {
+                        ui.weak(&self.status);
+                    }
+                    if let Some(status) = &self.editor.ai.status
+                        && self.editor.ai.problem().is_none()
+                    {
                         ui.weak(status);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -350,8 +374,15 @@ impl NozhikUi {
                             self.bottom = None;
                         }
                         if let Some(error) = error {
-                            self.status = error;
+                            self.note_status(
+                                "terminal",
+                                "Terminal",
+                                crate::problems::severity_of(&error),
+                                error,
+                            );
                         }
+                    } else if label == "! Problems" {
+                        self.problems.show_panel(ui);
                     } else {
                         ui.label(label);
                         ui.separator();
@@ -636,7 +667,12 @@ impl NozhikUi {
                         enabled,
                         self.language.views.get_mut(&document.path),
                     ) {
-                        self.status = error.to_string();
+                        self.note_status(
+                            "editor",
+                            "Editor",
+                            crate::problems::Severity::Error,
+                            error.to_string(),
+                        );
                     }
                     if let Some(target) = self.editor.documentation_target.take() {
                         use nozhik_language_support::doc_provider::DefinitionTarget;
@@ -684,6 +720,10 @@ impl eframe::App for NozhikUi {
     }
 }
 impl NozhikUi {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One frame routes project services, tools and session notifications"
+    )]
     pub(crate) fn update_frame(&mut self, ctx: &Context) {
         let wake_context = ctx.clone();
         self.fs.set_wakeup(move || wake_context.request_repaint());
@@ -695,8 +735,10 @@ impl NozhikUi {
             if self.native_menu.is_some() {
                 self.menu_bar(ctx);
             }
+            self.observe_session_problems();
             self.welcome_screen(ctx);
             self.integration_dialogs(ctx);
+            self.problems.show_toasts(ctx);
             return;
         }
         self.welcome_transition(ctx);
@@ -711,7 +753,16 @@ impl NozhikUi {
         if let Some(panel) = &mut self.terminal
             && let Some(message) = panel.tick()
         {
-            self.status = message;
+            if message.contains("exited with code 0") {
+                self.status = message;
+            } else {
+                let severity = if message.contains("exited with code") {
+                    crate::problems::Severity::Warning
+                } else {
+                    crate::problems::severity_of(&message)
+                };
+                self.note_status("terminal", "Terminal", severity, message);
+            }
         }
         if let Some(panel) = &mut self.llm {
             panel.tick();
@@ -727,6 +778,7 @@ impl NozhikUi {
             self.left = Some(LeftTool::Project);
         }
         self.settings_tick(ctx);
+        self.observe_session_problems();
         self.menu_bar(ctx);
         self.top_bar(ctx);
         self.project_tabs(ctx);
@@ -742,7 +794,12 @@ impl NozhikUi {
                 self.search
                     .set_actions(&manager.actions(), &manager.keymap(), context)
             {
-                self.status = error.to_string();
+                self.note_status(
+                    "actions",
+                    "Actions",
+                    crate::problems::Severity::Error,
+                    error.to_string(),
+                );
             }
         }
         if let Some(target) = self.search.show(ctx, &self.documents) {
@@ -769,6 +826,8 @@ impl NozhikUi {
         self.welcome.clone.show(ctx);
         self.index_dialogs(ctx);
         self.project_entry_dialog(ctx);
+        self.observe_session_problems();
+        self.problems.show_toasts(ctx);
         if !self.integration.actions.is_empty() {
             ctx.request_repaint();
         }

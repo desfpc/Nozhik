@@ -31,6 +31,28 @@ pub struct SettingsDialog {
     pending: usize,
 }
 impl SettingsDialog {
+    /// AI service and SFTP deployment settings failures.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let mut incidents = Vec::new();
+        if let Some(error) = self.ai.failure() {
+            incidents.push(crate::problems::incident(
+                "ai-service",
+                crate::problems::Severity::Error,
+                "AI service",
+                error,
+            ));
+        }
+        if let Some(error) = self.deployment.problem() {
+            incidents.push(crate::problems::incident(
+                "sftp-settings",
+                crate::problems::severity_of(&error),
+                "SFTP deployment",
+                error,
+            ));
+        }
+        incidents
+    }
+
     pub fn start(path: PathBuf, bus: nozhik_event_bus::EventBus) -> Self {
         let (requests, input) = mpsc::channel();
         let (output, replies) = mpsc::channel();
@@ -408,7 +430,8 @@ impl crate::NozhikUi {
                 .clone_from(&self.config.php_language_level);
             self.settings_dialog.pending += 1;
         }
-        for reply in self.settings_dialog.replies.try_iter() {
+        let replies: Vec<_> = self.settings_dialog.replies.try_iter().collect();
+        for reply in replies {
             self.settings_dialog.pending = self.settings_dialog.pending.saturating_sub(1);
             match reply {
                 Reply::Catalog(Ok(styles)) => self.settings_dialog.styles = styles,
@@ -423,12 +446,16 @@ impl crate::NozhikUi {
                                     view.request = None;
                                 }
                             }
-                            Err(e) => self.status = e,
+                            Err(e) => {
+                                self.note_status("php", "PHP", crate::problems::Severity::Error, e);
+                            }
                         }
                     }
                 }
                 Reply::Saved(Ok(())) => self.status = "Settings saved".into(),
-                Reply::Catalog(Err(e)) | Reply::Saved(Err(e)) => self.status = e,
+                Reply::Catalog(Err(e)) | Reply::Saved(Err(e)) => {
+                    self.note_status("settings", "Settings", crate::problems::Severity::Error, e);
+                }
             }
         }
         if self.settings_dialog.pending > 0 {
@@ -496,7 +523,12 @@ impl crate::NozhikUi {
                         self.settings_dialog.pending += 1;
                     }
                 }
-                Err(e) => self.status = e.to_string(),
+                Err(e) => self.note_status(
+                    "settings",
+                    "Settings",
+                    crate::problems::Severity::Error,
+                    e.to_string(),
+                ),
             }
         }
         if self.settings_dialog.pending > 0 {

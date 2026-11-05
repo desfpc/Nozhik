@@ -310,7 +310,6 @@ impl VcsPanel {
                     self.history_dialog_fields(ui, &mut dialog, &mut apply);
                     ui.weak("Merge commits use their first parent; replaying them flattens the merge. Git acts on saved files; existing editor buffers are retained.");
                     ui.separator();
-                    if let Some(error) = &self.error { ui.colored_label(theme::ERROR, error); }
                     ui.horizontal(|ui| {
                         if ui.button("Cancel").clicked() { close = true; }
                         if ui.add_enabled(self.mutations.is_empty() && dialog.valid(), egui::Button::new(dialog.confirm_label()).fill(BLUE).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() { apply = true; }

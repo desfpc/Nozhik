@@ -21,6 +21,18 @@ pub struct DeploymentSettings {
     profile: String,
     root: String,
     error: String,
+    missing_profile: bool,
+}
+impl DeploymentSettings {
+    /// Settings failure, including a selected SSH profile that disappeared.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !self.error.is_empty() {
+            return Some(self.error.clone());
+        }
+        self.missing_profile.then(|| {
+            "The selected SSH connection no longer exists. Choose another connection.".to_owned()
+        })
+    }
 }
 impl DeploymentSettings {
     pub fn show(
@@ -31,6 +43,7 @@ impl DeploymentSettings {
     ) {
         ui.heading("SFTP Deployment");
         let Some(profiles) = profiles else {
+            self.missing_profile = false;
             ui.weak("Open a project to configure its deployment server.");
             return;
         };
@@ -61,12 +74,8 @@ impl DeploymentSettings {
                     ui.selectable_value(&mut self.profile, profile.name.clone(), &profile.name);
                 }
             });
-        if !self.profile.is_empty() && !profiles.iter().any(|p| p.name == self.profile) {
-            ui.colored_label(
-                crate::theme::ERROR,
-                "The selected SSH connection no longer exists. Choose another connection.",
-            );
-        }
+        self.missing_profile =
+            !self.profile.is_empty() && !profiles.iter().any(|p| p.name == self.profile);
         ui.label("Remote project root");
         ui.add(
             egui::TextEdit::singleline(&mut self.root)
@@ -74,9 +83,6 @@ impl DeploymentSettings {
                 .desired_width(f32::INFINITY),
         );
         ui.weak("Project-relative paths are preserved. Deploy uploads saved files and overwrites matching remote files; unrelated remote files are kept.");
-        if !self.error.is_empty() {
-            ui.colored_label(crate::theme::ERROR, &self.error);
-        }
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
@@ -216,8 +222,43 @@ pub struct DeploymentUi {
     message: String,
 }
 impl DeploymentUi {
-    pub const fn visible(&self) -> bool {
-        self.busy() || !self.message.is_empty()
+    /// Progress UI stays hidden once the only remaining text is a recorded failure.
+    pub fn visible(&self) -> bool {
+        self.busy() || (!self.message.is_empty() && self.failure_message().is_none())
+    }
+
+    /// Idle message that should be a session problem rather than a progress line.
+    pub(crate) fn failure_message(&self) -> Option<(&str, crate::problems::Severity)> {
+        let message = self.message.as_str();
+        if message.is_empty()
+            || message.starts_with("Connecting")
+            || message.starts_with("SFTP Deploy complete")
+            || message.starts_with("SFTP Deploy →")
+            || message.starts_with("SFTP Deploy: connecting")
+            || message.starts_with("Cancelling")
+        {
+            return None;
+        }
+        let severity = if message.contains("stopped") || message.contains("exhausted") {
+            crate::problems::Severity::Critical
+        } else if message.contains("cancelled") {
+            crate::problems::Severity::Warning
+        } else {
+            crate::problems::Severity::Error
+        };
+        Some((message, severity))
+    }
+
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        self.failure_message()
+            .map_or_else(Vec::new, |(message, severity)| {
+                vec![crate::problems::incident(
+                    "sftp-deploy",
+                    severity,
+                    "SFTP deployment",
+                    message,
+                )]
+            })
     }
     pub fn accepts(&self, id: u64) -> bool {
         self.pending.as_ref().is_some_and(|p| p.id == id)
@@ -268,10 +309,13 @@ impl DeploymentUi {
             if self.busy() {
                 ui.spinner();
             }
+            let failure = self.failure_message().is_some();
             ui.label(if self.pending.is_some() {
                 "SFTP Deploy: waiting for SSH connection…"
+            } else if failure {
+                "SFTP Deploy"
             } else {
-                &self.message
+                self.message.as_str()
             });
             if self.busy() && ui.button("Cancel deployment").clicked() {
                 let message = if self.transfer.is_some() {
@@ -354,7 +398,13 @@ impl crate::NozhikUi {
             self.deployment.message = "Connecting for SFTP deployment…".into();
             Ok(())
         })();
-        self.status = result.map_or_else(|e| e, |()| "SFTP Deploy: connecting…".into());
+        match result {
+            Ok(()) => self.status = "SFTP Deploy: connecting…".into(),
+            Err(error) => {
+                self.deployment.message.clone_from(&error);
+                self.status = error;
+            }
+        }
     }
     fn deployment_sources_saved(&self, sources: &Sources) -> Result<(), String> {
         if self.documents.iter().any(|d| {

@@ -78,7 +78,12 @@ impl NozhikUi {
         if !self.workspace.managed {
             match crate::menu_bar::native::NativeMenu::new(ctx) {
                 Ok(menu) => self.native_menu = Some(menu),
-                Err(e) => self.status = format!("Native menu: {e}"),
+                Err(e) => self.note_status(
+                    "menu",
+                    "Menu",
+                    crate::problems::Severity::Error,
+                    format!("Native menu: {e}"),
+                ),
             }
         }
     }
@@ -269,7 +274,12 @@ impl NozhikUi {
                             self.integration.path_focus = true;
                         }
                         Ok(None) => {}
-                        Err(e) => self.status = e,
+                        Err(e) => self.note_status(
+                            "new-project",
+                            "New project",
+                            crate::problems::Severity::Error,
+                            e,
+                        ),
                     }
                 }
                 "ui.new_file" => {
@@ -312,7 +322,12 @@ impl NozhikUi {
                         if let Err(e) = result
                             && !matches!(e, nozhik_buffer::BufferError::EmptyHistory)
                         {
-                            self.status = e.to_string();
+                            self.note_status(
+                                "editor",
+                                "Editor",
+                                crate::problems::Severity::Error,
+                                e.to_string(),
+                            );
                         }
                     }
                 }
@@ -359,7 +374,12 @@ impl NozhikUi {
                         if action == "ui.cut"
                             && let Err(e) = TextEditorView::replace(buffer, "", None)
                         {
-                            self.status = e.to_string();
+                            self.note_status(
+                                "editor",
+                                "Editor",
+                                crate::problems::Severity::Error,
+                                e.to_string(),
+                            );
                         }
                     }
                     if action == "ui.paste" {
@@ -433,7 +453,12 @@ impl NozhikUi {
                     if let Some(root) = root
                         && let Some(e) = panel.create(&root)
                     {
-                        self.status = e;
+                        self.note_status(
+                            "terminal",
+                            "Terminal",
+                            crate::problems::severity_of(&e),
+                            e,
+                        );
                     }
                 }
                 "ui.about" => self.integration.about = true,
@@ -501,9 +526,6 @@ impl NozhikUi {
             egui::Modal::new(egui::Id::new("unsaved_close")).show(ctx, |ui| {
                 ui.heading("Unsaved changes");
                 ui.label(if pending_table { "Table changes are pending. Cancel to return and use Submit or Revert; Discard closes without submitting." } else { "Save modified files before closing?" });
-                if let Some(error) = &self.integration.save_error {
-                    ui.colored_label(crate::theme::ERROR, error);
-                }
                 ui.horizontal(|ui| {
                     save = ui
                         .add_enabled(!self.integration.waiting && !pending_table, egui::Button::new("Save All"))
@@ -569,11 +591,6 @@ impl NozhikUi {
             } else {
                 ui.label("Absolute path");
             }
-            if matches!(action, PathAction::NewProject)
-                && let Some(error) = &self.integration.project_error
-            {
-                ui.colored_label(crate::theme::ERROR, error);
-            }
             let input = ui.add_enabled(
                 !self.integration.creating_project,
                 egui::TextEdit::singleline(&mut self.integration.path),
@@ -606,7 +623,12 @@ impl NozhikUi {
         if accept && !self.integration.creating_project {
             let path = PathBuf::from(&self.integration.path);
             if !matches!(action, PathAction::NewProject) && !path.is_absolute() {
-                self.status = "Enter an absolute path".into();
+                self.note_status(
+                    "path",
+                    "Path",
+                    crate::problems::Severity::Warning,
+                    "Enter an absolute path",
+                );
                 return;
             }
             match action {
@@ -729,7 +751,12 @@ impl NozhikUi {
                     self.editor.reveal_line = line;
                 }
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.note_status(
+                "navigation",
+                "Navigation",
+                crate::problems::Severity::Error,
+                e.to_string(),
+            ),
         }
     }
     /// Idempotent bounded teardown; called by eframe before the app event runtime stops.

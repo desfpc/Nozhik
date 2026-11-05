@@ -91,9 +91,6 @@ impl SqlConsole {
             self.editor_id = None;
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    if !self.error.is_empty() {
-                        ui.colored_label(crate::theme::ERROR, &self.error);
-                    }
                     if self.metadata_loading && !self.connection_invalid {
                         ui.spinner();
                         ui.label("Loading table metadata…");
@@ -110,9 +107,6 @@ impl SqlConsole {
         if let Some(table) = &mut self.table {
             self.focus_id = None;
             self.editor_id = None;
-            if !self.error.is_empty() {
-                ui.colored_label(crate::theme::ERROR, &self.error);
-            }
             if table.changes.is_none()
                 && let Some((_, cancel)) = &self.pending
             {
@@ -196,9 +190,6 @@ impl SqlConsole {
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
         {
             execute = true;
-        }
-        if !self.error.is_empty() {
-            ui.colored_label(crate::theme::ERROR, &self.error);
         }
         self.language.sql_catalog = tree
             .zip(profiles.iter().find(|p| p.name == self.connection))

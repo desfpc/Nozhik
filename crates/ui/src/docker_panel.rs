@@ -28,6 +28,18 @@ pub struct DockerUi {
     markers: HashMap<PathBuf, (u64, u64, Vec<RunMarker>)>,
 }
 impl DockerUi {
+    /// Docker worker failures for the project problem log.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        self.error.as_ref().map_or_else(Vec::new, |error| {
+            vec![crate::problems::incident(
+                "docker",
+                crate::problems::severity_of(error),
+                "Docker",
+                error,
+            )]
+        })
+    }
+
     pub(crate) fn shutdown(&mut self) {
         self.worker = None;
     }
@@ -128,9 +140,19 @@ impl crate::NozhikUi {
         {
             let path = document.path.clone();
             if document.buffer.is_dirty() {
-                self.status = "Save the Compose file before starting services".into();
+                self.note_status(
+                    "docker-run",
+                    "Docker",
+                    crate::problems::Severity::Warning,
+                    "Save the Compose file before starting services",
+                );
             } else if self.docker.busy.is_some() {
-                self.status = "Wait for the current Docker operation".into();
+                self.note_status(
+                    "docker-run",
+                    "Docker",
+                    crate::problems::Severity::Warning,
+                    "Wait for the current Docker operation",
+                );
             } else {
                 self.docker.selected = Some(path);
                 self.left = Some(crate::LeftTool::Docker);
@@ -380,9 +402,6 @@ impl crate::NozhikUi {
                         action = Some(Action::Console(container.id.clone()));
                     }
                 });
-                if let Some(error) = &self.docker.error {
-                    ui.colored_label(crate::theme::ERROR, error);
-                }
                 ui.separator();
                 egui::ScrollArea::both()
                     .id_salt("docker_container_content")
@@ -562,9 +581,6 @@ fn panel_header(ui: &mut egui::Ui, state: &mut DockerUi) -> (Option<Action>, boo
             worker.cancel();
         }
     });
-    if let Some(error) = &state.error {
-        ui.colored_label(crate::theme::ERROR, error);
-    }
     (action, refresh)
 }
 

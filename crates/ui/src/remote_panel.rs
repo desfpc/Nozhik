@@ -82,6 +82,48 @@ impl Form {
     }
 }
 impl RemoteUi {
+    /// SSH profile, login and host-key failures for the project problem log.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let mut incidents = Vec::new();
+        if !self.profile_error.is_empty() {
+            incidents.push(crate::problems::incident(
+                "ssh-profile",
+                crate::problems::severity_of(&self.profile_error),
+                "SSH",
+                &self.profile_error,
+            ));
+        }
+        if !self.login_error.is_empty() && self.login_error != self.profile_error {
+            incidents.push(crate::problems::incident(
+                "ssh-login",
+                crate::problems::Severity::Error,
+                "SSH login",
+                &self.login_error,
+            ));
+        }
+        if let Some(error) = &self.host_key_error {
+            incidents.push(crate::problems::incident(
+                "ssh-host-key",
+                crate::problems::Severity::Critical,
+                "SSH host key",
+                error,
+            ));
+        }
+        if let Some(form) = &self.form
+            && !form.error.is_empty()
+            && form.error != self.profile_error
+        {
+            incidents.push(crate::problems::incident(
+                "ssh-form",
+                crate::problems::Severity::Error,
+                "SSH host",
+                &form.error,
+            ));
+        }
+        incidents
+    }
+}
+impl RemoteUi {
     pub fn database_profiles(&self) -> &[SshProfile] {
         &self.profiles
     }
@@ -228,7 +270,12 @@ impl NozhikUi {
             }
             Reply::Verified(profile, intent) => {
                 if !self.remote.verified(profile, intent) {
-                    self.status = "SSH queue full/stopped".into();
+                    self.note_status(
+                        "ssh",
+                        "SSH",
+                        crate::problems::Severity::Critical,
+                        "SSH queue full/stopped",
+                    );
                     if let Intent::Deployment(id) = intent {
                         self.deployment.cancel(Some(id), "SSH queue full/stopped");
                     }
@@ -266,7 +313,12 @@ impl NozhikUi {
                 self.remote.connected.remove(&name);
                 self.remote.tree.retain(|(host, _), _| host != &name);
                 self.remote.pending.retain(|(host, _)| host != &name);
-                self.status = format!("SSH {name}: Offline");
+                self.note_status(
+                    "ssh-offline",
+                    "SSH",
+                    crate::problems::Severity::Warning,
+                    format!("SSH {name}: Offline"),
+                );
             }
             Reply::Shell(name, shell) => {
                 self.remote.connected.insert(name.clone());
@@ -275,7 +327,12 @@ impl NozhikUi {
                     .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
                 match panel.create_remote(&name, Box::new(shell)) {
                     Ok(()) => self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL),
-                    Err(e) => self.status = e.to_string(),
+                    Err(e) => self.note_status(
+                        "ssh-shell",
+                        "SSH",
+                        crate::problems::Severity::Error,
+                        e.to_string(),
+                    ),
                 }
             }
             Reply::Listed(name, path, entries) => {
@@ -321,6 +378,10 @@ impl NozhikUi {
             }
         }
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "SSH host rows share connect, browse and queue-failure handling"
+    )]
     pub(crate) fn remote_panel(&mut self, ui: &mut egui::Ui) {
         if ui
             .add_enabled(
@@ -361,7 +422,12 @@ impl NozhikUi {
                         .remote
                         .queue(Command::ForgetPassword(profile.name.clone()))
                 {
-                    self.status = "SSH queue full/stopped".into();
+                    self.note_status(
+                        "ssh",
+                        "SSH",
+                        crate::problems::Severity::Critical,
+                        "SSH queue full/stopped",
+                    );
                 }
             });
             for (label, intent) in [
@@ -371,7 +437,12 @@ impl NozhikUi {
                 ("Start Tunnels", Intent::Tunnels),
             ] {
                 if ui.button(label).clicked() && !self.remote.connect(profile.clone(), intent) {
-                    self.status = "SSH queue full/stopped".into();
+                    self.note_status(
+                        "ssh",
+                        "SSH",
+                        crate::problems::Severity::Critical,
+                        "SSH queue full/stopped",
+                    );
                 }
             }
             if self.remote.connected.contains(&profile.name) {
@@ -426,7 +497,6 @@ impl NozhikUi {
             egui::Modal::new(egui::Id::new("delete_ssh_profile")).show(ctx, |ui| {
                 ui.heading(format!("Delete SSH host {name}?"));
                 ui.label("The profile and saved password will be removed. Active connections will close; open editor buffers keep their text.");
-                if !self.remote.profile_error.is_empty() { ui.colored_label(crate::theme::ERROR, &self.remote.profile_error); }
                 if ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Delete host")).clicked() { remove = Some(name.clone()); }
                 cancel = ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Cancel")).clicked();
             });
@@ -435,7 +505,12 @@ impl NozhikUi {
             if self.remote.queue(Command::DeleteProfile(name)) {
                 self.remote.profile_busy = true;
             } else {
-                self.status = "SSH queue full/stopped".into();
+                self.note_status(
+                    "ssh",
+                    "SSH",
+                    crate::problems::Severity::Critical,
+                    "SSH queue full/stopped",
+                );
             }
         }
         if cancel {
@@ -477,7 +552,12 @@ impl NozhikUi {
             && let Some((profile, pin, intent)) = self.remote.trust.take()
             && !self.remote.queue(Command::Trust(profile, pin, intent))
         {
-            self.status = "SSH queue full/stopped".into();
+            self.note_status(
+                "ssh",
+                "SSH",
+                crate::problems::Severity::Critical,
+                "SSH queue full/stopped",
+            );
             if let Intent::Deployment(id) = intent {
                 self.deployment.cancel(Some(id), "SSH queue full/stopped");
             }
@@ -492,7 +572,12 @@ impl NozhikUi {
                     .cancel(Some(*id), "SSH connection cancelled");
             }
             self.remote.cancel_trust();
-            self.status = "SSH connection cancelled; host was not trusted".into();
+            self.note_status(
+                "ssh-trust",
+                "SSH",
+                crate::problems::Severity::Warning,
+                "SSH connection cancelled; host was not trusted",
+            );
         }
     }
     #[allow(
@@ -560,9 +645,6 @@ impl NozhikUi {
                     2 => AuthMethod::Agent,
                     _ => AuthMethod::Password,
                 };
-                if !form.error.is_empty() {
-                    ui.colored_label(crate::theme::ERROR, &form.error);
-                }
                 ui.horizontal(|ui| {
                     let valid = form.profile.validate();
                     if ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Save profile")).clicked() {
@@ -585,7 +667,12 @@ impl NozhikUi {
             if self.remote.queue(Command::UpsertProfile(original, profile)) {
                 self.remote.profile_busy = true;
             } else {
-                self.status = "SSH queue full/stopped".into();
+                self.note_status(
+                    "ssh",
+                    "SSH",
+                    crate::problems::Severity::Critical,
+                    "SSH queue full/stopped",
+                );
             }
         }
         if let Some(profile) = test {
@@ -627,7 +714,6 @@ impl NozhikUi {
                 if std::mem::take(&mut self.remote.login_focus) {
                     password.request_focus();
                 }
-                if !self.remote.login_error.is_empty() { ui.colored_label(crate::theme::ERROR, &self.remote.login_error); }
                 ui.add_enabled_ui(can_remember, |ui| { ui.checkbox(&mut profile.save_password, "Save password in system credential store"); });
                 ui.weak(if can_remember { "macOS Keychain / Windows Credential Manager / Linux Secret Service. Passwords are never written to JSON." } else { "Save this SSH profile first to remember its password." });
                 connect = ui.button("Connect").clicked()
@@ -639,7 +725,12 @@ impl NozhikUi {
             let secret = std::mem::take(&mut self.remote.secret);
             let secret = Some(Secret::new(secret));
             if !self.remote.queue(Command::Connect(profile, secret, intent)) {
-                self.status = "SSH queue full/stopped".into();
+                self.note_status(
+                    "ssh",
+                    "SSH",
+                    crate::problems::Severity::Critical,
+                    "SSH queue full/stopped",
+                );
                 if let Intent::Deployment(id) = intent {
                     self.deployment.cancel(Some(id), "SSH queue full/stopped");
                 }

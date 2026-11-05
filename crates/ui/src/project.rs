@@ -30,6 +30,28 @@ struct EntryDialog {
     error: Option<String>,
 }
 
+impl ProjectControls {
+    /// New file or folder creation failure.
+    pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
+        let Some(dialog) = &self.creation else {
+            return Vec::new();
+        };
+        let Some(error) = dialog.error.clone() else {
+            return Vec::new();
+        };
+        vec![crate::problems::incident(
+            "project-entry",
+            crate::problems::severity_of(&error),
+            if dialog.directory {
+                "New folder"
+            } else {
+                "New file"
+            },
+            error,
+        )]
+    }
+}
+
 impl NozhikUi {
     /// Opens a project asynchronously in its own workspace session.
     pub fn open_project(&mut self, path: PathBuf) {
@@ -48,7 +70,12 @@ impl NozhikUi {
             return;
         }
         if !self.fs.send(command) {
-            self.status = "Filesystem worker stopped".into();
+            self.note_status(
+                "filesystem",
+                "Files",
+                crate::problems::Severity::Critical,
+                "Filesystem worker stopped",
+            );
         }
     }
     pub(crate) fn refresh_project(&mut self) {
@@ -82,7 +109,12 @@ impl NozhikUi {
             return;
         };
         if document.binary {
-            self.status = "Binary file not supported".into();
+            self.note_status(
+                "files",
+                "Files",
+                crate::problems::Severity::Warning,
+                "Binary file not supported",
+            );
             return;
         }
         let path = document.path.clone();
@@ -113,6 +145,10 @@ impl NozhikUi {
             self.status = self.integration.save_error.clone().unwrap_or_default();
         }
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Filesystem replies update the tree, buffers and the session problem log"
+    )]
     pub(crate) fn receive_files(&mut self) {
         let replies: Vec<_> = self.fs.drain().collect();
         for reply in replies {
@@ -204,6 +240,14 @@ impl NozhikUi {
                     }
                     self.refresh = RefreshState::Idle;
                     self.status.clone_from(&error);
+                    if self.integration.save_error.as_deref() != Some(error.as_str()) {
+                        self.note_problem(
+                            "filesystem",
+                            "Files",
+                            crate::problems::severity_of(&error),
+                            &error,
+                        );
+                    }
                     eprintln!("Filesystem: {error}");
                 }
             }
@@ -217,7 +261,12 @@ impl NozhikUi {
             && let Some(manager) = &self.plugins
             && let Err(error) = manager.scan(Some(tree.root_path.clone()))
         {
-            self.status = error.to_string();
+            self.note_status(
+                "plugins",
+                "Plugins",
+                crate::problems::Severity::Error,
+                error.to_string(),
+            );
         }
         self.vcs.set_project(&tree.root_path);
         if self
@@ -246,7 +295,12 @@ impl NozhikUi {
             return;
         }
         let Some(next) = self.next_buffer_id.checked_add(1) else {
-            self.status = "Buffer IDs exhausted".into();
+            self.note_status(
+                "editor",
+                "Editor",
+                crate::problems::Severity::Critical,
+                "Buffer IDs exhausted",
+            );
             return;
         };
         let mut buffer = TextBuffer::load_from_str(BufferId(self.next_buffer_id), text);
@@ -633,9 +687,6 @@ impl NozhikUi {
             if dialog.focus {
                 input.request_focus();
                 dialog.focus = false;
-            }
-            if let Some(error) = &dialog.error {
-                ui.colored_label(crate::theme::ERROR, error);
             }
             ui.horizontal(|ui| {
                 accept = ui

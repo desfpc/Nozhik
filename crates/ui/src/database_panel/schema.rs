@@ -42,6 +42,17 @@ pub(super) struct Dialog {
     message: String,
     output: String,
 }
+impl Dialog {
+    /// Stored schema-dialog failure, without surrounding whitespace.
+    pub(super) fn failure(&self) -> Option<String> {
+        let trimmed = self.error.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    }
+}
 #[cfg(test)]
 impl Dialog {
     pub(super) const fn busy(&self) -> bool {
@@ -256,6 +267,7 @@ impl NozhikUi {
         let mut close = false;
         let mut request = None;
         let mut export = false;
+        let mut schema_sql_error = None;
         let busy = dialog.pending.is_some();
         let modal = egui::Modal::new(egui::Id::new("schema_actions")).show(ctx, |ui| {
             ui.set_width(900.0_f32.min(ctx.screen_rect().width() - 60.0));
@@ -272,7 +284,7 @@ impl NozhikUi {
                         sql_preview(ui, &sql);
                         if ui.add_enabled(!busy && !sql.is_empty(), egui::Button::new("Apply")).clicked() { request = Some((Task::Modify(Box::new(original.clone()), Box::new(dialog.draft.clone())), After::Modify)); }
                     }
-                    Err(e) => { ui.colored_label(crate::theme::ERROR, e.to_string()); }
+                    Err(e) => schema_sql_error = Some(e.to_string()),
                 }
                 ui.label("DDL can commit immediately. On error or cancellation, completed commands may remain applied.");
             }
@@ -300,7 +312,6 @@ impl NozhikUi {
             }
             if busy { ui.horizontal(|ui| { ui.spinner(); ui.label("Working…"); }); }
             if dialog.action == Action::Run { ui.label("Completed statements may remain applied if execution fails or is cancelled."); }
-            if !dialog.error.is_empty() { ui.colored_label(crate::theme::ERROR, &dialog.error); }
             if !dialog.message.is_empty() { ui.label(&dialog.message); }
             if ui.button(if busy { "Cancel" } else { "Close" }).clicked() { close = true; }
         });
@@ -348,6 +359,14 @@ impl NozhikUi {
             self.database.schema_dialog = None;
         } else if let Some((task, after)) = request {
             self.queue_schema_task(task, after);
+        }
+        if let Some(error) = schema_sql_error {
+            self.note_problem(
+                "schema-sql",
+                "Database schema",
+                crate::problems::Severity::Error,
+                &error,
+            );
         }
     }
 }

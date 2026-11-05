@@ -421,7 +421,6 @@ impl NozhikUi {
                     (Icon::Remote, "Remote Host / SSH", LeftTool::Remote),
                     (Icon::Database, "Database", LeftTool::Database),
                     (Icon::Docker, "Docker", LeftTool::Docker),
-                    (Icon::Bell, "Notifications", LeftTool::Notifications),
                     (Icon::Tools, "Tools", LeftTool::Tools),
                 ] {
                     if ui
@@ -521,7 +520,6 @@ impl NozhikUi {
                             LeftTool::Commit => "Commit",
                             LeftTool::Database => "Database",
                             LeftTool::Docker => "Docker",
-                            LeftTool::Notifications => "Notifications",
                             LeftTool::Remote => "Remote Host / SSH",
                             LeftTool::Tools => "Tools",
                         });
@@ -537,8 +535,6 @@ impl NozhikUi {
                         self.docker_panel(ui);
                     } else if tool == LeftTool::Database {
                         self.database_panel(ui);
-                    } else {
-                        ui.weak("Tool window placeholder");
                     }
                 });
             let mut layout = self.layout.value;
@@ -1025,6 +1021,74 @@ mod tests {
         }
         if let Some(panel) = &mut shell.terminal {
             panel.shutdown();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn notifications_rail_and_panel_are_removed() -> Result<(), Box<dyn std::error::Error>> {
+        use egui::{Event as InputEvent, Pos2, Rect, vec2};
+        let bus = EventBus::new(32)?;
+        let dir = tempfile::tempdir()?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let frame = |shell: &mut NozhikUi, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    shell.panels(ctx);
+                    shell.editor_area(ctx);
+                },
+            )
+        };
+        let shows = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+            })
+        };
+        let output = frame(&mut shell, vec![]);
+        assert!(!shows(&output, "Notifications"));
+        assert!(!shows(&output, "Tool window placeholder"));
+        let rail = egui::containers::panel::PanelState::load(&ctx, egui::Id::new("left_strip"))
+            .ok_or("missing rail")?
+            .rect;
+        // Sixth top button is Tools, where Notifications used to open. The next slot is empty.
+        for (index, position) in [
+            rail.left_top() + vec2(18.0, 178.0),
+            rail.left_top() + vec2(18.0, 210.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = shell.left;
+            for pressed in [true, false] {
+                frame(
+                    &mut shell,
+                    vec![
+                        InputEvent::PointerMoved(position),
+                        InputEvent::PointerButton {
+                            pos: position,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            if index == 0 {
+                assert!(shell.left == Some(LeftTool::Tools));
+            } else {
+                assert!(shell.left == before);
+            }
+            let output = frame(&mut shell, vec![]);
+            assert!(!shows(&output, "Notifications"));
+            assert!(!shows(&output, "Tool window placeholder"));
         }
         Ok(())
     }

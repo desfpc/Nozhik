@@ -90,8 +90,6 @@ pub enum LeftTool {
     Docker,
     /// Tools catalog and the selected full-size tool.
     Tools,
-    /// Notifications placeholder.
-    Notifications,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

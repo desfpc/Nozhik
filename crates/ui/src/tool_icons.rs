@@ -13,7 +13,6 @@ pub enum Icon {
     Remote,
     Database,
     Docker,
-    Bell,
     Settings,
     Search,
     Debug,
@@ -209,20 +208,6 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 Stroke::NONE,
             ));
             painter.circle_filled(point(4.0, 15.0), 0.7, theme::PANEL);
-        }
-        Icon::Bell => {
-            line(&[
-                (3.0, 15.0),
-                (5.0, 12.0),
-                (5.0, 7.0),
-                (7.0, 4.0),
-                (13.0, 4.0),
-                (15.0, 7.0),
-                (15.0, 12.0),
-                (17.0, 15.0),
-                (3.0, 15.0),
-            ]);
-            circle(10.0, 17.0, 1.0);
         }
         Icon::Settings => {
             circle(10.0, 10.0, 5.0);

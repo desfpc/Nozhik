@@ -3768,3 +3768,31 @@ d38d3563b69d46bf30de7c9a11cb6ece0c091ae46c34708898143c7413599a06 и SHA-256
 Untracked Finder .DS_Store удалены. Финальный размер проекта — 390 MiB,
 binaries — 109 MiB. Исходники, история и готовые бинарники/legal materials
 сохранены; после очистки сборок не было.
+
+### Удалены кнопка и панель Notifications (v0.1.42, 2026-11-05)
+
+Верхняя кнопка Notifications на левой полосе и открываемая ею пустая панель
+удалены. Вместе с ними убраны `LeftTool::Notifications` и иконка колокольчика.
+Сверху остались Project, Git, Remote, Database, Docker и Tools. Кнопка Docker
+по-прежнему стоит между Database и Tools и активна при наличии Compose-файлов.
+Повторный клик по оставшимся инструментам скрывает их окно.
+
+Версия workspace/lock — 0.1.42, следующая — 0.1.43.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features --offline -- --test-threads=8 — 345 passed,
+0 failed, 10 прежних optional ignored. Headless-тест полосы проверяет, что
+шестая верхняя кнопка открывает Tools, следующий слот пуст, а заголовок
+Notifications и заглушка панели не рисуются. Ручной native GUI и Windows
+build/Clippy не запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+1ee93029fe49c5dc948e8e510e8267568ce56f8b1609341d17118a11d0e20c65 и SHA-256
+файлов. Упаковщик выполнил codesign --verify --deep --strict. Windows-комплект
+не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 7.9 GiB (24882 файла).
+Удалён untracked Finder .DS_Store. Финальный размер проекта — 391 MiB,
+binaries — 109 MiB. Исходники, история и готовые бинарники/legal materials
+сохранены; после очистки сборок не было.

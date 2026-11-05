@@ -527,7 +527,7 @@ Cut/Copy обрабатывают штатные egui clipboard
 события, RequestPaste читает clipboard в winit; menu paste восстанавливает фокус
 последнего активного редактора. Recent Files ограничен 30 путями.
 
-Project, Git, SSH, Database и Notifications используют единый левый dock и
+Project, Git, SSH и Database используют единый левый dock и
 типизированный `LeftTool`; Structure и правые rail/dock удалены. Menu/actions
 Database, New Connection и SQL Console также открывают левый Database dock.
 
@@ -1702,7 +1702,7 @@ unsaved configuration files. The toolbar always includes Cancel (enabled only wh
 busy); only user-initiated requests show a spinner in a fixed toolbar slot.
 Periodic snapshot/log refreshes remain silent and do not shift the list. Logs retain the last 500 timestamped stdout/stderr lines.
 
-The Docker tool appears between Database and Notifications and requires a nonempty
+The Docker tool appears between Database and Tools and requires a nonempty
 Compose inventory. Editor/tree tabs use a native vector whale icon. Container Info
 shows immutable inspect snapshots; Logs refresh while visible. Console replies pass
 a validated `docker exec -it -- ID /bin/sh` invocation to TerminalPanel's existing

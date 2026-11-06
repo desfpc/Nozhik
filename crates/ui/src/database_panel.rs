@@ -1200,7 +1200,7 @@ impl NozhikUi {
                             });
                             ui.text_edit_singleline(&mut form.profile.database);
                             if form.tested {
-                                ui.colored_label(crate::theme::SUCCESS, "Test succeeded");
+                                ui.colored_label(crate::theme::success(), "Test succeeded");
                             }
                             ui.horizontal(|ui| {
                                 if ui

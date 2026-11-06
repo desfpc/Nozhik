@@ -106,8 +106,10 @@ impl Config {
                 "AI model must be nonempty and debounce must be 50–5000 ms",
             ));
         }
-        if self.theme.trim().is_empty() {
-            return Err(ConfigError::Invalid("theme must not be empty"));
+        if !matches!(self.theme.as_str(), "dark" | "light" | "catppuccin") {
+            return Err(ConfigError::Invalid(
+                "theme must be dark, light, or catppuccin",
+            ));
         }
         Ok(())
     }
@@ -415,6 +417,7 @@ mod tests {
             "ai_debounce_ms = 5001",
             "php_language_level = '9.0'",
             "php_language_level = '../../bad'",
+            "theme = 'nope'",
         ] {
             fs::write(&path, source)?;
             assert!(manager.reload().is_err());

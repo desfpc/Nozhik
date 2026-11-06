@@ -1,6 +1,6 @@
 //! GitHub Desktop style Changes/History; channel replies are authoritative.
 use crate::{diff_view::DiffView, theme};
-use egui::{Color32, Context};
+use egui::Context;
 use nozhik_vcs::{
     Outcome, Task, Vcs,
     model::{ChangeStatus, CommitInfo, DiffTarget, FileChange, GitRepoStatus, HistorySelection},
@@ -185,7 +185,7 @@ fn text_width(ui: &egui::Ui, text: &str) -> f32 {
             .layout_no_wrap(
                 text.to_owned(),
                 egui::FontId::proportional(13.0),
-                controls::TEXT,
+                theme::text(),
             )
             .size()
             .x
@@ -218,9 +218,9 @@ fn commit_splitter(ui: &mut egui::Ui, form_height: f32, available: f32) -> Optio
     );
     let response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical);
     let color = if response.hovered() || response.dragged() {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::BORDER
+        theme::border()
     };
     ui.painter().hline(
         rect.x_range(),
@@ -553,7 +553,6 @@ impl VcsPanel {
         self.diff_request = self.submit(Task::Diff(target));
     }
     pub(crate) fn panel(&mut self, ui: &mut egui::Ui) {
-        Self::git_style(ui);
         let count = self.repo.as_ref().map_or(0, |r| r.changes.len());
         let tab_width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
         ui.horizontal(|ui| {
@@ -567,9 +566,9 @@ impl VcsPanel {
                     rect,
                     0,
                     if self.mode == mode {
-                        egui::Color32::from_rgb(35, 42, 48)
+                        theme::surface()
                     } else {
-                        egui::Color32::from_rgb(29, 34, 38)
+                        theme::header()
                     },
                 );
                 ui.painter().text(
@@ -577,12 +576,16 @@ impl VcsPanel {
                     egui::Align2::CENTER_CENTER,
                     label,
                     egui::FontId::proportional(13.0),
-                    controls::TEXT,
+                    if self.mode == mode {
+                        theme::text_strong()
+                    } else {
+                        theme::text()
+                    },
                 );
                 if self.mode == mode {
                     ui.painter().line_segment(
                         [rect.left_bottom(), rect.right_bottom()],
-                        egui::Stroke::new(3.0_f32, controls::BLUE),
+                        egui::Stroke::new(3.0_f32, theme::primary()),
                     );
                 }
                 if response.clicked() && self.mode != mode {
@@ -776,10 +779,10 @@ impl VcsPanel {
                         allowed,
                         egui::Button::new((
                             egui::Atom::grow(),
-                            format!("Commit {staged} files to {branch}"),
+                            theme::on_primary(format!("Commit {staged} files to {branch}")),
                             egui::Atom::grow(),
                         ))
-                        .fill(controls::BLUE)
+                        .fill(theme::primary())
                         .min_size(egui::vec2(pane_width, 30.0)),
                     )
                     .clicked()
@@ -863,7 +866,6 @@ impl VcsPanel {
         }
     }
     pub(crate) fn center(&mut self, ui: &mut egui::Ui, font_size: f32) {
-        Self::git_style(ui);
         if self.mode == Mode::History {
             self.history_center(ui, font_size);
         } else {
@@ -904,7 +906,7 @@ impl VcsPanel {
         egui::SidePanel::left("history_files_column")
             .default_width(width)
             .width_range(120.0..=420.0)
-            .frame(egui::Frame::new().fill(controls::SURFACE))
+            .frame(egui::Frame::new().fill(theme::surface()))
             .show_inside(ui, |ui| {
                 egui::Frame::new().inner_margin(10).show(ui, |ui| {
                     ui.label(format!("{} changed files", details.files.len()));
@@ -988,7 +990,7 @@ impl VcsPanel {
     }
     fn diff_contents(&mut self, ui: &mut egui::Ui, font_size: f32) {
         egui::Frame::new()
-            .fill(egui::Color32::from_rgb(42, 49, 56))
+            .fill(theme::header())
             .inner_margin(4)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -1010,7 +1012,7 @@ impl VcsPanel {
                                 ui.painter(),
                                 menu.response.rect.center(),
                                 crate::tool_icons::Icon::Settings,
-                                controls::TEXT,
+                                theme::text(),
                             );
                         });
                     }
@@ -1034,7 +1036,7 @@ impl VcsPanel {
             ui.label("This restores the file and its staging to HEAD. An untracked file is deleted. Editor buffers are retained.");
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() { self.discard = None; }
-                if ui.add_enabled(self.mutations.is_empty(), egui::Button::new("Discard Changes").fill(crate::theme::DESTRUCTIVE)).clicked() {
+                if ui.add_enabled(self.mutations.is_empty(), egui::Button::new(theme::on_primary("Discard Changes")).fill(theme::destructive())).clicked() {
                     self.submit(Task::DiscardMany(path)); self.discard = None;
                 }
             });
@@ -1058,18 +1060,25 @@ fn history_row(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
-    let background = if selected {
-        controls::BLUE
-    } else if response.hovered() {
-        egui::Color32::from_rgb(48, 57, 65)
+    let ink = if selected {
+        theme::on_selected()
     } else {
-        controls::SURFACE
+        theme::text()
     };
-    ui.painter().rect_filled(rect, 0, background);
+    let background = if selected {
+        theme::accent()
+    } else if response.hovered() {
+        theme::hover()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if background != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, 0, background);
+    }
     ui.painter().hline(
         rect.x_range(),
         rect.bottom(),
-        egui::Stroke::new(1.0_f32, theme::BORDER),
+        egui::Stroke::new(1.0_f32, theme::border()),
     );
     let mut text_rect = rect.shrink2(egui::vec2(12.0, 6.0));
     if subtitle.is_none() {
@@ -1077,9 +1086,9 @@ fn history_row(
     }
     if let Some(badge) = badge {
         let label: String = badge.chars().take(16).collect();
-        let galley =
-            ui.painter()
-                .layout_no_wrap(label, egui::FontId::proportional(12.0), controls::TEXT);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label, egui::FontId::proportional(12.0), ink);
         let size = galley.size() + egui::vec2(10.0, 4.0);
         let badge_rect = egui::Rect::from_center_size(
             egui::pos2(
@@ -1088,13 +1097,9 @@ fn history_row(
             ),
             size,
         );
+        ui.painter().rect_filled(badge_rect, 6, theme::chip());
         ui.painter()
-            .rect_filled(badge_rect, 6, egui::Color32::from_rgb(82, 93, 104));
-        ui.painter().galley(
-            badge_rect.min + egui::vec2(5.0, 2.0),
-            galley,
-            controls::TEXT,
-        );
+            .galley(badge_rect.min + egui::vec2(5.0, 2.0), galley, ink);
         text_rect.max.x = badge_rect.left() - 6.0;
     }
     let painter = ui
@@ -1110,7 +1115,7 @@ fn history_row(
         egui::Align2::LEFT_TOP,
         title,
         egui::FontId::proportional(13.0),
-        controls::TEXT,
+        ink,
     );
     if let Some(subtitle) = subtitle {
         painter.text(
@@ -1119,9 +1124,9 @@ fn history_row(
             subtitle,
             egui::FontId::proportional(12.0),
             if selected {
-                controls::TEXT
+                theme::on_selected()
             } else {
-                theme::MUTED
+                theme::muted()
             },
         );
     }

@@ -1,9 +1,5 @@
 //! Commit selection, context menus and confirmed history actions.
-use super::{
-    Mode, Task, VcsPanel,
-    controls::{BLUE, SURFACE},
-    theme,
-};
+use super::{Mode, Task, VcsPanel, theme};
 use nozhik_vcs::model::{HistoryAction, HistoryRequest, ResetMode};
 
 #[derive(Clone)]
@@ -301,7 +297,7 @@ impl VcsPanel {
         let mut close = false;
         let mut apply = false;
         let modal = egui::Modal::new(egui::Id::new("git_history_action"))
-            .frame(egui::Frame::popup(&ctx.style()).fill(SURFACE).inner_margin(22))
+            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(22))
             .show(ctx, |ui| {
                 ui.set_width(540.0_f32.min((ctx.screen_rect().width()-64.0).max(180.0)));
                 ui.horizontal(|ui| { ui.heading(dialog.title.trim_end_matches('…')); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { close = true; } }); });
@@ -312,7 +308,7 @@ impl VcsPanel {
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("Cancel").clicked() { close = true; }
-                        if ui.add_enabled(self.mutations.is_empty() && dialog.valid(), egui::Button::new(dialog.confirm_label()).fill(BLUE).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() { apply = true; }
+                        if ui.add_enabled(self.mutations.is_empty() && dialog.valid(), egui::Button::new(theme::on_primary(dialog.confirm_label())).fill(theme::primary()).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() { apply = true; }
                     });
                 });
                 if working { ui.spinner(); ui.label("Applying history action…"); }
@@ -363,7 +359,7 @@ impl VcsPanel {
                         .desired_rows(7),
                 );
                 ui.colored_label(
-                    theme::WARNING,
+                    theme::warning(),
                     "This rewrites commit IDs. Published history may require coordination.",
                 );
                 if matches!(dialog.request.action, HistoryAction::Amend(_)) {
@@ -394,7 +390,7 @@ impl VcsPanel {
                     "Hard — discard tracked working and staged changes",
                 );
                 ui.colored_label(
-                    theme::WARNING,
+                    theme::warning(),
                     "Moves the branch to the selected commit. Later commits leave this branch.",
                 );
             }
@@ -436,7 +432,7 @@ impl VcsPanel {
                         }
                     });
                 ui.colored_label(
-                    theme::WARNING,
+                    theme::warning(),
                     "Rewrites this linear history through HEAD. Conflicting orders are refused.",
                 );
                 *apply |= ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -544,7 +540,7 @@ fn move_button(ui: &mut egui::Ui, down: bool) -> bool {
         ui.painter(),
         response.rect.left_center() + egui::vec2(10.0, 0.0),
         down,
-        super::controls::TEXT,
+        super::theme::text(),
     );
     response.clicked()
 }

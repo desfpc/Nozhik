@@ -273,7 +273,7 @@ impl Models {
             }
             ModelState::Failed(_) => {}
             ModelState::Connected(models) => {
-                ui.colored_label(egui::Color32::from_rgb(90, 180, 100), "● Connected");
+                ui.colored_label(crate::theme::success(), "● Connected");
                 let canonical = |name: &str| {
                     if name.contains(':') {
                         name.to_owned()
@@ -286,7 +286,7 @@ impl Models {
                     .any(|m| canonical(m) == canonical(&self.model))
                 {
                     egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(35, 65, 100))
+                        .fill(crate::theme::accent())
                         .corner_radius(4)
                         .inner_margin(6)
                         .show(ui, |ui| {

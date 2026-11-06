@@ -27,20 +27,6 @@ const MAX_TAG_CHARS: usize = 40;
 const MAX_TAGS: usize = 64;
 const SAVE_DELAY: Duration = Duration::from_millis(250);
 
-const SIDEBAR_BG: Color32 = Color32::from_rgb(37, 38, 40);
-const LIST_BG: Color32 = Color32::from_rgb(32, 33, 36);
-const EDITOR_BG: Color32 = Color32::from_rgb(30, 31, 33);
-const HEADER_BG: Color32 = Color32::from_rgb(37, 38, 40);
-const NAV_SELECTED: Color32 = Color32::from_rgb(58, 60, 66);
-const NAV_HOVER: Color32 = Color32::from_rgb(48, 49, 54);
-const CARD_SELECTED: Color32 = Color32::from_rgb(176, 112, 48);
-const CARD_HOVER: Color32 = Color32::from_rgb(46, 47, 52);
-const CARD_TEXT: Color32 = Color32::from_rgb(255, 248, 240);
-const CHIP_ON_CARD: Color32 = Color32::from_rgb(214, 164, 102);
-const CHIP_BG: Color32 = Color32::from_rgb(54, 56, 62);
-const ORANGE: Color32 = Color32::from_rgb(214, 140, 64);
-const LINE_NUMBER: Color32 = Color32::from_rgb(110, 112, 120);
-
 /// What the shell should do with the snippet the user just acted on.
 pub enum SnippetCommand {
     /// Copy is already done by the caller. Paste this text into the project terminal.
@@ -311,7 +297,7 @@ impl Snippets {
                     "All Snippets",
                     None,
                     self.filter == Filter::All,
-                    ORANGE,
+                    theme::primary(),
                 ) {
                     pick = Some(NavPick::All);
                 }
@@ -321,7 +307,7 @@ impl Snippets {
                     "Uncategorized",
                     None,
                     self.filter == Filter::Untagged,
-                    theme::MUTED,
+                    theme::muted(),
                 ) {
                     pick = Some(NavPick::Untagged);
                 }
@@ -333,7 +319,14 @@ impl Snippets {
                 for (tag, count) in tag_rows(&self.file.snippets) {
                     let selected =
                         self.filter == Filter::Tag && tag_key(&self.tag_filter) == tag_key(&tag);
-                    if nav_row(ui, Icon::Snippets, &tag, Some(count), selected, ORANGE) {
+                    if nav_row(
+                        ui,
+                        Icon::Snippets,
+                        &tag,
+                        Some(count),
+                        selected,
+                        theme::primary(),
+                    ) {
                         pick = Some(NavPick::Tag(tag));
                     }
                 }
@@ -388,8 +381,9 @@ impl Snippets {
             Vec2::new(theme::SPLITTER, full.height()),
         );
         let editor_rect = Rect::from_min_max(splitter_rect.right_top(), full.max);
-        ui.painter().rect_filled(list_rect, 0.0, LIST_BG);
-        ui.painter().rect_filled(editor_rect, 0.0, EDITOR_BG);
+        ui.painter().rect_filled(list_rect, 0.0, theme::surface());
+        ui.painter()
+            .rect_filled(editor_rect, 0.0, theme::background());
         let mut list_ui =
             ui.new_child(egui::UiBuilder::new().max_rect(list_rect.shrink2(Vec2::new(8.0, 8.0))));
         self.show_list(&mut list_ui, enabled);
@@ -406,7 +400,7 @@ impl Snippets {
         ui.painter().vline(
             splitter_rect.center().x,
             splitter_rect.y_range(),
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let mut editor_ui = ui.new_child(egui::UiBuilder::new().max_rect(editor_rect));
         self.show_editor(&mut editor_ui, enabled)
@@ -809,11 +803,11 @@ impl Snippets {
     fn show_header(&mut self, ui: &mut Ui, index: usize, enabled: bool) -> Option<SnippetCommand> {
         let header = ui.available_rect_before_wrap();
         let header = Rect::from_min_size(header.min, Vec2::new(header.width(), 48.0));
-        ui.painter().rect_filled(header, 0.0, HEADER_BG);
+        ui.painter().rect_filled(header, 0.0, theme::header());
         ui.painter().hline(
             header.x_range(),
             header.bottom(),
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let mut header_ui =
             ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(12.0, 8.0))));
@@ -949,23 +943,23 @@ impl Snippets {
     fn show_footer(&self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         let bar = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - 28.0), rect.max);
-        ui.painter().rect_filled(bar, 0.0, HEADER_BG);
+        ui.painter().rect_filled(bar, 0.0, theme::header());
         ui.painter().hline(
             bar.x_range(),
             bar.top(),
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let mut bar_ui =
             ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(Vec2::new(12.0, 4.0))));
         bar_ui.horizontal(|ui| {
-            ui.label(RichText::new("Plain Text").color(theme::MUTED).size(12.0));
+            ui.label(RichText::new("Plain Text").color(theme::muted()).size(12.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!(
                         "Line: {} Col: {}",
                         self.cursor_line, self.cursor_col
                     ))
-                    .color(theme::MUTED)
+                    .color(theme::muted())
                     .size(12.0),
                 );
             });
@@ -1004,7 +998,7 @@ impl Snippets {
             .fixed_pos(Pos2::new(x, y))
             .show(ctx, |ui| {
                 Frame::popup(ui.style())
-                    .fill(Color32::from_rgb(44, 45, 49))
+                    .fill(theme::surface())
                     .inner_margin(12)
                     .corner_radius(CornerRadius::same(10))
                     .show(ui, |ui| {
@@ -1038,7 +1032,11 @@ impl Snippets {
                         }
                         if !suggestions.is_empty() {
                             ui.add_space(8.0);
-                            ui.label(RichText::new("Suggestions").color(theme::MUTED).size(12.0));
+                            ui.label(
+                                RichText::new("Suggestions")
+                                    .color(theme::muted())
+                                    .size(12.0),
+                            );
                             ui.horizontal_wrapped(|ui| {
                                 for tag in &suggestions {
                                     if ui.button(tag).clicked() {
@@ -1205,12 +1203,12 @@ impl Snippets {
 
 /// Tag sidebar surface. The list and editor are drawn in the central panel.
 pub fn sidebar_frame() -> Frame {
-    Frame::new().fill(SIDEBAR_BG).inner_margin(0)
+    Frame::new().fill(theme::panel()).inner_margin(0)
 }
 
 /// Editor surface behind the snippet text.
 pub fn editor_frame() -> Frame {
-    Frame::new().fill(EDITOR_BG).inner_margin(0)
+    Frame::new().fill(theme::background()).inner_margin(0)
 }
 
 fn worker(
@@ -1559,7 +1557,7 @@ fn body_font(ui: &Ui) -> FontId {
 
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(10.0);
-    ui.label(RichText::new(text).size(12.0).color(theme::MUTED));
+    ui.label(RichText::new(text).size(12.0).color(theme::muted()));
     ui.add_space(4.0);
 }
 
@@ -1577,7 +1575,11 @@ fn nav_row(
         ui.painter().rect_filled(
             rect.shrink2(Vec2::new(2.0, 1.0)),
             CornerRadius::same(6),
-            if selected { NAV_SELECTED } else { NAV_HOVER },
+            if selected {
+                theme::accent()
+            } else {
+                theme::hover()
+            },
         );
     }
     let center = Pos2::new(rect.left() + 16.0, rect.center().y);
@@ -1587,7 +1589,11 @@ fn nav_row(
         Align2::LEFT_CENTER,
         label,
         FontId::proportional(13.5),
-        theme::TEXT,
+        if selected {
+            theme::on_selected()
+        } else {
+            theme::text()
+        },
     );
     if let Some(count) = count {
         ui.painter().text(
@@ -1595,7 +1601,7 @@ fn nav_row(
             Align2::RIGHT_CENTER,
             count.to_string(),
             FontId::proportional(12.0),
-            theme::MUTED,
+            theme::muted(),
         );
     }
     response.clicked()
@@ -1612,16 +1618,24 @@ fn snippet_card(ui: &mut Ui, snippet: &Snippet, selected: bool) -> egui::Respons
             } else {
                 snippet.title.as_str()
             };
-            let title_color = if selected { CARD_TEXT } else { theme::TEXT };
+            let title_color = if selected {
+                theme::on_selected()
+            } else {
+                theme::text()
+            };
             ui.label(RichText::new(title).strong().color(title_color).size(14.0));
             if !snippet.tags.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for tag in &snippet.tags {
-                        let fill = if selected { CHIP_ON_CARD } else { CHIP_BG };
-                        let color = if selected {
-                            Color32::from_rgb(48, 28, 8)
+                        let fill = if selected {
+                            theme::chip_on_selected()
                         } else {
-                            theme::TEXT
+                            theme::chip()
+                        };
+                        let color = if selected {
+                            theme::chip_ink()
+                        } else {
+                            theme::text()
                         };
                         chip_label(ui, tag, fill, color);
                     }
@@ -1633,18 +1647,30 @@ fn snippet_card(ui: &mut Ui, snippet: &Snippet, selected: bool) -> egui::Respons
                 paint_folder(
                     ui.painter(),
                     icon_rect.center(),
-                    if selected { CARD_TEXT } else { theme::MUTED },
+                    if selected {
+                        theme::on_selected()
+                    } else {
+                        theme::muted()
+                    },
                 );
                 ui.label(
                     RichText::new("Uncategorized")
                         .size(12.0)
-                        .color(if selected { CARD_TEXT } else { theme::MUTED }),
+                        .color(if selected {
+                            theme::on_selected()
+                        } else {
+                            theme::muted()
+                        }),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(format_stamp(snippet.updated_ms, chrono::Local::now()))
                             .size(12.0)
-                            .color(if selected { CARD_TEXT } else { theme::MUTED }),
+                            .color(if selected {
+                                theme::on_selected()
+                            } else {
+                                theme::muted()
+                            }),
                     );
                 });
             });
@@ -1652,9 +1678,9 @@ fn snippet_card(ui: &mut Ui, snippet: &Snippet, selected: bool) -> egui::Respons
         })
         .response;
     let fill = if selected {
-        CARD_SELECTED
+        theme::accent()
     } else if inner.hovered() {
-        CARD_HOVER
+        theme::hover()
     } else {
         Color32::TRANSPARENT
     };
@@ -1713,7 +1739,7 @@ fn paint_line_numbers(
             Align2::RIGHT_TOP,
             (index + 1).to_string(),
             font.clone(),
-            LINE_NUMBER,
+            theme::line_number(),
         );
     }
 }
@@ -1724,7 +1750,7 @@ fn paint_centered(ui: &Ui, rect: Rect, message: &str) {
         Align2::CENTER_CENTER,
         message,
         FontId::proportional(14.0),
-        theme::MUTED,
+        theme::muted(),
     );
 }
 

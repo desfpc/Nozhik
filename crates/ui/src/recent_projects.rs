@@ -123,7 +123,7 @@ impl RecentProjects {
     pub fn list(&self, ui: &mut egui::Ui) -> Option<PathBuf> {
         let mut selected = None;
         if let Some(error) = &self.error {
-            ui.colored_label(crate::theme::ERROR, format!("Project history: {error}"));
+            ui.colored_label(crate::theme::error(), format!("Project history: {error}"));
         }
         if self.entries.is_empty() {
             ui.weak("No recent projects");

@@ -35,8 +35,8 @@ fn fully_visible(tab: Rect, viewport: Rect) -> bool {
 
 fn menu_frame() -> egui::Frame {
     egui::Frame::popup(&egui::Style::default())
-        .fill(theme::CHROME)
-        .stroke(Stroke::new(1.0_f32, theme::MUTED))
+        .fill(theme::chrome())
+        .stroke(Stroke::new(1.0_f32, theme::muted()))
         .corner_radius(8)
         .inner_margin(6)
 }
@@ -104,7 +104,7 @@ impl NozhikUi {
             .iter()
             .map(|t| {
                 ui.painter()
-                    .layout_no_wrap(t.name.clone(), font.clone(), theme::TEXT)
+                    .layout_no_wrap(t.name.clone(), font.clone(), theme::text())
                     .size()
                     .x
                     + tab_padding(&t.name)
@@ -253,7 +253,7 @@ impl NozhikUi {
         ui.painter().hline(
             ui.min_rect().x_range(),
             ui.cursor().top(),
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         ui.add_space(4.0);
         if let Some(id) = activate {
@@ -292,7 +292,7 @@ fn overflow_menu(
             let text_size = labels.iter().fold(Vec2::ZERO, |size, label| {
                 size.max(
                     ui.painter()
-                        .layout_no_wrap(label.clone(), font.clone(), theme::TEXT)
+                        .layout_no_wrap(label.clone(), font.clone(), theme::text())
                         .size(),
                 )
             });
@@ -363,7 +363,11 @@ pub fn paint_tab(
                 sw: 0,
                 se: 0,
             },
-            if selected { theme::HOVER } else { theme::PANEL },
+            if selected {
+                theme::hover()
+            } else {
+                theme::panel()
+            },
         );
     }
     let docker = nozhik_docker::is_compose_file(std::path::Path::new(name));
@@ -373,13 +377,13 @@ pub fn paint_tab(
             painter,
             pos2(rect.left() + 18.0, rect.center().y),
             crate::tool_icons::Icon::Docker,
-            theme::INFO,
+            theme::info(),
         );
     } else if openapi {
         crate::project_icons::paint_openapi_mark(
             painter,
             pos2(rect.left() + 18.0, rect.center().y),
-            Color32::from_rgb(111, 199, 72),
+            theme::openapi(),
         );
     }
     painter.text(
@@ -390,18 +394,18 @@ pub fn paint_tab(
         Align2::LEFT_CENTER,
         name,
         font.clone(),
-        theme::TEXT,
+        theme::text(),
     );
     let center = pos2(rect.right() - 15.0, rect.center().y);
     if dirty && !close_hovered {
-        painter.circle_filled(center, 3.0, theme::TEXT);
+        painter.circle_filled(center, 3.0, theme::text());
     } else if hovered || selected || close_hovered {
         let stroke = Stroke::new(
             1.2_f32,
             if close_hovered {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::MUTED
+                theme::muted()
             },
         );
         painter.line_segment([center - vec2(3.0, 3.0), center + vec2(3.0, 3.0)], stroke);
@@ -425,7 +429,7 @@ fn control(ui: &mut Ui, label: &str, dots: bool) -> egui::Response {
         rect,
         5.0,
         if response.hovered() || !dots {
-            theme::HOVER
+            theme::hover()
         } else {
             Color32::TRANSPARENT
         },
@@ -434,16 +438,16 @@ fn control(ui: &mut Ui, label: &str, dots: bool) -> egui::Response {
     if dots {
         for x in [-5.0, 0.0, 5.0] {
             ui.painter()
-                .circle_filled(center + vec2(x, 0.0), 1.3, theme::TEXT);
+                .circle_filled(center + vec2(x, 0.0), 1.3, theme::text());
         }
     } else {
         ui.painter().line_segment(
             [center + vec2(-4.0, -2.0), center + vec2(0.0, 2.0)],
-            Stroke::new(1.4_f32, theme::TEXT),
+            Stroke::new(1.4_f32, theme::text()),
         );
         ui.painter().line_segment(
             [center + vec2(0.0, 2.0), center + vec2(4.0, -2.0)],
-            Stroke::new(1.4_f32, theme::TEXT),
+            Stroke::new(1.4_f32, theme::text()),
         );
     }
     response.on_hover_text(label)

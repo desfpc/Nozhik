@@ -49,7 +49,7 @@ impl NozhikUi {
                             });
                         }
                         for diagnostic in snapshot.diagnostics {
-                            ui.colored_label(crate::theme::WARNING, diagnostic);
+                            ui.colored_label(crate::theme::warning(), diagnostic);
                         }
                         ui.separator();
                         ui.label("Extension tabs");

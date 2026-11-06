@@ -336,7 +336,7 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
                 egui::pos2(rect.left() + left + 6.0, rect.top()),
                 egui::pos2(rect.left() + left + 6.0, rect.bottom()),
             ],
-            egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+            egui::Stroke::new(1.0_f32, crate::theme::border()),
         );
         let mut tree_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -440,7 +440,7 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
         });
     }
     if !d.message.is_empty() {
-        ui.colored_label(crate::theme::SUCCESS, &d.message);
+        ui.colored_label(crate::theme::success(), &d.message);
     }
     ui.horizontal(|ui| {
         if ui
@@ -591,11 +591,11 @@ fn draw_tree(
                         let baseline =
                             original.and_then(|o| o.elements.iter().find(|o| o.id == e.id));
                         let color = if baseline.is_none() {
-                            crate::theme::SUCCESS
+                            crate::theme::success()
                         } else if baseline != Some(e) {
-                            crate::theme::WARNING
+                            crate::theme::warning()
                         } else {
-                            crate::theme::TEXT
+                            crate::theme::text()
                         };
                         if ui
                             .selectable_label(

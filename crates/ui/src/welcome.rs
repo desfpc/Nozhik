@@ -87,7 +87,7 @@ impl NozhikUi {
                 ui.add_space(20.0);
                 ui.separator();
                 if let Some(error) = &self.recent_projects.error {
-                    ui.colored_label(crate::theme::ERROR, format!("Project history: {error}"));
+                    ui.colored_label(crate::theme::error(), format!("Project history: {error}"));
                 }
                 let filter = self.welcome.filter.to_lowercase();
                 #[cfg(test)]

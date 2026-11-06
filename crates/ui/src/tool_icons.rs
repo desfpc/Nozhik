@@ -40,20 +40,20 @@ pub fn button(ui: &mut Ui, icon: Icon, selected: bool, title: &str) -> Response 
             rect,
             5.0,
             if selected {
-                theme::HOVER
+                theme::hover()
             } else {
-                theme::BORDER
+                theme::border()
             },
         );
     }
     let color = if ui.is_enabled() {
         if matches!(icon, Icon::Docker) {
-            theme::INFO
+            theme::info()
         } else {
-            theme::TEXT
+            theme::text()
         }
     } else {
-        theme::MUTED.gamma_multiply(0.5)
+        theme::muted().gamma_multiply(0.5)
     };
     paint(painter, rect.center(), icon, color);
     response.on_hover_text(title)
@@ -210,7 +210,7 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 color,
                 Stroke::NONE,
             ));
-            painter.circle_filled(point(4.0, 15.0), 0.7, theme::PANEL);
+            painter.circle_filled(point(4.0, 15.0), 0.7, theme::panel());
         }
         Icon::Snippets => {
             painter.add(Shape::closed_line(

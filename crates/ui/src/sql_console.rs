@@ -167,7 +167,7 @@ impl SqlConsole {
                         .add_enabled(
                             self.pending.is_none() && !self.ddl,
                             egui::Button::new(
-                                egui::RichText::new("▶ Execute").color(crate::theme::SUCCESS),
+                                egui::RichText::new("▶ Execute").color(crate::theme::success()),
                             ),
                         )
                         .clicked();
@@ -237,7 +237,7 @@ impl SqlConsole {
                 egui::vec2(ui.available_width(), crate::theme::SPLITTER),
                 egui::Sense::drag(),
             );
-            ui.painter().rect_filled(rect, 0.0, crate::theme::BORDER);
+            ui.painter().rect_filled(rect, 0.0, crate::theme::border());
             response
                 .clone()
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical)

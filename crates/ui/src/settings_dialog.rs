@@ -222,6 +222,16 @@ impl SettingsDialog {
         }
     }
 
+    fn syntax_theme_combo(ui: &mut egui::Ui, syntax_theme: &mut String) {
+        egui::ComboBox::from_label("Syntax Highlighting Theme")
+            .selected_text(syntax_theme.as_str())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(syntax_theme, "default".into(), "Follow color scheme");
+                ui.selectable_value(syntax_theme, "muted".into(), "Muted");
+                ui.selectable_value(syntax_theme, "plain".into(), "Plain Text");
+            });
+    }
+
     fn general(ui: &mut egui::Ui, config: &mut Config) {
         ui.heading("General");
         egui::ComboBox::from_label("Editor font")
@@ -236,10 +246,12 @@ impl SettingsDialog {
             });
         ui.add(egui::Slider::new(&mut config.font_size, 6..=96).text("Editor font size"));
         ui.add(egui::Slider::new(&mut config.tab_width, 1..=16).text("Plain text tab width"));
-        egui::ComboBox::from_label("Theme")
-            .selected_text("New UI Dark")
+        egui::ComboBox::from_label("Color scheme")
+            .selected_text(crate::theme::display_name(&config.theme))
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut config.theme, "dark".into(), "New UI Dark");
+                for (id, name) in crate::theme::CHOICES {
+                    ui.selectable_value(&mut config.theme, (*id).to_owned(), *name);
+                }
             });
         ui.weak("Keymap: ~/.nozhik/keymap.json");
     }
@@ -357,13 +369,7 @@ impl SettingsDialog {
             );
             ui.weak(format!("Offline catalog: PHP {actual}"));
         }
-        egui::ComboBox::from_label("Syntax Highlighting Theme")
-            .selected_text(&selection.syntax_theme)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut selection.syntax_theme, "default".into(), "New UI Dark");
-                ui.selectable_value(&mut selection.syntax_theme, "muted".into(), "Muted");
-                ui.selectable_value(&mut selection.syntax_theme, "plain".into(), "Plain Text");
-            });
+        Self::syntax_theme_combo(ui, &mut selection.syntax_theme);
         if selection != previous {
             config.file_types.insert(extension.clone(), selection);
         }
@@ -471,7 +477,7 @@ impl crate::NozhikUi {
         let modal = egui::Modal::new(egui::Id::new("settings"))
             .frame(
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(30, 31, 34))
+                    .fill(crate::theme::background())
                     .corner_radius(8)
                     .inner_margin(16),
             )
@@ -482,8 +488,6 @@ impl crate::NozhikUi {
                     .max(egui::Vec2::ZERO);
                 ui.set_width(size.x);
                 ui.visuals_mut().window_corner_radius = egui::CornerRadius::same(8);
-                ui.visuals_mut().widgets.inactive.weak_bg_fill =
-                    egui::Color32::from_rgb(43, 45, 48);
                 ui.heading("Settings");
                 if let Some(project) = &self.project {
                     ui.label(format!(

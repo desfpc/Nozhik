@@ -1,11 +1,6 @@
 //! Git chrome, branch chooser and concrete branch/merge/file actions.
-use super::{ChangeStatus, Color32, Context, DiffTarget, FileChange, Task, VcsPanel, theme};
+use super::{ChangeStatus, Context, DiffTarget, FileChange, Task, VcsPanel, theme};
 use egui::{Align2, FontId, Sense, Stroke, pos2, vec2};
-pub(super) const TEXT: Color32 = Color32::from_rgb(225, 230, 235);
-pub(super) const BLUE: Color32 = Color32::from_rgb(0, 99, 216);
-pub(super) const SURFACE: Color32 = Color32::from_rgb(35, 42, 48);
-pub(super) const HEADER: Color32 = Color32::from_rgb(29, 34, 38);
-const SELECTED: Color32 = Color32::from_rgb(66, 78, 87);
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FilterMode {
@@ -44,12 +39,19 @@ fn chrome_button(
     divider: bool,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 50.0), Sense::click());
-    ui.painter()
-        .rect_filled(rect, 0, if response.hovered() { SURFACE } else { HEADER });
+    ui.painter().rect_filled(
+        rect,
+        0,
+        if response.hovered() {
+            theme::surface()
+        } else {
+            theme::header()
+        },
+    );
     if divider {
         ui.painter().line_segment(
             [rect.right_top(), rect.right_bottom()],
-            Stroke::new(1.0_f32, Color32::from_gray(16)),
+            Stroke::new(1.0_f32, theme::border()),
         );
     }
     let painter = ui
@@ -62,7 +64,7 @@ fn chrome_button(
             "Current Branch" => crate::tool_icons::Icon::Git,
             _ => crate::tool_icons::Icon::Remote,
         },
-        TEXT,
+        theme::text(),
     );
     let current = title.starts_with("Current ");
     painter.text(
@@ -70,7 +72,11 @@ fn chrome_button(
         Align2::LEFT_TOP,
         title,
         FontId::proportional(if current { 12.0 } else { 14.0 }),
-        if current { theme::MUTED } else { TEXT },
+        if current {
+            theme::muted()
+        } else {
+            theme::text()
+        },
     );
     painter
         .with_clip_rect(
@@ -82,7 +88,11 @@ fn chrome_button(
             Align2::LEFT_TOP,
             subtitle,
             FontId::proportional(if current { 14.0 } else { 12.0 }),
-            if current { TEXT } else { theme::MUTED },
+            if current {
+                theme::text()
+            } else {
+                theme::muted()
+            },
         );
     if arrow {
         chevron(ui.painter(), rect.right_center() - vec2(15.0, 0.0));
@@ -96,13 +106,12 @@ fn chevron(painter: &egui::Painter, center: egui::Pos2) {
             center + vec2(4.0, -2.0),
             center + vec2(0.0, 3.0),
         ],
-        TEXT,
+        theme::text(),
         Stroke::NONE,
     ));
 }
 impl VcsPanel {
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
-        Self::git_style(ui);
         // Own the row layout so callers cannot stack fixed-height controls vertically.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -197,7 +206,7 @@ impl VcsPanel {
                 Align2::LEFT_TOP,
                 "Commit provides file paths only.\nUploads current project files.",
                 FontId::proportional(10.0),
-                theme::MUTED,
+                theme::muted(),
             );
     }
     pub(super) fn file_filter(&mut self, ui: &mut egui::Ui) {
@@ -221,7 +230,7 @@ impl VcsPanel {
             for (y, half) in [(-4.0, 6.0), (0.0, 4.0), (4.0, 2.0)] {
                 ui.painter().line_segment(
                     [center + vec2(-half, y), center + vec2(half, y)],
-                    Stroke::new(1.3_f32, TEXT),
+                    Stroke::new(1.3_f32, theme::text()),
                 );
             }
             chevron(
@@ -305,21 +314,23 @@ impl VcsPanel {
             for (down, count) in counts {
                 let text = count.to_string();
                 let font = FontId::proportional(12.0);
-                let galley = ui.painter().layout_no_wrap(text, font, TEXT);
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(text, font, theme::primary_text());
                 let size = galley.size() + vec2(24.0, 4.0);
                 let rect = egui::Rect::from_min_size(
                     egui::pos2(left, remote.rect.bottom() - size.y - 3.0),
                     size,
                 );
-                ui.painter().rect_filled(rect, 8, BLUE);
+                ui.painter().rect_filled(rect, 8, theme::primary());
                 paint_vertical_arrow(
                     ui.painter(),
                     rect.left_center() + vec2(8.0, 0.0),
                     down,
-                    TEXT,
+                    theme::primary_text(),
                 );
                 ui.painter()
-                    .galley(rect.min + vec2(19.0, 2.0), galley, TEXT);
+                    .galley(rect.min + vec2(19.0, 2.0), galley, theme::primary_text());
                 left = rect.right() + 5.0;
             }
         }
@@ -333,8 +344,15 @@ impl VcsPanel {
 
     fn remote_menu(&mut self, ui: &mut egui::Ui, network: bool) {
         let (rect, response) = ui.allocate_exact_size(vec2(36.0, 50.0), Sense::click());
-        ui.painter()
-            .rect_filled(rect, 0, if response.hovered() { SURFACE } else { HEADER });
+        ui.painter().rect_filled(
+            rect,
+            0,
+            if response.hovered() {
+                theme::surface()
+            } else {
+                theme::header()
+            },
+        );
         chevron(ui.painter(), rect.center());
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Git remote actions")
@@ -385,22 +403,6 @@ impl VcsPanel {
             ui.close();
         }
     }
-    pub(super) fn git_style(ui: &mut egui::Ui) {
-        let visuals = ui.visuals_mut();
-        visuals.selection.bg_fill = BLUE;
-        visuals.widgets.inactive.bg_fill = HEADER;
-        visuals.widgets.hovered.bg_fill = SELECTED;
-        visuals.widgets.active.bg_fill = BLUE;
-        visuals.extreme_bg_color = HEADER;
-        visuals.override_text_color = Some(Color32::from_rgb(225, 230, 235));
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(100, 114, 124));
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(145, 158, 168));
-        visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, BLUE);
-        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
-        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
-        visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
-        ui.spacing_mut().button_padding = vec2(10.0, 6.0);
-    }
     fn branch_popup(&mut self, ctx: &Context, anchor: egui::Rect) {
         let screen = ctx.screen_rect();
         let width = 370.0_f32.min(screen.width() - 20.0);
@@ -412,10 +414,9 @@ impl VcsPanel {
                 anchor.bottom(),
             ))
             .show(ctx, |ui| {
-                Self::git_style(ui);
                 ui.set_width(width);
                 egui::Frame::popup(ui.style())
-                    .fill(SURFACE)
+                    .fill(theme::surface())
                     .inner_margin(10)
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
@@ -519,43 +520,7 @@ impl VcsPanel {
                         } else {
                             current
                         };
-                        let (rect, response) = ui
-                            .allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                        if selected || response.hovered() {
-                            ui.painter().rect_filled(
-                                rect,
-                                0,
-                                if selected && merging { BLUE } else { SELECTED },
-                            );
-                        }
-                        let age = &branch.relative_time;
-                        let age_width = ui
-                            .painter()
-                            .layout_no_wrap(age.clone(), FontId::proportional(12.0), theme::MUTED)
-                            .size()
-                            .x;
-                        paint_branch_icon(ui, rect, current);
-                        let text_rect = egui::Rect::from_min_max(
-                            rect.left_top() + vec2(28.0, 0.0),
-                            rect.right_bottom() - vec2(age_width + 16.0, 0.0),
-                        );
-                        ui.painter()
-                            .with_clip_rect(text_rect.intersect(ui.clip_rect()))
-                            .text(
-                                text_rect.left_center(),
-                                Align2::LEFT_CENTER,
-                                &branch.name,
-                                FontId::proportional(13.0),
-                                TEXT,
-                            );
-                        ui.painter().text(
-                            rect.right_center() - vec2(6.0, 0.0),
-                            Align2::RIGHT_CENTER,
-                            age,
-                            FontId::proportional(12.0),
-                            theme::MUTED,
-                        );
-                        if response.on_hover_text(&branch.name).clicked()
+                        if paint_branch_choice(ui, branch, current, selected).clicked()
                             && !current
                             && self.mutations.is_empty()
                             && repo.operation.is_none()
@@ -580,10 +545,9 @@ impl VcsPanel {
             return;
         }
         let modal = egui::Modal::new(egui::Id::new("git_operation_dialog"))
-            .frame(egui::Frame::popup(&ctx.style()).fill(SURFACE).inner_margin(24).corner_radius(6))
+            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(24).corner_radius(6))
             .show(ctx, |ui| {
-            Self::git_style(ui);
-            ui.set_width(500.0_f32.min(ctx.screen_rect().width()-70.0).max(150.0));
+                        ui.set_width(500.0_f32.min(ctx.screen_rect().width()-70.0).max(150.0));
             let title = match &dialog { Dialog::NewBranch => "Create a Branch".into(), Dialog::Switch(_) => "Switch Branch".into(), Dialog::Merge => format!("Merge into {}", self.branch()), Dialog::Conflicts => "Resolve conflicts before Merge".into(), Dialog::Abort => "Abort Merge?".into(), Dialog::None => String::new() };
             ui.horizontal(|ui| { ui.heading(title); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { self.dialog = Dialog::None; } }); });
             ui.add_space(12.0); ui.separator(); ui.add_space(12.0);
@@ -628,9 +592,13 @@ impl VcsPanel {
                     self.mutations.is_empty()
                         && !self.new_branch.trim().is_empty()
                         && self.repo.as_ref().is_some_and(|r| r.operation.is_none()),
-                    egui::Button::new((egui::Atom::grow(), "Create Branch", egui::Atom::grow()))
-                        .fill(BLUE)
-                        .min_size(vec2(140.0, 32.0)),
+                    egui::Button::new((
+                        egui::Atom::grow(),
+                        theme::on_primary("Create Branch"),
+                        egui::Atom::grow(),
+                    ))
+                    .fill(theme::primary())
+                    .min_size(vec2(140.0, 32.0)),
                 )
                 .clicked()
             {
@@ -662,8 +630,12 @@ impl VcsPanel {
             ),
         ] {
             let card = egui::Frame::new()
-                .fill(if leave == value { SELECTED } else { SURFACE })
-                .stroke(Stroke::new(1.0_f32, HEADER))
+                .fill(if leave == value {
+                    theme::hover()
+                } else {
+                    theme::surface()
+                })
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(4)
                 .inner_margin(12)
                 .show(ui, |ui| {
@@ -696,9 +668,13 @@ impl VcsPanel {
             if ui
                 .add_enabled(
                     self.mutations.is_empty(),
-                    egui::Button::new((egui::Atom::grow(), "Switch Branch", egui::Atom::grow()))
-                        .fill(BLUE)
-                        .min_size(vec2(140.0, 32.0)),
+                    egui::Button::new((
+                        egui::Atom::grow(),
+                        theme::on_primary("Switch Branch"),
+                        egui::Atom::grow(),
+                    ))
+                    .fill(theme::primary())
+                    .min_size(vec2(140.0, 32.0)),
                 )
                 .clicked()
             {
@@ -732,13 +708,13 @@ impl VcsPanel {
             .is_some_and(|r| r.operation.is_none() && r.changes.is_empty());
         if !clean {
             ui.colored_label(
-                theme::WARNING,
+                theme::warning(),
                 "Commit or stash your changes before merging.",
             );
         } else if let Some(count) = self.merge_preview {
             if count > 0 {
                 ui.colored_label(
-                    theme::WARNING,
+                    theme::warning(),
                     format!(
                         "There will be {count} conflicted files when merging {} into {}",
                         self.merge_branch.as_deref().unwrap_or(""),
@@ -760,10 +736,10 @@ impl VcsPanel {
                 clean && self.mutations.is_empty() && self.merge_preview.is_some(),
                 egui::Button::new((
                     egui::Atom::grow(),
-                    "Create a merge commit",
+                    theme::on_primary("Create a merge commit"),
                     egui::Atom::grow(),
                 ))
-                .fill(BLUE)
+                .fill(theme::primary())
                 .min_size(vec2(ui.available_width(), 34.0)),
             )
             .clicked()
@@ -790,9 +766,9 @@ impl VcsPanel {
                             ui.label(conflict.path.to_string_lossy());
                             ui.colored_label(
                                 if conflict.remaining == 0 {
-                                    theme::SUCCESS
+                                    theme::success()
                                 } else {
-                                    theme::WARNING
+                                    theme::warning()
                                 },
                                 if conflict.remaining == 0 {
                                     "Resolved".into()
@@ -823,8 +799,12 @@ impl VcsPanel {
                     repo.operation.as_deref() == Some("Merge")
                         && unresolved == 0
                         && self.mutations.is_empty(),
-                    egui::Button::new((egui::Atom::grow(), "Continue Merge", egui::Atom::grow()))
-                        .fill(BLUE),
+                    egui::Button::new((
+                        egui::Atom::grow(),
+                        theme::on_primary("Continue Merge"),
+                        egui::Atom::grow(),
+                    ))
+                    .fill(theme::primary()),
                 )
                 .clicked()
             {
@@ -841,7 +821,7 @@ impl VcsPanel {
         {
             ui.horizontal(|ui| {
                 ui.colored_label(
-                    theme::WARNING,
+                    theme::warning(),
                     format!(
                         "Resolve conflicts to continue merge into {}.",
                         self.branch()
@@ -856,17 +836,16 @@ impl VcsPanel {
     pub(super) fn change_row(&mut self, ui: &mut egui::Ui, change: &FileChange, busy: bool) {
         let selected = self.selected_paths.contains(&change.path);
         let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
-        ui.painter().rect_filled(
-            rect,
-            0,
-            if selected {
-                BLUE
-            } else if row.hovered() {
-                HEADER
-            } else {
-                SURFACE
-            },
-        );
+        let fill = if selected {
+            theme::accent()
+        } else if row.hovered() {
+            theme::hover()
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            ui.painter().rect_filled(rect, 0, fill);
+        }
         let check = egui::Rect::from_min_size(rect.left_top() + vec2(4.0, 3.0), vec2(22.0, 22.0));
         let mut staged = change.is_staged;
         let mut check_ui = ui.new_child(egui::UiBuilder::new().max_rect(check));
@@ -897,7 +876,11 @@ impl VcsPanel {
                 Align2::LEFT_CENTER,
                 change.path.to_string_lossy(),
                 FontId::proportional(13.0),
-                TEXT,
+                if selected {
+                    theme::on_selected()
+                } else {
+                    theme::text()
+                },
             );
         paint_file_status(ui, change, rect);
         if row.clicked() {
@@ -1092,10 +1075,10 @@ impl VcsPanel {
 
 pub(super) fn paint_file_status(ui: &egui::Ui, change: &FileChange, rect: egui::Rect) {
     let color = match change.status {
-        ChangeStatus::New => theme::SUCCESS,
-        ChangeStatus::Deleted => theme::ERROR,
-        ChangeStatus::Renamed => theme::INFO,
-        ChangeStatus::Conflicted | ChangeStatus::Modified => theme::WARNING,
+        ChangeStatus::New => theme::success(),
+        ChangeStatus::Deleted => theme::error(),
+        ChangeStatus::Renamed => theme::info(),
+        ChangeStatus::Conflicted | ChangeStatus::Modified => theme::warning(),
     };
     let center = rect.right_center() - vec2(12.0, 0.0);
     let painter = ui.painter();
@@ -1129,28 +1112,85 @@ pub(super) fn paint_file_status(ui: &egui::Ui, change: &FileChange, rect: egui::
     }
 }
 
-fn paint_branch_icon(ui: &egui::Ui, rect: egui::Rect, current: bool) {
+fn paint_branch_choice(
+    ui: &mut egui::Ui,
+    branch: &nozhik_vcs::model::BranchInfo,
+    current: bool,
+    selected: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+    if selected || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            0,
+            if selected {
+                theme::accent()
+            } else {
+                theme::hover()
+            },
+        );
+    }
+    let age = &branch.relative_time;
+    let age_width = ui
+        .painter()
+        .layout_no_wrap(age.clone(), FontId::proportional(12.0), theme::muted())
+        .size()
+        .x;
+    let ink = if selected {
+        theme::on_selected()
+    } else {
+        theme::text()
+    };
+    paint_branch_icon(ui, rect, current, ink);
+    let text_rect = egui::Rect::from_min_max(
+        rect.left_top() + vec2(28.0, 0.0),
+        rect.right_bottom() - vec2(age_width + 16.0, 0.0),
+    );
+    ui.painter()
+        .with_clip_rect(text_rect.intersect(ui.clip_rect()))
+        .text(
+            text_rect.left_center(),
+            Align2::LEFT_CENTER,
+            &branch.name,
+            FontId::proportional(13.0),
+            ink,
+        );
+    ui.painter().text(
+        rect.right_center() - vec2(6.0, 0.0),
+        Align2::RIGHT_CENTER,
+        age,
+        FontId::proportional(12.0),
+        if selected {
+            theme::on_selected()
+        } else {
+            theme::muted()
+        },
+    );
+    response.on_hover_text(&branch.name)
+}
+
+fn paint_branch_icon(ui: &egui::Ui, rect: egui::Rect, current: bool, color: egui::Color32) {
     if current {
         ui.painter().line_segment(
             [
                 rect.left_center() + vec2(6.0, 0.0),
                 rect.left_center() + vec2(10.0, 4.0),
             ],
-            Stroke::new(1.5_f32, TEXT),
+            Stroke::new(1.5_f32, color),
         );
         ui.painter().line_segment(
             [
                 rect.left_center() + vec2(10.0, 4.0),
                 rect.left_center() + vec2(18.0, -5.0),
             ],
-            Stroke::new(1.5_f32, TEXT),
+            Stroke::new(1.5_f32, color),
         );
     } else {
         crate::tool_icons::paint(
             ui.painter(),
             rect.left_center() + vec2(13.0, 0.0),
             crate::tool_icons::Icon::Git,
-            TEXT,
+            color,
         );
     }
 }
@@ -1160,7 +1200,7 @@ pub(super) fn paint_vertical_arrow(
     painter: &egui::Painter,
     center: egui::Pos2,
     down: bool,
-    color: Color32,
+    color: egui::Color32,
 ) {
     let direction = if down { 1.0 } else { -1.0 };
     let tip = center + vec2(0.0, direction * 4.0);

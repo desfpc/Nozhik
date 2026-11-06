@@ -169,7 +169,7 @@ pub(super) fn scrollbar(
         super::terminal_id(session.id()).with("history_scroll"),
         egui::Sense::click_and_drag(),
     );
-    ui.painter().rect_filled(track, 3.0, crate::theme::PANEL);
+    ui.painter().rect_filled(track, 3.0, crate::theme::panel());
     let height = (track.height() * f32::from(grid.rows)
         / (grid.history_len as f32 + f32::from(grid.rows)))
     .clamp(18.0_f32.min(track.height()), track.height());
@@ -185,9 +185,9 @@ pub(super) fn scrollbar(
         ),
         3.0,
         if response.hovered() || response.dragged() {
-            crate::theme::TEXT
+            crate::theme::text()
         } else {
-            crate::theme::MUTED
+            crate::theme::muted()
         },
     );
     if enabled

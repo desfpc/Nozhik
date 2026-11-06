@@ -52,7 +52,7 @@ cargo run -p app -- --config /absolute/test/settings.toml /absolute/test/project
 - [ ] Find → Next, Replace со строкой другой длины, Replace All → одно Undo; Unicode/CRLF сохраняются.
 - [ ] Recent Files восстанавливает закрытый файл; закрытие неактивной вкладки не меняет активный документ.
 - [ ] Растянуть left/right/bottom/SQL splitters мышью, перезапустить IDE, проверить пропорции и минимальную область редактора.
-- [ ] Theme: единые цвета/радиусы/dividers/tooltip, 100%/150%/200% DPI, dark/light system appearance при фиксированной dark theme.
+- [ ] Theme: схемы dark, light и catppuccin из color-schemes.json, единые радиусы и разделители, 100%/150%/200% DPI. Схема выбирается в Settings и не следует системной appearance.
 - [ ] Открыть файл 100 000 строк, прокрутить/редактировать; измерить FPS/frame time на реальном дисплее.
 - [ ] Прокрутить большой Data Grid в обе стороны; сортировка/selection/copy не теряют соответствие строкам.
 - [ ] Запустить реальный PHP LSP, терминал со streaming output и Git polling одновременно; UI остаётся отзывчивым.

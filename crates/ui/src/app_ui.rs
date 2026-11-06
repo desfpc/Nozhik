@@ -298,7 +298,7 @@ impl NozhikUi {
     pub(crate) fn panels(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
-            .frame(egui::Frame::new().fill(theme::CHROME).inner_margin(4))
+            .frame(egui::Frame::new().fill(theme::chrome()).inner_margin(4))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Nozhik")
@@ -359,7 +359,7 @@ impl NozhikUi {
         if self.left == Some(LeftTool::Commit) {
             egui::TopBottomPanel::top("git_toolbar")
                 .exact_height(50.0)
-                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(29, 34, 38)))
+                .frame(egui::Frame::new().fill(theme::header()))
                 .show(ctx, |ui| self.vcs.toolbar(ui));
             if self.deployment.visible() {
                 egui::TopBottomPanel::top("git_deployment_progress")
@@ -387,7 +387,7 @@ impl NozhikUi {
                 .height_range(70.0..=viewport.height())
                 .default_height(viewport.height() * self.layout.value.bottom)
                 .show_separator_line(false)
-                .frame(theme::dock_frame(theme::PANEL))
+                .frame(theme::dock_frame(theme::panel()))
                 .show(ctx, |ui| {
                     // Keep sparse tool contents anchored at the chosen dock height.
                     ui.set_min_height(ui.available_height());
@@ -564,12 +564,10 @@ impl NozhikUi {
                 )
                 .show_separator_line(false)
                 .frame(match tool {
-                    LeftTool::Commit => egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(35, 42, 48))
-                        .inner_margin(0),
+                    LeftTool::Commit => egui::Frame::new().fill(theme::panel()).inner_margin(0),
                     LeftTool::Snippets => crate::snippets::sidebar_frame(),
                     LeftTool::HttpRequests => crate::http_requests::sidebar_frame(),
-                    _ => theme::dock_frame(theme::PANEL),
+                    _ => theme::dock_frame(theme::panel()),
                 })
                 .show(ctx, |ui| {
                     if tool == LeftTool::HttpRequests {
@@ -623,7 +621,7 @@ impl NozhikUi {
     pub(crate) fn editor_area(&mut self, ctx: &Context) {
         if self.left == Some(LeftTool::Tools) {
             egui::CentralPanel::default()
-                .frame(theme::dock_frame(theme::BACKGROUND))
+                .frame(theme::dock_frame(theme::background()))
                 .show(ctx, |ui| {
                     let enabled = !self.global_modal();
                     ui.add_enabled_ui(enabled, |ui| self.tools.show(ui));
@@ -633,11 +631,7 @@ impl NozhikUi {
         }
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
-                .frame(
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(35, 42, 48))
-                        .inner_margin(0),
-                )
+                .frame(egui::Frame::new().fill(theme::background()).inner_margin(0))
                 .show(ctx, |ui| {
                     self.vcs.configure_diff(&self.config);
                     self.vcs.center(ui, f32::from(self.config.font_size));
@@ -682,7 +676,7 @@ impl NozhikUi {
             return;
         }
         egui::CentralPanel::default()
-            .frame(theme::dock_frame(theme::BACKGROUND))
+            .frame(theme::dock_frame(theme::background()))
             .show(ctx, |ui| {
                 self.editor_tabs(ui);
                 self.find_bar(ui);
@@ -855,7 +849,7 @@ enum ConsolePaste {
 
 impl eframe::App for NozhikUi {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::CHROME.to_normalized_gamma_f32()
+        theme::chrome().to_normalized_gamma_f32()
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

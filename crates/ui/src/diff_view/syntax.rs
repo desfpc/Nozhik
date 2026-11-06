@@ -153,11 +153,11 @@ pub(super) fn job(text: &str, font: &FontId, spans: &[HighlightSpan], palette: &
             &mut job,
             &text[offset..span.range.start],
             font,
-            theme::TEXT,
+            theme::text(),
             false,
         );
         let color = if palette == "plain" {
-            theme::TEXT
+            theme::text()
         } else if palette == "muted" {
             theme::syntax_color(&span.token).gamma_multiply(0.75)
         } else {
@@ -172,7 +172,7 @@ pub(super) fn job(text: &str, font: &FontId, spans: &[HighlightSpan], palette: &
         );
         offset = span.range.end;
     }
-    append(&mut job, &text[offset..], font, theme::TEXT, false);
+    append(&mut job, &text[offset..], font, theme::text(), false);
     job
 }
 fn append(job: &mut LayoutJob, text: &str, font: &FontId, color: egui::Color32, italics: bool) {
@@ -241,10 +241,15 @@ mod tests {
                 colored
                     .sections
                     .iter()
-                    .any(|s| s.format.color != theme::TEXT)
+                    .any(|s| s.format.color != theme::text())
             );
             let plain = job(text, &FontId::monospace(14.0), &lines[0][row], "plain");
-            assert!(plain.sections.iter().all(|s| s.format.color == theme::TEXT));
+            assert!(
+                plain
+                    .sections
+                    .iter()
+                    .all(|s| s.format.color == theme::text())
+            );
         }
         let mut state = Syntax::default();
         let config = nozhik_config::Config {

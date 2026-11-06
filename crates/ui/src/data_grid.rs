@@ -104,11 +104,11 @@ impl DataGrid {
                             ui.memory_mut(|m| m.request_focus(grid_id));
                         }
                         let fill = if self.selected == Some((index, col)) {
-                            crate::theme::ACCENT
+                            crate::theme::accent()
                         } else if visible % 2 == 0 {
-                            crate::theme::PANEL
+                            crate::theme::panel()
                         } else {
-                            crate::theme::BACKGROUND
+                            crate::theme::background()
                         };
                         ui.painter().rect_filled(cell, 0.0, fill);
                         if let Some(value) = self.result.rows.get(index).and_then(|r| r.get(col)) {
@@ -129,7 +129,7 @@ impl DataGrid {
                                 egui::Align2::LEFT_CENTER,
                                 label,
                                 egui::FontId::monospace(13.0),
-                                crate::theme::TEXT,
+                                crate::theme::text(),
                             );
                             response.context_menu(|ui| {
                                 if ui.button("Copy value").clicked() {
@@ -159,7 +159,7 @@ impl DataGrid {
                         rect.min + egui::vec2(col as f32 * width, viewport.min.y),
                         egui::vec2(width, header_height),
                     );
-                    ui.painter().rect_filled(cell, 0.0, crate::theme::PANEL);
+                    ui.painter().rect_filled(cell, 0.0, crate::theme::panel());
                     let marker = self
                         .sort
                         .filter(|(c, _)| *c == col)
@@ -171,7 +171,7 @@ impl DataGrid {
                             egui::Align2::LEFT_TOP,
                             format!("{}{marker}\n{}", column.name, column.data_type),
                             egui::FontId::monospace(12.0),
-                            crate::theme::TEXT,
+                            crate::theme::text(),
                         );
                     if ui
                         .interact(cell, grid_id.with(("header", col)), egui::Sense::click())

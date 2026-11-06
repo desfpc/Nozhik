@@ -3975,3 +3975,44 @@ be0bc174f36e9aacc591d5a35ddae068296e2d240b8d0ebacd6bd1098502d1ac и SHA-256
 binaries — 110 MiB. Исходники, история и готовые актуальные бинарники со всеми
 legal materials сохранены; после очистки сборок не было.
 
+### Цветовые схемы (v0.1.46, 2026-11-06)
+
+Редактор, Git, Snippets, HTTP Requests и остальные окна читают одну палитру из
+`crates/ui/assets/color-schemes.json`. Стандарт — прежняя New UI Dark (`dark`).
+Рядом New UI Light (`light`) и Catppuccin Mocha (`catppuccin`): среди живых
+схем редакторов чаще всего встречаются наследник VS Code Dark+, One Dark,
+GitHub, Dracula и Catppuccin; третий встроенный вариант — Catppuccin, потому
+что он заметно отличается от серого New UI и быстро набирает установки.
+Settings → General переключает схему сразу. `settings.toml` принимает только
+эти три id. Подсветка по умолчанию следует схеме; для типа файла остаются
+Muted и Plain Text.
+
+Токены покрывают хром, кнопки, выделение, hover, disabled, primary, diff,
+severity, методы HTTP, метку OpenAPI, синтаксис и базовую ANSI-палитру.
+Радиус 8 и ширина разделителя 5 общие. Значок проекта, 256-цветный куб
+терминала, образец CSS и произвольный ANSI RGB остаются цветами содержимого.
+Правило для новых элементов записано в coding-standards.md: брать токен, а
+если роли нет — добавить её во все схемы.
+
+Версия workspace/lock — 0.1.46, следующая — 0.1.47.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features --offline -- --test-threads=8 — 383 passed,
+0 failed, 10 прежних optional ignored. Headless-тесты проверяют, что JSON
+совпадает со списком Settings, тёмная схема сохраняет прежние цвета редактора,
+светлая и Catppuccin держат контраст текста, а неизвестное поле и битый цвет
+отклоняются. Ручной native GUI и Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+1a712e75e12f4b9c7cbd683014c4ba860b31fca8434cc85de0c138e8da51bd29 и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 7.4 GiB (24399 файлов).
+Удалены Finder .DS_Store, включая файл в binaries/macos-arm64, из-за которого
+--check видел лишний payload. Финальный размер проекта — 394 MiB,
+binaries — 110 MiB. Исходники, история и готовые актуальные бинарники со всеми
+legal materials сохранены; после очистки сборок не было.
+

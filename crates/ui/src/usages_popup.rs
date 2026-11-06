@@ -103,11 +103,8 @@ impl UsagesPopup {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .frame(
                 egui::Frame::window(&ctx.style())
-                    .fill(egui::Color32::from_rgb(43, 45, 48))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_rgb(57, 59, 64),
-                    ))
+                    .fill(crate::theme::surface())
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .corner_radius(7),
             )
             .show(ctx, |ui| self.contents(ui))
@@ -209,7 +206,7 @@ impl UsagesPopup {
                 for (i, location) in rows.iter().enumerate() {
                     let frame = egui::Frame::new()
                         .fill(if self.selected == i {
-                            egui::Color32::from_rgb(46, 67, 110)
+                            crate::theme::accent()
                         } else {
                             egui::Color32::TRANSPARENT
                         })
@@ -217,7 +214,7 @@ impl UsagesPopup {
                     let response = frame
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::from_rgb(87, 147, 255), "(C)");
+                                ui.colored_label(crate::theme::info(), "(C)");
                                 ui.add_sized(
                                     [230.0, 20.0],
                                     egui::Label::new(
@@ -233,7 +230,7 @@ impl UsagesPopup {
                                     [42.0, 20.0],
                                     egui::Label::new(
                                         egui::RichText::new((location.line + 1).to_string())
-                                            .color(egui::Color32::GRAY),
+                                            .color(crate::theme::muted()),
                                     ),
                                 );
                                 let mut job = egui::text::LayoutJob::default();
@@ -253,9 +250,11 @@ impl UsagesPopup {
                                             egui::TextFormat {
                                                 font_id: egui::FontId::monospace(13.0),
                                                 color: if accent {
-                                                    egui::Color32::from_rgb(255, 211, 115)
+                                                    crate::theme::warning()
+                                                } else if self.selected == i {
+                                                    crate::theme::on_selected()
                                                 } else {
-                                                    egui::Color32::LIGHT_GRAY
+                                                    crate::theme::text()
                                                 },
                                                 ..Default::default()
                                             },

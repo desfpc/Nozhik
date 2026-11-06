@@ -1,6 +1,6 @@
 //! Window coordinator. Each project owns its workers, settings and editor state.
 use crate::{NozhikUi, integration::CloseTarget, theme};
-use egui::{Color32, Context};
+use egui::Context;
 use nozhik_config::{Config, ConfigManager};
 use nozhik_event_bus::EventBus;
 use std::{
@@ -273,6 +273,7 @@ impl Workspace {
     }
 
     fn update(&mut self, ctx: &Context) {
+        theme::apply_id(ctx, &self.current().config.theme);
         self.launcher.recent_projects.tick(ctx);
         self.accept_opened(ctx);
         self.tick_background(ctx);
@@ -389,7 +390,7 @@ impl Workspace {
 
 impl eframe::App for Workspace {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::CHROME.to_normalized_gamma_f32()
+        theme::chrome().to_normalized_gamma_f32()
     }
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.update(ctx);
@@ -416,7 +417,7 @@ impl NozhikUi {
             f.layout_no_wrap(
                 name.clone(),
                 egui::FontId::proportional(14.0),
-                Color32::WHITE,
+                theme::text(),
             )
             .size()
             .x
@@ -431,7 +432,7 @@ impl NozhikUi {
         if response.hovered()
             || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response))
         {
-            painter.rect_filled(rect, 7.0, Color32::from_rgb(57, 59, 62));
+            painter.rect_filled(rect, 7.0, theme::hover());
         }
         crate::project_badge::paint(
             painter,
@@ -452,7 +453,7 @@ impl NozhikUi {
                 center + egui::vec2(0.0, 1.5),
                 center + egui::vec2(3.0, -1.5),
             ],
-            egui::Stroke::new(1.2_f32, Color32::GRAY),
+            egui::Stroke::new(1.2_f32, theme::muted()),
         ));
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open Projects")
@@ -462,10 +463,10 @@ impl NozhikUi {
         egui::Popup::menu(&response)
             .frame(
                 egui::Frame::popup(ui.style())
-                    .fill(Color32::from_rgb(37, 39, 41))
+                    .fill(theme::surface())
                     .corner_radius(9)
                     .inner_margin(7)
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(88, 91, 94))),
+                    .stroke(egui::Stroke::new(1.0_f32, theme::border())),
             )
             .show(|ui| {
                 ui.set_width(350.0_f32.min(ui.ctx().screen_rect().width() - 40.0));
@@ -537,7 +538,7 @@ impl NozhikUi {
             .exact_height(36.0)
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(37, 39, 41))
+                    .fill(theme::chrome())
                     .inner_margin(egui::Margin {
                         left: 6,
                         right: 6,
@@ -718,11 +719,11 @@ impl NozhikUi {
 
 fn paint_project_tab(ui: &egui::Ui, rect: egui::Rect, name: &str, selected: bool, hovered: bool) {
     let fill = if selected {
-        Color32::from_rgb(23, 25, 26)
+        theme::panel()
     } else if hovered {
-        Color32::from_rgb(52, 54, 57)
+        theme::hover()
     } else {
-        Color32::from_rgb(37, 39, 41)
+        theme::chrome()
     };
     ui.painter().rect_filled(rect, 8.0, fill);
     let text_rect = rect.shrink2(egui::vec2(28.0, 0.0));
@@ -736,18 +737,18 @@ fn paint_project_tab(ui: &egui::Ui, rect: egui::Rect, name: &str, selected: bool
         text_rect.center() - text.size() * 0.5,
         text,
         if selected {
-            Color32::from_rgb(208, 210, 215)
+            theme::text_strong()
         } else {
-            Color32::from_rgb(132, 136, 141)
+            theme::muted()
         },
     );
 }
 
 fn paint_project_close(ui: &egui::Ui, rect: egui::Rect, hovered: bool) {
     let color = if hovered {
-        Color32::WHITE
+        theme::text_strong()
     } else {
-        Color32::from_rgb(135, 138, 143)
+        theme::muted()
     };
     for sign in [-1.0, 1.0] {
         ui.painter().line_segment(
@@ -775,9 +776,9 @@ fn project_scroll_button(ui: &mut egui::Ui, direction: f32, enabled: bool) -> eg
         });
     let center = response.rect.center();
     let color = if enabled {
-        Color32::from_rgb(185, 188, 194)
+        theme::text()
     } else {
-        Color32::from_rgb(75, 78, 83)
+        theme::disabled()
     };
     ui.painter().add(egui::Shape::line(
         vec![
@@ -798,21 +799,25 @@ fn project_menu_action(
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 5.0, Color32::from_rgb(48, 70, 113));
+        ui.painter().rect_filled(rect, 5.0, theme::accent());
     }
+    let ink = if response.hovered() {
+        theme::on_selected()
+    } else {
+        theme::text_strong()
+    };
     crate::tool_icons::paint(
         ui.painter(),
         rect.left_center() + egui::vec2(15.0, 0.0),
         icon,
-        Color32::from_rgb(210, 212, 217),
+        ink,
     );
     ui.painter().text(
         rect.left_center() + egui::vec2(29.0, 0.0),
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(14.0),
-        Color32::from_rgb(210, 212, 217),
+        ink,
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     response
@@ -824,7 +829,7 @@ fn project_menu_row(ui: &mut egui::Ui, path: &Path) -> egui::Response {
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::click());
     let painter = ui.painter().with_clip_rect(rect);
     if response.hovered() {
-        painter.rect_filled(rect, 5.0, Color32::from_rgb(48, 70, 113));
+        painter.rect_filled(rect, 5.0, theme::accent());
     }
     crate::project_badge::paint(
         &painter,
@@ -836,7 +841,11 @@ fn project_menu_row(ui: &mut egui::Ui, path: &Path) -> egui::Response {
         egui::Align2::LEFT_TOP,
         &name,
         egui::FontId::proportional(15.0),
-        Color32::from_rgb(210, 212, 217),
+        if response.hovered() {
+            theme::on_selected()
+        } else {
+            theme::text_strong()
+        },
     );
     let display = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -851,7 +860,7 @@ fn project_menu_row(ui: &mut egui::Ui, path: &Path) -> egui::Response {
         egui::Align2::LEFT_TOP,
         display,
         egui::FontId::proportional(12.0),
-        Color32::from_rgb(124, 128, 134),
+        theme::muted(),
     );
     response.on_hover_text(path.display().to_string())
 }

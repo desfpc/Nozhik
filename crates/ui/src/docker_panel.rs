@@ -441,9 +441,9 @@ fn container_row(
         let running = container.state == "running";
         ui.colored_label(
             if running {
-                crate::theme::SUCCESS
+                crate::theme::success()
             } else {
-                crate::theme::ERROR
+                crate::theme::error()
             },
             "●",
         );

@@ -56,25 +56,25 @@ fn badge(path: &Path, directory: bool) -> (&'static str, Color32) {
         .to_ascii_lowercase();
     if directory {
         return match name.as_str() {
-            "src" | "source" | "app" | "application" => ("", theme::INFO),
-            "docs" | "doc" => ("D", theme::INFO),
-            "assets" | "images" | "public" => ("•", theme::WARNING),
-            "config" | ".github" | ".cargo" => ("*", theme::MUTED),
-            "vendor" | "node_modules" => ("P", theme::WARNING),
-            _ => ("", theme::TEXT),
+            "src" | "source" | "app" | "application" => ("", theme::info()),
+            "docs" | "doc" => ("D", theme::info()),
+            "assets" | "images" | "public" => ("•", theme::warning()),
+            "config" | ".github" | ".cargo" => ("*", theme::muted()),
+            "vendor" | "node_modules" => ("P", theme::warning()),
+            _ => ("", theme::text()),
         };
     }
     if name == "dockerfile" || name.starts_with("docker-compose") || name.starts_with("compose.") {
-        return ("DK", theme::INFO);
+        return ("DK", theme::info());
     }
     if matches!(
         name.as_str(),
         ".gitignore" | ".dockerignore" | ".ignore" | ".gitattributes"
     ) {
-        return ("/", theme::MUTED);
+        return ("/", theme::muted());
     }
     if name.starts_with(".env") || matches!(name.as_str(), ".editorconfig" | "makefile") {
-        return ("*", theme::WARNING);
+        return ("*", theme::warning());
     }
     match path
         .extension()
@@ -83,23 +83,23 @@ fn badge(path: &Path, directory: bool) -> (&'static str, Color32) {
         .to_ascii_lowercase()
         .as_str()
     {
-        "rs" => ("Rs", theme::WARNING),
-        "php" => ("PHP", theme::INFO),
-        "js" | "jsx" | "mjs" | "cjs" => ("JS", theme::WARNING),
-        "ts" | "tsx" => ("TS", theme::INFO),
-        "py" => ("Py", theme::WARNING),
-        "go" => ("Go", theme::INFO),
-        "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" => ("<>", theme::INFO),
-        "json" | "lock" => ("{}", Color32::from_rgb(185, 145, 230)),
-        "yaml" | "yml" | "toml" | "ini" | "neon" | "conf" => ("*", theme::WARNING),
-        "md" | "markdown" => ("M↓", theme::INFO),
-        "html" | "xml" | "vue" | "svelte" => ("<>", theme::WARNING),
-        "css" | "scss" | "sass" | "less" => ("#", Color32::from_rgb(185, 145, 230)),
-        "sh" | "bash" | "zsh" | "ps1" | "bat" | "cmd" => (">_", theme::SUCCESS),
-        "sql" | "sqlite" | "db" => ("DB", theme::INFO),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => ("•", theme::SUCCESS),
-        "zip" | "gz" | "tar" | "7z" => ("Z", theme::WARNING),
-        _ => ("", theme::MUTED),
+        "rs" => ("Rs", theme::warning()),
+        "php" => ("PHP", theme::info()),
+        "js" | "jsx" | "mjs" | "cjs" => ("JS", theme::warning()),
+        "ts" | "tsx" => ("TS", theme::info()),
+        "py" => ("Py", theme::warning()),
+        "go" => ("Go", theme::info()),
+        "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" => ("<>", theme::info()),
+        "json" | "lock" => ("{}", theme::syntax_color("type")),
+        "yaml" | "yml" | "toml" | "ini" | "neon" | "conf" => ("*", theme::warning()),
+        "md" | "markdown" => ("M↓", theme::info()),
+        "html" | "xml" | "vue" | "svelte" => ("<>", theme::warning()),
+        "css" | "scss" | "sass" | "less" => ("#", theme::syntax_color("type")),
+        "sh" | "bash" | "zsh" | "ps1" | "bat" | "cmd" => (">_", theme::success()),
+        "sql" | "sqlite" | "db" => ("DB", theme::info()),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => ("•", theme::success()),
+        "zip" | "gz" | "tar" | "7z" => ("Z", theme::warning()),
+        _ => ("", theme::muted()),
     }
 }
 
@@ -115,11 +115,11 @@ pub fn row(
     let quality = quality_path(tree, path);
     let (tag, icon_color) = badge(path, directory.is_some());
     let color = if excluded {
-        theme::ERROR
+        theme::error()
     } else if quality {
-        theme::SUCCESS
+        theme::success()
     } else {
-        theme::TEXT
+        theme::text()
     };
     let font = FontId::proportional(14.0);
     let text = ui.painter().layout_no_wrap(name.into(), font, color);
@@ -129,13 +129,13 @@ pub fn row(
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name)
     });
     let fill = if selected {
-        theme::ACCENT
+        theme::accent()
     } else if response.hovered() {
-        theme::HOVER
+        theme::hover()
     } else if excluded {
-        theme::DIFF_DELETE
+        theme::diff_delete()
     } else if quality {
-        theme::DIFF_ADD
+        theme::diff_add()
     } else {
         Color32::TRANSPARENT
     };
@@ -145,7 +145,7 @@ pub fn row(
         painter.rect_stroke(
             rect,
             3.0,
-            Stroke::new(1.0_f32, theme::INFO),
+            Stroke::new(1.0_f32, theme::info()),
             StrokeKind::Inside,
         );
     }
@@ -162,14 +162,18 @@ pub fn row(
         paint_openapi_mark(
             painter,
             origin + Vec2::new(32.0, 0.0),
-            if excluded { theme::ERROR } else { OPENAPI },
+            if excluded {
+                theme::error()
+            } else {
+                theme::openapi()
+            },
         );
     } else if directory.is_none() && nozhik_docker::is_compose_file(path) {
         crate::tool_icons::paint(
             painter,
             origin + Vec2::new(32.0, 0.0),
             crate::tool_icons::Icon::Docker,
-            theme::INFO,
+            theme::info(),
         );
     } else {
         paint_icon(painter, origin, directory, tag, stroke, fill);
@@ -192,8 +196,6 @@ pub fn row(
     }
     response.on_hover_text(tip)
 }
-
-const OPENAPI: Color32 = Color32::from_rgb(111, 199, 72);
 
 /// `OpenAPI` and Swagger documents use the circular mark instead of the JSON braces.
 #[must_use]
@@ -276,7 +278,10 @@ fn paint_icon(
                 center + Vec2::new(-2.0, 4.0),
             ]
         };
-        painter.add(egui::Shape::line(points, Stroke::new(1.4_f32, theme::TEXT)));
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(1.4_f32, theme::text()),
+        ));
         painter.add(egui::Shape::closed_line(
             vec![
                 Pos2::new(x, y),
@@ -322,7 +327,7 @@ fn paint_icon(
             Rect::from_center_size(Pos2::new(x + 10.0, y + 10.0), Vec2::new(21.0, 11.0)),
             1.0,
             if fill == Color32::TRANSPARENT {
-                theme::BACKGROUND
+                theme::background()
             } else {
                 fill
             },
@@ -357,7 +362,7 @@ mod tests {
         for name in ["contest.rs", "latest", "main.rs"] {
             assert!(!quality_name(name), "{name}");
         }
-        assert_eq!(badge(Path::new("unknown.xyz"), false), ("", theme::MUTED));
+        assert_eq!(badge(Path::new("unknown.xyz"), false), ("", theme::muted()));
         assert_eq!(badge(Path::new("Dockerfile"), false).0, "DK");
         assert_eq!(badge(Path::new("main.ts"), false).0, "TS");
         assert!(is_openapi_filename(Path::new(

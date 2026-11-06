@@ -345,7 +345,7 @@ impl TextEditorView {
                         let galley = ui.painter().layout_no_wrap(
                             format!("{count} usages"),
                             FontId::monospace(11.0),
-                            theme::MUTED,
+                            theme::muted(),
                         );
                         let origin = rect.min + egui::vec2(gutter, 5.0);
                         let hit = ui.interact(
@@ -353,7 +353,7 @@ impl TextEditorView {
                             id.with(("usage_lens", byte)),
                             Sense::click(),
                         );
-                        ui.painter().galley(origin, galley, theme::MUTED);
+                        ui.painter().galley(origin, galley, theme::muted());
                         if enabled && hit.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             lens_interaction = true;
@@ -413,11 +413,11 @@ impl TextEditorView {
                             .find(|s| s.range.contains(&(start + range[0])));
                         let color = if unused.iter().any(|d| d.range.contains(&(start + range[0])))
                         {
-                            egui::Color32::from_rgb(122, 126, 133)
+                            theme::muted()
                         } else if language.as_ref().is_some_and(|s| s.syntax_theme == "plain") {
-                            theme::TEXT
+                            theme::text()
                         } else {
-                            let color = span.map_or(theme::TEXT, |s| theme::syntax_color(&s.token));
+                            let color = span.map_or_else(theme::text, |s| theme::syntax_color(&s.token));
                             if language.as_ref().is_some_and(|s| s.syntax_theme == "muted") {
                                 color.gamma_multiply(0.75)
                             } else {
@@ -455,7 +455,7 @@ impl TextEditorView {
                         #[cfg(test)]
                         self.docker_rects.push((marker.clone(),run_rect));
                         let run = ui.interact(run_rect, id.with(("docker_run",line)), if enabled { Sense::click() } else { Sense::hover() });
-                        crate::tool_icons::paint(ui.painter(),run_rect.center(),if marker.service.is_none() { crate::tool_icons::Icon::RunAll } else { crate::tool_icons::Icon::Run },crate::theme::SUCCESS);
+                        crate::tool_icons::paint(ui.painter(),run_rect.center(),if marker.service.is_none() { crate::tool_icons::Icon::RunAll } else { crate::tool_icons::Icon::Run },crate::theme::success());
                         if run.hovered() { lens_interaction = true; }
                         let title = marker.service.as_ref().map_or_else(|| "Start all Compose services".into(), |name| format!("Start Compose service {name}"));
                         if run.on_hover_text(title).clicked() && enabled { self.docker_run = Some((snapshot.buffer_id.0,snapshot.revision,marker.service.clone())); }
@@ -499,7 +499,7 @@ impl TextEditorView {
                                 class_hit = Some(byte);
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                 let y = origin.y + galley.size().y;
-                                ui.painter().line_segment([egui::pos2(x1,y),egui::pos2(x2,y)], Stroke::new(1.0_f32,theme::INFO));
+                                ui.painter().line_segment([egui::pos2(x1,y),egui::pos2(x2,y)], Stroke::new(1.0_f32,theme::info()));
                             }
                         }
                     }
@@ -541,7 +541,7 @@ impl TextEditorView {
                                 let y = origin.y + galley.size().y;
                                 ui.painter().line_segment(
                                     [egui::pos2(x(first), y), egui::pos2(x(last), y)],
-                                    Stroke::new(1.0_f32, theme::INFO),
+                                    Stroke::new(1.0_f32, theme::info()),
                                 );
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                 if symbol.path == *path && symbol.range.contains(&byte)
@@ -585,7 +585,7 @@ impl TextEditorView {
                         let y = origin.y + galley.size().y;
                         ui.painter().line_segment(
                             [egui::pos2(x(range.start), y), egui::pos2(x(range.end), y)],
-                            Stroke::new(1.0_f32, theme::INFO),
+                            Stroke::new(1.0_f32, theme::info()),
                         );
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         inspected_doc = Some((info, docs.label.clone(), pos));
@@ -603,9 +603,9 @@ impl TextEditorView {
                                 == Some(
                                     nozhik_language_support::lsp_types::DiagnosticSeverity::WARNING,
                                 ) {
-                                crate::theme::WARNING
+                                crate::theme::warning()
                             } else {
-                                crate::theme::ERROR
+                                crate::theme::error()
                             };
                             ui.painter().circle_filled(
                                 rect.min + egui::vec2(12.0, 10.0),
@@ -682,7 +682,7 @@ impl TextEditorView {
                             (line + 1).to_string()
                         },
                         FontId::monospace(font_size),
-                        theme::MUTED,
+                        theme::muted(),
                     );
                     let start = buffer.rope().line_to_byte(line);
                     for cursor in &cursors {
@@ -704,7 +704,7 @@ impl TextEditorView {
                                     rect.bottom(),
                                 ),
                             );
-                            ui.painter().rect_filled(selection, 0.0, theme::ACCENT);
+                            ui.painter().rect_filled(selection, 0.0, theme::accent());
                         }
                         if !synthetic && cursor.head.line as usize == line {
                             let local = cursor
@@ -729,7 +729,7 @@ impl TextEditorView {
                                         egui::pos2(x, rect.top() + 2.0),
                                         egui::pos2(x, rect.bottom() - 2.0),
                                     ],
-                                    Stroke::new(1.5_f32, theme::TEXT),
+                                    Stroke::new(1.5_f32, theme::text()),
                                 );
                             }
                         }
@@ -748,10 +748,10 @@ impl TextEditorView {
                             egui::Align2::LEFT_TOP,
                             "⇥ to complete",
                             FontId::monospace(font_size),
-                            theme::MUTED,
+                            theme::muted(),
                         );
                     }
-                    ui.painter().galley(origin, galley, theme::TEXT);
+                    ui.painter().galley(origin, galley, theme::text());
                 }
             },
         );
@@ -1107,7 +1107,7 @@ impl TextEditorView {
             .iter()
             .map(|item| {
                 ui.painter()
-                    .layout_no_wrap(item.label.clone(), FontId::monospace(13.0), theme::TEXT)
+                    .layout_no_wrap(item.label.clone(), FontId::monospace(13.0), theme::text())
                     .size()
                     .x
                     + 120.0
@@ -1139,8 +1139,8 @@ impl TextEditorView {
             .fixed_pos(origin)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(43, 45, 48))
-                    .stroke(Stroke::new(1.0_f32, egui::Color32::from_rgb(57, 59, 64)))
+                    .fill(theme::surface())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(7)
                     .inner_margin(5)
                     .show(ui, |ui| {
@@ -1174,35 +1174,27 @@ impl TextEditorView {
                                         accept = true;
                                     }
                                     if i == state.selected {
-                                        ui.painter().rect_filled(
-                                            rect,
-                                            4,
-                                            egui::Color32::from_rgb(46, 67, 110),
-                                        );
+                                        ui.painter().rect_filled(rect, 4, theme::accent());
                                         if state.completion_scroll {
                                             row.scroll_to_me(Some(egui::Align::Center));
                                         }
                                     }
                                     let (icon, color) = match item.kind {
                                         Some(Kind::FUNCTION) => {
-                                            ("fx", egui::Color32::from_rgb(194, 116, 139))
+                                            ("fx", theme::syntax_color("function"))
                                         }
                                         Some(Kind::METHOD) => {
-                                            ("m", egui::Color32::from_rgb(194, 116, 139))
+                                            ("m", theme::syntax_color("function"))
                                         }
                                         Some(Kind::PROPERTY) => {
-                                            ("p", egui::Color32::from_rgb(152, 118, 170))
+                                            ("p", theme::syntax_color("variable"))
                                         }
-                                        Some(Kind::CLASS) => {
-                                            ("C", egui::Color32::from_rgb(87, 147, 255))
-                                        }
-                                        Some(Kind::INTERFACE) => {
-                                            ("I", egui::Color32::from_rgb(71, 186, 190))
-                                        }
+                                        Some(Kind::CLASS) => ("C", theme::syntax_color("type")),
+                                        Some(Kind::INTERFACE) => ("I", theme::syntax_color("type")),
                                         Some(Kind::CONSTANT) => {
-                                            ("c", egui::Color32::from_rgb(220, 171, 89))
+                                            ("c", theme::syntax_color("constant"))
                                         }
-                                        _ => ("k", egui::Color32::from_rgb(220, 171, 89)),
+                                        _ => ("k", theme::syntax_color("keyword")),
                                     };
                                     let center = egui::pos2(rect.left() + 14.0, rect.center().y);
                                     ui.painter().circle_filled(center, 9.0, color);
@@ -1211,14 +1203,14 @@ impl TextEditorView {
                                         egui::Align2::CENTER_CENTER,
                                         icon,
                                         FontId::proportional(11.0),
-                                        egui::Color32::from_rgb(43, 45, 48),
+                                        theme::icon_ink(),
                                     );
                                     let details = item.label_details.as_ref();
                                     let result_type = details
                                         .and_then(|d| d.description.as_deref())
                                         .unwrap_or("");
                                     let font = FontId::monospace(13.0);
-                                    let muted = egui::Color32::from_rgb(130, 133, 139);
+                                    let muted = theme::muted();
                                     let right = ui.painter().layout_no_wrap(
                                         result_type.into(),
                                         font.clone(),
@@ -1259,15 +1251,12 @@ impl TextEditorView {
                                     job.append(
                                         &item.label[..split],
                                         0.0,
-                                        egui::TextFormat::simple(
-                                            font.clone(),
-                                            egui::Color32::from_rgb(88, 157, 246),
-                                        ),
+                                        egui::TextFormat::simple(font.clone(), theme::link()),
                                     );
                                     job.append(
                                         &item.label[split..],
                                         0.0,
-                                        egui::TextFormat::simple(font.clone(), theme::TEXT),
+                                        egui::TextFormat::simple(font.clone(), theme::text()),
                                     );
                                     job.append(
                                         details
@@ -1287,7 +1276,7 @@ impl TextEditorView {
                                             rect.center().y - galley.size().y / 2.0,
                                         ),
                                         galley,
-                                        theme::TEXT,
+                                        theme::text(),
                                     );
                                     if let Some(
                                         nozhik_language_support::lsp_types::Documentation::String(
@@ -1678,7 +1667,7 @@ fn ghost_job(
             0.0,
             egui::TextFormat {
                 font_id: FontId::monospace(font_size),
-                color: egui::Color32::from_rgba_unmultiplied(122, 126, 133, 120),
+                color: theme::with_alpha(theme::muted(), 120),
                 ..Default::default()
             },
         );
@@ -1840,8 +1829,8 @@ fn doc_popup(
         .constrain_to(screen.shrink(4.0))
         .show(ui.ctx(), |ui| {
             egui::Frame::new()
-                .fill(egui::Color32::from_rgb(43, 45, 48))
-                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .fill(theme::surface())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(7)
                 .inner_margin(10)
                 .show(ui, |ui| {
@@ -1859,7 +1848,7 @@ fn doc_popup(
                         egui::RichText::new(format!("({icon}) {}", info.name))
                             .font(doc_font.clone())
                             .strong()
-                            .color(theme::INFO),
+                            .color(theme::info()),
                     );
                     egui::ScrollArea::vertical()
                         .max_height((screen.height() * 0.4).max(40.0))
@@ -1868,7 +1857,7 @@ fn doc_popup(
                                 egui::Label::new(
                                     egui::RichText::new(&info.signature)
                                         .font(doc_font)
-                                        .color(theme::TEXT),
+                                        .color(theme::text()),
                                 )
                                 .wrap(),
                             );
@@ -1888,7 +1877,7 @@ fn doc_popup(
                             "{modifier}+Click to open {label} · Alt+F7 Find Usages"
                         ))
                         .small()
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                     );
                 });
         });
@@ -2531,7 +2520,7 @@ mod tests {
         let original = egui::text::LayoutJob::simple_singleline(
             "    beforeAfter".into(),
             FontId::monospace(14.0),
-            theme::TEXT,
+            theme::text(),
         );
         let lines = ["One", "    Two"];
         let first = ghost_job(&original, 10, &lines, 0, 14.0);
@@ -3005,7 +2994,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut editor = TextEditorView::default();
         let painted = completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
-        assert!(painted.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.sections.iter().any(|section| section.format.color == egui::Color32::from_rgb(122,126,133)))));
+        assert!(painted.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.sections.iter().any(|section| section.format.color == theme::muted()))));
         completion_frame(
             &ctx,
             &mut editor,
@@ -3397,10 +3386,9 @@ mod tests {
         let source = "я \\DateTime::format(); $var_dump; unknown;";
         let mut galley = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            galley =
-                Some(ctx.fonts(|f| {
-                    f.layout_no_wrap(source.into(), FontId::monospace(14.0), theme::TEXT)
-                }));
+            galley = Some(ctx.fonts(|f| {
+                f.layout_no_wrap(source.into(), FontId::monospace(14.0), theme::text())
+            }));
         });
         let galley = galley.ok_or("galley")?;
         let point =

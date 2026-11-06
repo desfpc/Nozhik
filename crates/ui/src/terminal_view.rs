@@ -100,7 +100,7 @@ impl TerminalView {
                 Err(e) => error = Some(e.to_string()),
             }
         }
-        ui.painter().rect_filled(rect, 0.0, theme::BACKGROUND);
+        ui.painter().rect_filled(rect, 0.0, theme::background());
         let events = ui.input(|i| i.events.clone());
         let mut mouse = self.mouse.remove(&session.id()).unwrap_or_default();
         if let Some(grid) = grid {
@@ -391,7 +391,7 @@ impl TerminalView {
                 egui::Align2::LEFT_TOP,
                 "Starting shell…",
                 font,
-                theme::MUTED,
+                theme::muted(),
             );
             return error;
         };
@@ -410,15 +410,15 @@ impl TerminalView {
                     origin,
                     egui::vec2(cell_width * if cell.wide { 2.0 } else { 1.0 }, cell_height),
                 );
-                let mut fg = color(cell.foreground, theme::TEXT);
-                let mut bg = color(cell.background, theme::BACKGROUND);
+                let mut fg = color(cell.foreground, theme::text());
+                let mut bg = color(cell.background, theme::background());
                 if cell.style.inverse {
                     std::mem::swap(&mut fg, &mut bg);
                 }
                 if cell.style.dim {
                     fg = fg.gamma_multiply(0.65);
                 }
-                if bg != theme::BACKGROUND {
+                if bg != theme::background() {
                     painter.rect_filled(cell_rect, 0.0, bg);
                 }
                 if self
@@ -426,7 +426,7 @@ impl TerminalView {
                     .get(&session.id())
                     .is_some_and(|s| s.contains(grid.viewport_start + usize::from(row), col))
                 {
-                    painter.rect_filled(cell_rect, 0.0, theme::ACCENT);
+                    painter.rect_filled(cell_rect, 0.0, theme::accent());
                 }
                 if !cell.continuation && !cell.text.is_empty() {
                     paint_text(ui, &painter, &font, cell_rect, &cell.text, fg, cell.style);
@@ -450,12 +450,12 @@ impl TerminalView {
                 );
             let caret = egui::Rect::from_min_size(origin, egui::vec2(cell_width, cell_height));
             if enabled && response.has_focus() {
-                painter.rect_filled(caret, 0.0, theme::CARET);
+                painter.rect_filled(caret, 0.0, theme::caret());
             } else {
                 painter.rect_stroke(
                     caret,
                     0.0,
-                    Stroke::new(1.0_f32, theme::MUTED),
+                    Stroke::new(1.0_f32, theme::muted()),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -620,7 +620,7 @@ impl Selection {
     reason = "The ANSI cube and grayscale formulas are bounded to 0..=255"
 )]
 fn color(color: TerminalColor, default: Color32) -> Color32 {
-    let palette = theme::ANSI;
+    let palette = theme::ansi();
     match color {
         TerminalColor::Default => default,
         TerminalColor::Rgb(r, g, b) => Color32::from_rgb(r, g, b),

@@ -701,11 +701,16 @@ UI project_icons рисует векторные папки, документы 
 ## Оформление оболочки и локальные сборки (2026-10-26)
 
 `theme::dock_frame` задаёт общий радиус 8 logical px, внутренний отступ 8 px
-и внешние промежутки 2 px для Project/Git/Remote, Database, редактора и нижнего
-окна. Фон оболочки CHROME виден в промежутках; rails имеют ширину 36 px и
-векторные кнопки 28 px. `tool_icons` рисует смысловые контурные иконки через
-egui Painter, без Unicode-глифов, внешних шрифтов или новых зависимостей.
-Палитра различает тёмные tool windows, редактор и внешнюю оболочку.
+и внешние промежутки 2 px для Project, Remote, Database, редактора и нижнего
+окна. Git, Snippets и HTTP Requests занимают свою колонку без внутреннего
+отступа. Фон оболочки `theme::chrome` виден в промежутках; rails имеют ширину
+36 px и векторные кнопки 28 px. `tool_icons` рисует смысловые контурные иконки
+через egui Painter, без Unicode-глифов, внешних шрифтов или новых зависимостей.
+
+Цвета всех окон читаются из `crates/ui/assets/color-schemes.json`.
+`theme::apply_id` ставит активную схему на контекст egui в начале кадра.
+Стандарт — New UI Dark (`dark`). Рядом лежат New UI Light и Catppuccin Mocha.
+Выбор хранится в `settings.toml` (`theme`) и в Settings → General.
 
 `binaries/` целиком исключён из Git. `scripts/update-binaries.py` сохраняет
 локальные release builds, bundle и metadata. После доработок по умолчанию

@@ -63,26 +63,25 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// Card fill. Critical is red; lower severities step toward neutral gray.
-    #[must_use]
-    pub(crate) const fn fill(self) -> Color32 {
+    const fn tone(self) -> theme::SeverityTone {
         match self {
-            Self::Info => Color32::from_rgb(60, 60, 62),
-            Self::Warning => Color32::from_rgb(74, 64, 48),
-            Self::Error => Color32::from_rgb(102, 58, 58),
-            Self::Critical => Color32::from_rgb(132, 48, 52),
+            Self::Info => theme::SeverityTone::Info,
+            Self::Warning => theme::SeverityTone::Warning,
+            Self::Error => theme::SeverityTone::Error,
+            Self::Critical => theme::SeverityTone::Critical,
         }
+    }
+
+    /// Card fill from the active color scheme.
+    #[must_use]
+    pub(crate) fn fill(self) -> Color32 {
+        theme::severity_fill(self.tone())
     }
 
     /// Circle behind the severity glyph.
     #[must_use]
-    pub(crate) const fn icon(self) -> Color32 {
-        match self {
-            Self::Info => Color32::from_rgb(55, 148, 255),
-            Self::Warning => Color32::from_rgb(224, 140, 78),
-            Self::Error => Color32::from_rgb(230, 96, 90),
-            Self::Critical => Color32::from_rgb(255, 120, 112),
-        }
+    pub(crate) fn icon(self) -> Color32 {
+        theme::severity_icon(self.tone())
     }
 
     /// Glyph inside the severity circle.
@@ -96,7 +95,7 @@ impl Severity {
 
     /// Badge color for a category that contains this severity.
     #[must_use]
-    pub(crate) const fn badge(self) -> Color32 {
+    pub(crate) fn badge(self) -> Color32 {
         self.icon()
     }
 }
@@ -352,7 +351,9 @@ impl ProblemLog {
     fn show_category(&mut self, ui: &mut Ui, category: ProblemCategory) {
         let count = self.count(category);
         let expanded = self.expanded.contains(&category);
-        let badge = self.worst(category).map_or(theme::MUTED, Severity::badge);
+        let badge = self
+            .worst(category)
+            .map_or_else(theme::muted, Severity::badge);
         let mut toggle = false;
         ui.horizontal(|ui| {
             let arrow = if expanded { "▼" } else { "▶" };
@@ -537,7 +538,7 @@ fn card_frame(fill: Color32) -> Frame {
         .fill(fill)
         .corner_radius(CornerRadius::same(theme::RADIUS))
         .inner_margin(Margin::same(12))
-        .stroke(Stroke::new(1.0_f32, Color32::from_white_alpha(28)))
+        .stroke(Stroke::new(1.0_f32, theme::border()))
 }
 
 fn paint_severity(ui: &mut Ui, severity: Severity) {
@@ -549,7 +550,7 @@ fn paint_severity(ui: &mut Ui, severity: Severity) {
         Align2::CENTER_CENTER,
         severity.glyph(),
         FontId::proportional(12.0),
-        Color32::WHITE,
+        theme::primary_text(),
     );
 }
 
@@ -561,7 +562,8 @@ fn paint_problem(ui: &mut Ui, problem: &Problem) {
                 ui.add(egui::Label::new(RichText::new(&problem.title).strong()).wrap());
                 if !problem.detail.is_empty() && problem.detail != problem.title {
                     ui.add(
-                        egui::Label::new(RichText::new(&problem.detail).color(theme::TEXT)).wrap(),
+                        egui::Label::new(RichText::new(&problem.detail).color(theme::text()))
+                            .wrap(),
                     );
                 }
             });
@@ -587,7 +589,7 @@ fn paint_toast(ui: &mut Ui, problem: &Problem, fade: f32) -> (bool, bool) {
                         let button = ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("×").size(16.0).color(Color32::WHITE),
+                                    RichText::new("×").size(16.0).color(theme::text_strong()),
                                 )
                                 .frame(false),
                             )
@@ -596,18 +598,17 @@ fn paint_toast(ui: &mut Ui, problem: &Problem, fade: f32) -> (bool, bool) {
                         hovered |= button.hovered();
                         ui.add(
                             egui::Label::new(
-                                RichText::new(&problem.title).strong().color(Color32::WHITE),
+                                RichText::new(&problem.title)
+                                    .strong()
+                                    .color(theme::severity_on()),
                             )
                             .wrap(),
                         );
                     });
                     if !problem.detail.is_empty() && problem.detail != problem.title {
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(&problem.detail)
-                                    .color(Color32::from_rgb(230, 230, 230)),
-                            )
-                            .wrap(),
+                            egui::Label::new(RichText::new(&problem.detail).color(theme::text()))
+                                .wrap(),
                         );
                     }
                 });
@@ -623,14 +624,12 @@ fn paint_toast(ui: &mut Ui, problem: &Problem, fade: f32) -> (bool, bool) {
 
 fn more_bar(ui: &mut Ui, hidden: usize) {
     Frame::new()
-        .fill(Color32::from_rgb(32, 32, 34))
+        .fill(theme::surface())
         .corner_radius(CornerRadius::same(theme::RADIUS))
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.centered_and_justified(|ui| {
-                ui.label(
-                    RichText::new(format!("{hidden} more")).color(Color32::from_rgb(180, 180, 184)),
-                );
+                ui.label(RichText::new(format!("{hidden} more")).color(theme::muted()));
             });
         });
 }
@@ -644,7 +643,7 @@ fn badge_label(ui: &mut Ui, count: usize, color: Color32) -> egui::Response {
             ui.label(
                 RichText::new(count.to_string())
                     .size(12.0)
-                    .color(Color32::WHITE),
+                    .color(theme::primary_text()),
             )
         })
         .response

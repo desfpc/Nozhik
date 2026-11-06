@@ -36,13 +36,6 @@ const SAVE_DELAY: Duration = Duration::from_millis(250);
 const METHODS: [&str; 8] = [
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE",
 ];
-const SIDEBAR_BG: Color32 = Color32::from_rgb(37, 38, 40);
-const LIST_BG: Color32 = Color32::from_rgb(32, 33, 36);
-const EDITOR_BG: Color32 = Color32::from_rgb(30, 31, 33);
-const NAV_SELECTED: Color32 = Color32::from_rgb(58, 60, 66);
-const NAV_HOVER: Color32 = Color32::from_rgb(48, 49, 54);
-const ORANGE: Color32 = Color32::from_rgb(214, 140, 64);
-
 /// One `OpenAPI` JSON file the export button can write.
 #[derive(Clone, Debug)]
 pub(crate) struct ExportTarget {
@@ -394,8 +387,9 @@ impl HttpRequests {
             Vec2::new(theme::SPLITTER, full.height()),
         );
         let editor_rect = Rect::from_min_max(splitter_rect.right_top(), full.max);
-        ui.painter().rect_filled(list_rect, 0.0, LIST_BG);
-        ui.painter().rect_filled(editor_rect, 0.0, EDITOR_BG);
+        ui.painter().rect_filled(list_rect, 0.0, theme::surface());
+        ui.painter()
+            .rect_filled(editor_rect, 0.0, theme::background());
         let mut list_ui =
             ui.new_child(egui::UiBuilder::new().max_rect(list_rect.shrink2(Vec2::new(8.0, 8.0))));
         self.show_list(&mut list_ui, enabled);
@@ -408,7 +402,7 @@ impl HttpRequests {
         ui.painter().vline(
             splitter_rect.center().x,
             splitter_rect.y_range(),
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let mut editor_ui = ui.new_child(egui::UiBuilder::new().max_rect(editor_rect));
         self.show_editor(&mut editor_ui, enabled, targets)
@@ -868,7 +862,7 @@ impl HttpRequests {
                 ui.add_space(10.0);
                 ui.label(RichText::new("cURL").strong());
                 if let Some(error) = &self.curl_error {
-                    ui.colored_label(theme::ERROR, error);
+                    ui.colored_label(theme::error(), error);
                 }
                 if builder_changed {
                     if header_edited {
@@ -1034,11 +1028,11 @@ impl HttpRequests {
         };
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let color = outcome.status_code.map_or(theme::ERROR, |code| {
+            let color = outcome.status_code.map_or_else(theme::error, |code| {
                 if (200..400).contains(&code) {
-                    theme::SUCCESS
+                    theme::success()
                 } else {
-                    theme::ERROR
+                    theme::error()
                 }
             });
             let label = if outcome.status_line.is_empty() {
@@ -1050,14 +1044,14 @@ impl HttpRequests {
             ui.weak(format!("{} ms", outcome.elapsed_ms));
         });
         if let Some(error) = &outcome.transport_error {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
         }
         if !outcome.headers.is_empty() {
             ui.monospace(&outcome.headers);
         }
         if !outcome.body.is_empty() {
             egui::Frame::new()
-                .fill(Color32::from_rgb(24, 25, 26))
+                .fill(theme::panel())
                 .inner_margin(8)
                 .corner_radius(6)
                 .show(ui, |ui| {
@@ -1340,12 +1334,12 @@ impl HttpRequests {
 
 /// Tag sidebar surface.
 pub(crate) fn sidebar_frame() -> Frame {
-    Frame::new().fill(SIDEBAR_BG).inner_margin(0)
+    Frame::new().fill(theme::panel()).inner_margin(0)
 }
 
 /// Builder surface.
 pub(crate) fn editor_frame() -> Frame {
-    Frame::new().fill(EDITOR_BG).inner_margin(0)
+    Frame::new().fill(theme::background()).inner_margin(0)
 }
 
 fn assemble(request: &Request) -> Result<Outgoing, String> {
@@ -1555,9 +1549,9 @@ fn request_card(ui: &mut Ui, request: &Request, selected: bool) -> egui::Respons
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 48.0), Sense::click());
     let fill = if selected {
-        ORANGE.linear_multiply(0.35)
+        theme::accent()
     } else if response.hovered() {
-        NAV_HOVER
+        theme::hover()
     } else {
         Color32::TRANSPARENT
     };
@@ -1577,7 +1571,11 @@ fn request_card(ui: &mut Ui, request: &Request, selected: bool) -> egui::Respons
         egui::Align2::LEFT_TOP,
         &request.name,
         egui::FontId::proportional(14.0),
-        theme::TEXT,
+        if selected {
+            theme::on_selected()
+        } else {
+            theme::text()
+        },
     );
     ui.painter().text(
         Pos2::new(rect.left() + 8.0, rect.top() + 26.0),
@@ -1588,42 +1586,46 @@ fn request_card(ui: &mut Ui, request: &Request, selected: bool) -> egui::Respons
             request.url.as_str()
         },
         egui::FontId::monospace(12.0),
-        theme::MUTED,
+        theme::muted(),
     );
     response
 }
 
 fn method_color(method: &str) -> Color32 {
-    match method {
-        "GET" => Color32::from_rgb(97, 175, 254),
-        "POST" => Color32::from_rgb(73, 204, 144),
-        "PUT" => Color32::from_rgb(252, 161, 48),
-        "PATCH" => Color32::from_rgb(80, 227, 194),
-        "DELETE" => Color32::from_rgb(249, 62, 62),
-        _ => Color32::from_rgb(160, 160, 170),
-    }
+    theme::http_method(method)
 }
 
 fn nav_row(ui: &mut Ui, label: &str, count: Option<usize>, selected: bool) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
     if selected || response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 4.0, if selected { NAV_SELECTED } else { NAV_HOVER });
+        ui.painter().rect_filled(
+            rect,
+            4.0,
+            if selected {
+                theme::accent()
+            } else {
+                theme::hover()
+            },
+        );
     }
     let icon = tool_icons::Icon::Http;
     tool_icons::paint(
         ui.painter(),
         rect.left_center() + Vec2::new(16.0, 0.0),
         icon,
-        ORANGE,
+        theme::primary(),
     );
     ui.painter().text(
         Pos2::new(rect.left() + 32.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(13.0),
-        theme::TEXT,
+        if selected {
+            theme::on_selected()
+        } else {
+            theme::text()
+        },
     );
     if let Some(count) = count {
         ui.painter().text(
@@ -1631,7 +1633,7 @@ fn nav_row(ui: &mut Ui, label: &str, count: Option<usize>, selected: bool) -> bo
             egui::Align2::RIGHT_CENTER,
             count.to_string(),
             egui::FontId::proportional(12.0),
-            theme::MUTED,
+            theme::muted(),
         );
     }
     response.clicked()
@@ -1639,7 +1641,7 @@ fn nav_row(ui: &mut Ui, label: &str, count: Option<usize>, selected: bool) -> bo
 
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(text).small().color(theme::MUTED).strong());
+    ui.label(RichText::new(text).small().color(theme::muted()).strong());
 }
 
 fn paint_centered(ui: &Ui, rect: Rect, message: &str) {
@@ -1648,7 +1650,7 @@ fn paint_centered(ui: &Ui, rect: Rect, message: &str) {
         egui::Align2::CENTER_CENTER,
         message,
         egui::FontId::proportional(14.0),
-        theme::MUTED,
+        theme::muted(),
     );
 }
 

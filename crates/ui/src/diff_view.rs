@@ -1,6 +1,6 @@
 //! Virtualized unified diff with two gutters; only visible rows are laid out.
 use crate::theme;
-use egui::{Color32, FontId};
+use egui::FontId;
 use nozhik_vcs::model::{DiffLineKind, FileDiff};
 
 mod syntax;
@@ -198,7 +198,7 @@ impl DiffView {
                     .min(self.rows.len().saturating_sub(1));
                 let galley =
                     ui.painter()
-                        .layout_no_wrap(self.text(row).into(), font.clone(), theme::TEXT);
+                        .layout_no_wrap(self.text(row).into(), font.clone(), theme::text());
                 let column = galley
                     .cursor_from_pos(egui::vec2(pos.x - origin.x - 126.0, 0.0))
                     .index;
@@ -255,7 +255,7 @@ impl DiffView {
             let width = (0..self.rows.len())
                 .map(|row| {
                     ui.painter()
-                        .layout_no_wrap(self.text(row).into(), font.clone(), theme::TEXT)
+                        .layout_no_wrap(self.text(row).into(), font.clone(), theme::text())
                         .size()
                         .x
                 })
@@ -304,8 +304,7 @@ impl DiffView {
         size: egui::Vec2,
     ) -> Option<(usize, usize, usize, bool)> {
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 0.0, Color32::from_rgb(29, 34, 38));
+        ui.painter().rect_filled(rect, 0.0, theme::header());
         let height = size.y;
         let mut expansion = None;
         let count = self.shown[h].len();
@@ -328,14 +327,14 @@ impl DiffView {
                     "Expand Down (20 lines)"
                 });
             if response.hovered() {
-                ui.painter().rect_filled(hit, 0.0, theme::ACCENT);
+                ui.painter().rect_filled(hit, 0.0, theme::accent());
             }
             let center = hit.center();
             let direction = if up { -1.0 } else { 1.0 };
             ui.painter().arrow(
                 center - egui::vec2(0.0, direction * 4.0),
                 egui::vec2(0.0, direction * 8.0),
-                egui::Stroke::new(1.5_f32, theme::TEXT),
+                egui::Stroke::new(1.5_f32, theme::text()),
             );
             if response.clicked() {
                 expansion = Some((h, start, end, up));
@@ -346,7 +345,7 @@ impl DiffView {
             egui::Align2::LEFT_TOP,
             format!("… {} lines hidden", end - start),
             font.clone(),
-            theme::MUTED,
+            theme::muted(),
         );
         expansion
     }
@@ -355,21 +354,22 @@ impl DiffView {
             return;
         };
         let row = &self.rows[index];
-        let (text, old, new, marker, background) = match *row {
+        let (text, old, new, marker, background, gutter) = match *row {
             Row::Gap { .. } => return,
             Row::Hunk(h) => (
                 file.hunks[h].header.trim_end_matches(['\n', '\r']),
                 None,
                 None,
                 ' ',
-                Color32::from_rgb(29, 34, 38),
+                theme::diff_hunk(),
+                false,
             ),
             Row::Line(h, l) => {
                 let line = &file.hunks[h].lines[l];
-                let (marker, bg) = match line.kind {
-                    DiffLineKind::Context => (' ', Color32::from_rgb(35, 42, 48)),
-                    DiffLineKind::Addition => ('+', crate::theme::DIFF_ADD),
-                    DiffLineKind::Deletion => ('−', crate::theme::DIFF_DELETE),
+                let (marker, bg, gutter) = match line.kind {
+                    DiffLineKind::Context => (' ', theme::background(), true),
+                    DiffLineKind::Addition => ('+', theme::diff_add(), false),
+                    DiffLineKind::Deletion => ('−', theme::diff_delete(), false),
                 };
                 (
                     line.text.trim_end_matches(['\n', '\r']),
@@ -377,6 +377,7 @@ impl DiffView {
                     line.new_line,
                     marker,
                     bg,
+                    gutter,
                 )
             }
         };
@@ -390,14 +391,14 @@ impl DiffView {
 
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, background);
-        if matches!(row, Row::Hunk(_)) || background == Color32::from_rgb(35, 42, 48) {
+        if gutter {
             ui.painter().rect_filled(
                 egui::Rect::from_min_max(
                     rect.left_top(),
                     egui::pos2(rect.left() + 100.0, rect.bottom()),
                 ),
                 0,
-                Color32::from_rgb(29, 34, 38),
+                theme::header(),
             );
         }
         for x in [50.0, 100.0] {
@@ -406,7 +407,7 @@ impl DiffView {
                     rect.left_top() + egui::vec2(x, 0.0),
                     rect.left_bottom() + egui::vec2(x, 0.0),
                 ],
-                egui::Stroke::new(1.0_f32, theme::BORDER),
+                egui::Stroke::new(1.0_f32, theme::border()),
             );
         }
         let y = rect.top() + 4.0;
@@ -417,7 +418,7 @@ impl DiffView {
                     egui::Align2::RIGHT_TOP,
                     number.to_string(),
                     font.clone(),
-                    theme::MUTED,
+                    theme::muted(),
                 );
             }
         }
@@ -426,11 +427,11 @@ impl DiffView {
             egui::Align2::LEFT_TOP,
             marker,
             font.clone(),
-            theme::TEXT,
+            theme::text(),
         );
         self.paint_selection(ui, index, text, &galley, rect);
         ui.painter()
-            .galley(egui::pos2(rect.left() + 126.0, y), galley, theme::TEXT);
+            .galley(egui::pos2(rect.left() + 126.0, y), galley, theme::text());
     }
     fn paint_selection(
         &self,
@@ -460,7 +461,7 @@ impl DiffView {
                         egui::pos2(rect.left() + 126.0 + x2, rect.bottom()),
                     ),
                     0,
-                    theme::ACCENT,
+                    theme::accent(),
                 );
             }
         }

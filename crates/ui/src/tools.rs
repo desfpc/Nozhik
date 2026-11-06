@@ -276,7 +276,7 @@ impl ToolEditor {
             }
         });
         if let Some(error) = &self.error {
-            ui.colored_label(crate::theme::WARNING, error);
+            ui.colored_label(crate::theme::warning(), error);
         }
         let height = (ui.available_height() - 10.0).max(80.0);
         if self.split == 0.0 {
@@ -313,7 +313,7 @@ impl ToolEditor {
                 ui.painter().hline(
                     rect.x_range(),
                     rect.center().y,
-                    egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+                    egui::Stroke::new(1.0_f32, crate::theme::border()),
                 );
                 if response.dragged() {
                     self.split =
@@ -379,7 +379,11 @@ fn layout_json(text: &str, spans: &[HighlightSpan]) -> egui::text::LayoutJob {
         {
             continue;
         }
-        append(&mut job, &text[start..span.range.start], crate::theme::TEXT);
+        append(
+            &mut job,
+            &text[start..span.range.start],
+            crate::theme::text(),
+        );
         append(
             &mut job,
             &text[span.range.clone()],
@@ -387,7 +391,7 @@ fn layout_json(text: &str, spans: &[HighlightSpan]) -> egui::text::LayoutJob {
         );
         start = span.range.end;
     }
-    append(&mut job, &text[start..], crate::theme::TEXT);
+    append(&mut job, &text[start..], crate::theme::text());
     job
 }
 

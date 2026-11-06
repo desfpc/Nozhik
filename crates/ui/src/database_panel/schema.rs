@@ -382,7 +382,7 @@ pub(super) fn sql_preview_height(ui: &mut egui::Ui, sql: &str, height: f32) {
                 0.0,
                 egui::TextFormat {
                     font_id: egui::FontId::monospace(13.0),
-                    color: token.map_or(crate::theme::TEXT, crate::theme::syntax_color),
+                    color: token.map_or_else(crate::theme::text, crate::theme::syntax_color),
                     ..Default::default()
                 },
             );

@@ -224,7 +224,7 @@ impl CloneDialog {
                     });
                 });
             if let Some(error) = &self.error {
-                ui.colored_label(crate::theme::ERROR, error);
+                ui.colored_label(crate::theme::error(), error);
             }
             if busy {
                 ui.horizontal(|ui| {

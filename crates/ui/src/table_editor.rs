@@ -166,8 +166,8 @@ impl TableEditor {
     fn query_fields(&mut self, ui: &mut egui::Ui, enabled: bool) {
         let mut apply = false;
         egui::Frame::new()
-            .fill(crate::theme::PANEL)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+            .fill(crate::theme::panel())
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
             .inner_margin(4.0)
             .show(ui, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
@@ -197,8 +197,8 @@ impl TableEditor {
         let start = if count == 0 { 0 } else { self.offset + 1 };
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             egui::Frame::new()
-                .fill(crate::theme::PANEL)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .fill(crate::theme::panel())
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .corner_radius(8.0)
                 .inner_margin(8.0)
                 .show(ui, |ui| {
@@ -369,7 +369,7 @@ impl TableEditor {
                             .add_enabled(
                                 !busy && dirty,
                                 egui::Button::new(
-                                    egui::RichText::new("Submit").color(crate::theme::SUCCESS),
+                                    egui::RichText::new("Submit").color(crate::theme::success()),
                                 ),
                             )
                             .clicked()
@@ -602,20 +602,20 @@ fn grid(
                         egui::vec2(width, row_height),
                     );
                     let fill = if selected.contains(&i) {
-                        crate::theme::HOVER
+                        crate::theme::hover()
                     } else if i % 2 == 0 {
-                        crate::theme::PANEL
+                        crate::theme::panel()
                     } else {
-                        crate::theme::BACKGROUND
+                        crate::theme::background()
                     };
                     ui.painter().rect_filled(cell, 0.0, fill);
                     ui.painter().line_segment(
                         [cell.right_top(), cell.right_bottom()],
-                        egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+                        egui::Stroke::new(1.0_f32, crate::theme::border()),
                     );
                     ui.painter().line_segment(
                         [cell.left_bottom(), cell.right_bottom()],
-                        egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+                        egui::Stroke::new(1.0_f32, crate::theme::border()),
                     );
                     let text = inputs.entry((i, c)).or_insert_with(|| {
                         value
@@ -640,11 +640,11 @@ fn grid(
                             .frame(false)
                             .interactive(can_edit)
                             .text_color(if row.deleted {
-                                crate::theme::ERROR
+                                crate::theme::error()
                             } else if modified {
-                                crate::theme::SUCCESS
+                                crate::theme::success()
                             } else {
-                                crate::theme::TEXT
+                                crate::theme::text()
                             }),
                     );
                     if response.clicked() && !selected.contains(&i) {
@@ -694,14 +694,14 @@ fn grid(
                     rect.min + egui::vec2((c as f32).mul_add(width, gutter), viewport.min.y),
                     egui::vec2(width, header),
                 );
-                ui.painter().rect_filled(cell, 0.0, crate::theme::PANEL);
+                ui.painter().rect_filled(cell, 0.0, crate::theme::panel());
                 ui.painter().line_segment(
                     [cell.right_top(), cell.right_bottom()],
-                    egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+                    egui::Stroke::new(1.0_f32, crate::theme::border()),
                 );
                 ui.painter().line_segment(
                     [cell.left_bottom(), cell.right_bottom()],
-                    egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+                    egui::Stroke::new(1.0_f32, crate::theme::border()),
                 );
                 let arrow = egui::Rect::from_min_size(
                     cell.right_top() - egui::vec2(26.0, 0.0),
@@ -730,7 +730,7 @@ fn grid(
                             column.data_type
                         ),
                         egui::FontId::monospace(12.0),
-                        crate::theme::TEXT,
+                        crate::theme::text(),
                     );
             }
         });
@@ -763,7 +763,7 @@ struct GridOptions<'a> {
 
 fn clause_icon(ui: &mut egui::Ui, filter: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(17.0, 20.0), egui::Sense::hover());
-    let stroke = egui::Stroke::new(1.3_f32, crate::theme::TEXT);
+    let stroke = egui::Stroke::new(1.3_f32, crate::theme::text());
     if filter {
         let points = [
             (1.0, 3.0),
@@ -800,9 +800,9 @@ fn query_field(ui: &mut egui::Ui, label: &str, value: &mut String, width: f32) -
                 egui::RichText::new(label)
                     .monospace()
                     .color(if value.is_empty() {
-                        crate::theme::MUTED
+                        crate::theme::muted()
                     } else {
-                        egui::Color32::from_rgb(204, 120, 88)
+                        crate::theme::syntax_color("keyword")
                     }),
             );
             let edit_width = (ui.available_width() - 24.0).max(20.0);
@@ -845,11 +845,11 @@ fn sort_arrow(
         },
     );
     let color = if !enabled || !ui.is_enabled() {
-        crate::theme::MUTED
+        crate::theme::muted()
     } else if descending.is_some() || response.hovered() {
-        crate::theme::TEXT
+        crate::theme::text()
     } else {
-        crate::theme::MUTED
+        crate::theme::muted()
     };
     let center = rect.center();
     for down in [false, true] {

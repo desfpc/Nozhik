@@ -7,10 +7,6 @@ use egui::{
 };
 use std::{collections::HashMap, path::Path, time::Duration};
 
-const POST: Color32 = Color32::from_rgb(73, 204, 144);
-const CARD: Color32 = Color32::from_rgb(36, 38, 40);
-const CODE: Color32 = Color32::from_rgb(24, 25, 26);
-
 pub fn show(
     ui: &mut Ui,
     ctx: &egui::Context,
@@ -30,7 +26,7 @@ pub fn show(
         .show(ui, |ui| {
             ui.add_enabled_ui(enabled, |ui| match &state.parsed {
                 Parsed::Invalid(error) => {
-                    ui.colored_label(theme::ERROR, error);
+                    ui.colored_label(theme::error(), error);
                 }
                 Parsed::Spec(_) => {
                     authorize = document(ui, state, hub, transfers);
@@ -68,12 +64,12 @@ fn document(
     };
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(title).size(26.0).strong());
-        pill(ui, &version, Color32::from_rgb(90, 92, 96), Color32::WHITE);
+        pill(ui, &version, theme::chip(), theme::text());
         pill(
             ui,
             &oas_label(&openapi),
-            Color32::from_rgb(137, 196, 74),
-            Color32::from_rgb(16, 32, 16),
+            theme::success(),
+            theme::icon_ink(),
         );
     });
     if !description.is_empty() {
@@ -81,13 +77,13 @@ fn document(
         ui.label(description);
     }
     if !extra.is_empty() {
-        ui.label(RichText::new(extra).color(theme::MUTED).small());
+        ui.label(RichText::new(extra).color(theme::muted()).small());
     }
     if !docs.is_empty() && ui.link(docs.clone()).clicked() {
         crate::editor_view::open_documentation(docs);
     }
     for warning in warnings.iter().take(8) {
-        ui.colored_label(theme::WARNING, warning);
+        ui.colored_label(theme::warning(), warning);
     }
     ui.add_space(8.0);
     let authorize = servers_bar(ui, state);
@@ -168,14 +164,14 @@ fn servers_bar(ui: &mut Ui, state: &mut FileState) -> bool {
         .map(|server| server.variables.clone())
         .unwrap_or_default();
     egui::Frame::new()
-        .fill(Color32::from_rgb(46, 48, 52))
+        .fill(theme::surface())
         .corner_radius(6)
         .inner_margin(12)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Servers").small().color(theme::MUTED));
+                    ui.label(RichText::new("Servers").small().color(theme::muted()));
                     let selected = labels.get(state.server).cloned().unwrap_or_default();
                     egui::ComboBox::from_id_salt("openapi-server")
                         .selected_text(selected)
@@ -224,7 +220,7 @@ fn variable_fields(ui: &mut Ui, salt: &str, variables: &[spec::ServerVar], value
                 ui.label(
                     RichText::new(&variable.description)
                         .small()
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             }
         });
@@ -234,7 +230,7 @@ fn variable_fields(ui: &mut Ui, salt: &str, variables: &[spec::ServerVar], value
 fn authorize_button(ui: &mut Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(132.0, 34.0), Sense::click());
     let fill = if response.hovered() {
-        Color32::from_rgba_unmultiplied(73, 204, 144, 36)
+        theme::with_alpha(theme::success(), 36)
     } else {
         Color32::TRANSPARENT
     };
@@ -242,7 +238,7 @@ fn authorize_button(ui: &mut Ui) -> egui::Response {
         rect,
         6.0,
         fill,
-        Stroke::new(1.0_f32, POST),
+        Stroke::new(1.0_f32, theme::success()),
         StrokeKind::Inside,
     );
     ui.painter().text(
@@ -250,12 +246,12 @@ fn authorize_button(ui: &mut Ui) -> egui::Response {
         egui::Align2::LEFT_CENTER,
         "Authorize",
         FontId::proportional(14.0),
-        POST,
+        theme::success(),
     );
     paint_lock(
         ui.painter(),
         Pos2::new(rect.right() - 18.0, rect.center().y),
-        POST,
+        theme::success(),
     );
     response
 }
@@ -282,7 +278,7 @@ fn tag_block(
         return;
     }
     if !description.is_empty() {
-        ui.label(RichText::new(description).color(theme::MUTED));
+        ui.label(RichText::new(description).color(theme::muted()));
     }
     for index in operations {
         operation_card(ui, state, hub, *index, transfers);
@@ -294,20 +290,20 @@ fn section_header(ui: &mut Ui, title: &str, open: bool) -> egui::Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
     if response.hovered() {
-        ui.painter().rect_filled(rect, 4.0, theme::HOVER);
+        ui.painter().rect_filled(rect, 4.0, theme::hover());
     }
     ui.painter().text(
         Pos2::new(rect.left() + 4.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         title,
         FontId::proportional(20.0),
-        theme::TEXT,
+        theme::text(),
     );
     paint_chevron(
         ui.painter(),
         Pos2::new(rect.right() - 12.0, rect.center().y),
         open,
-        theme::TEXT,
+        theme::text(),
     );
     response
 }
@@ -327,7 +323,7 @@ fn operation_card(
     let secured = operation_secured(state, &operation);
     let satisfied = secured && security_satisfied(state, &operation);
     egui::Frame::new()
-        .fill(CARD)
+        .fill(theme::surface())
         .stroke(Stroke::new(1.0_f32, color.linear_multiply(0.75)))
         .corner_radius(6)
         .inner_margin(8)
@@ -348,14 +344,14 @@ fn operation_card(
                     ui.label(
                         RichText::new(&operation.identifier)
                             .small()
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     );
                 }
                 if !operation.callbacks.is_empty() {
                     ui.label(
                         RichText::new(format!("Callbacks: {}", operation.callbacks.join(", ")))
                             .small()
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     );
                 }
                 if !operation.external_docs.is_empty() {
@@ -400,11 +396,15 @@ fn operation_header(
         color,
     );
     let mut x = badge.right() + 8.0;
-    let path = painter.layout_no_wrap(operation.path.clone(), FontId::monospace(14.0), theme::TEXT);
+    let path = painter.layout_no_wrap(
+        operation.path.clone(),
+        FontId::monospace(14.0),
+        theme::text(),
+    );
     painter.galley(
         Pos2::new(x, rect.center().y - path.size().y / 2.0),
         path.clone(),
-        theme::TEXT,
+        theme::text(),
     );
     x += path.size().x + 8.0;
     if operation.deprecated {
@@ -413,7 +413,7 @@ fn operation_header(
             egui::Align2::LEFT_CENTER,
             "deprecated",
             FontId::proportional(12.0),
-            theme::WARNING,
+            theme::warning(),
         );
         x += 78.0;
     }
@@ -426,7 +426,7 @@ fn operation_header(
             0.0,
             TextFormat {
                 font_id: FontId::proportional(13.0),
-                color: theme::MUTED,
+                color: theme::muted(),
                 ..Default::default()
             },
         );
@@ -434,7 +434,7 @@ fn operation_header(
         painter.galley(
             Pos2::new(x, rect.center().y - galley.size().y / 2.0),
             galley,
-            theme::MUTED,
+            theme::muted(),
         );
     }
     if secured {
@@ -442,9 +442,9 @@ fn operation_header(
             painter,
             Pos2::new(rect.right() - 28.0, rect.center().y),
             if satisfied {
-                theme::SUCCESS
+                theme::success()
             } else {
-                theme::MUTED
+                theme::muted()
             },
         );
     }
@@ -452,7 +452,7 @@ fn operation_header(
         painter,
         Pos2::new(rect.right() - 10.0, rect.center().y),
         open,
-        theme::TEXT,
+        theme::text(),
     );
     response
 }
@@ -466,7 +466,7 @@ fn method_badge_rect(
     let galley = painter.layout_no_wrap(
         method.to_string(),
         FontId::proportional(13.0),
-        Color32::WHITE,
+        theme::icon_ink(),
     );
     let rect = Rect::from_min_size(
         Pos2::new(left_center.x, left_center.y - 12.0),
@@ -476,7 +476,7 @@ fn method_badge_rect(
     painter.galley(
         Pos2::new(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        Color32::WHITE,
+        theme::icon_ink(),
     );
     rect
 }
@@ -543,7 +543,7 @@ fn operation_servers(ui: &mut Ui, state: &mut FileState, operation: &spec::Opera
     ui.label(
         RichText::new("Operation server")
             .small()
-            .color(theme::MUTED),
+            .color(theme::muted()),
     );
     egui::ComboBox::from_id_salt(("openapi-op-server", operation.key.clone()))
         .selected_text(selected)
@@ -577,27 +577,27 @@ fn parameter_row(
     ui.horizontal(|ui| {
         ui.label(RichText::new(&parameter.name).strong());
         if parameter.required {
-            ui.label(RichText::new("*").color(theme::ERROR));
-            ui.label(RichText::new("required").small().color(theme::ERROR));
+            ui.label(RichText::new("*").color(theme::error()));
+            ui.label(RichText::new("required").small().color(theme::error()));
         }
     });
     ui.label(
         RichText::new(&parameter.type_name)
             .small()
-            .color(theme::MUTED),
+            .color(theme::muted()),
     );
     if !parameter.description.is_empty() {
         ui.label(
             RichText::new(&parameter.description)
                 .small()
-                .color(theme::MUTED),
+                .color(theme::muted()),
         );
     }
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!("({})", parameter.location.label()))
                 .italics()
-                .color(theme::MUTED),
+                .color(theme::muted()),
         );
         let mut value = state
             .drafts
@@ -673,7 +673,7 @@ fn body_block(ui: &mut Ui, state: &mut FileState, operation: &spec::Operation) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Request body").size(16.0).strong());
         if body.required {
-            ui.label(RichText::new("required").small().color(theme::ERROR));
+            ui.label(RichText::new("required").small().color(theme::error()));
         }
         if body.contents.len() > 1 {
             let trying = state.trying.contains(&operation.key);
@@ -711,7 +711,7 @@ fn body_block(ui: &mut Ui, state: &mut FileState, operation: &spec::Operation) {
         }
     });
     if !body.description.is_empty() {
-        ui.label(RichText::new(&body.description).color(theme::MUTED));
+        ui.label(RichText::new(&body.description).color(theme::muted()));
     }
     let index = state
         .drafts
@@ -759,7 +759,7 @@ fn body_block(ui: &mut Ui, state: &mut FileState, operation: &spec::Operation) {
 
 fn execute_button(ui: &mut Ui) -> egui::Response {
     ui.add_space(8.0);
-    ui.add(egui::Button::new(RichText::new("Execute").color(Color32::WHITE)).fill(POST))
+    ui.add(egui::Button::new(theme::on_primary("Execute")).fill(theme::primary()))
 }
 
 fn responses_block(ui: &mut Ui, operation: &spec::Operation) {
@@ -779,7 +779,7 @@ fn responses_block(ui: &mut Ui, operation: &spec::Operation) {
                 ui.label(&response.code);
                 ui.label(&response.description);
                 if response.links.is_empty() {
-                    ui.label(RichText::new("No links").italics().color(theme::MUTED));
+                    ui.label(RichText::new("No links").italics().color(theme::muted()));
                 } else {
                     ui.label(response.links.join(", "));
                 }
@@ -799,13 +799,13 @@ fn live_block(ui: &mut Ui, state: &FileState, key: &str) {
     ui.add_space(8.0);
     ui.label(RichText::new("Server response").strong());
     if let Some(error) = &outcome.transport_error {
-        ui.colored_label(theme::ERROR, error);
+        ui.colored_label(theme::error(), error);
     } else {
-        let color = outcome.status_code.map_or(theme::TEXT, |code| {
+        let color = outcome.status_code.map_or_else(theme::text, |code| {
             if code >= 400 {
-                theme::ERROR
+                theme::error()
             } else {
-                theme::SUCCESS
+                theme::success()
             }
         });
         ui.horizontal(|ui| {
@@ -814,7 +814,7 @@ fn live_block(ui: &mut Ui, state: &FileState, key: &str) {
             ui.label(
                 RichText::new(format!("{} ms", outcome.elapsed_ms))
                     .small()
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
         });
     }
@@ -822,18 +822,18 @@ fn live_block(ui: &mut Ui, state: &FileState, key: &str) {
         ui.label(
             RichText::new("Response headers")
                 .small()
-                .color(theme::MUTED),
+                .color(theme::muted()),
         );
         code_block(ui, &outcome.headers, false);
     }
     if !outcome.body.is_empty() {
-        ui.label(RichText::new("Response body").small().color(theme::MUTED));
+        ui.label(RichText::new("Response body").small().color(theme::muted()));
         let json = outcome.body.trim_start().starts_with('{')
             || outcome.body.trim_start().starts_with('[');
         code_block(ui, &outcome.body, json);
     }
     if !outcome.curl.is_empty() {
-        ui.label(RichText::new("curl").small().color(theme::MUTED));
+        ui.label(RichText::new("curl").small().color(theme::muted()));
         code_block(ui, &outcome.curl, false);
     }
 }
@@ -852,7 +852,7 @@ fn schemas_block(ui: &mut Ui, state: &mut FileState) {
     }
     ui.add_space(12.0);
     egui::Frame::new()
-        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+        .stroke(Stroke::new(1.0_f32, theme::border()))
         .corner_radius(6)
         .inner_margin(10)
         .show(ui, |ui| {
@@ -906,7 +906,7 @@ fn show_schema(
     }
     if let Some(reference) = value.get("$ref").and_then(serde_json::Value::as_str) {
         let name = reference.rsplit('/').next().unwrap_or(reference);
-        ui.label(RichText::new(name).color(theme::INFO));
+        ui.label(RichText::new(name).color(theme::info()));
         if let Some(target) = schema_value(state, name)
             && target.get("$ref").and_then(serde_json::Value::as_str) != Some(reference)
         {
@@ -956,7 +956,7 @@ fn show_schema(
         ui.horizontal(|ui| {
             ui.label(RichText::new(name).strong());
             if required.iter().any(|item| item == name) {
-                ui.label(RichText::new("*").color(theme::ERROR));
+                ui.label(RichText::new("*").color(theme::error()));
             }
             let summary = schema_summary(property);
             if nested {
@@ -1003,13 +1003,13 @@ fn code_block(ui: &mut Ui, text: &str, json: bool) {
             0.0,
             TextFormat {
                 font_id: FontId::monospace(13.0),
-                color: theme::TEXT,
+                color: theme::text(),
                 ..Default::default()
             },
         );
     }
     egui::Frame::new()
-        .fill(CODE)
+        .fill(theme::panel())
         .corner_radius(6)
         .inner_margin(10)
         .show(ui, |ui| {
@@ -1027,7 +1027,7 @@ fn append_json(job: &mut egui::text::LayoutJob, text: &str) {
         {
             continue;
         }
-        append_plain(job, &text[start..span.range.start], theme::TEXT);
+        append_plain(job, &text[start..span.range.start], theme::text());
         append_plain(
             job,
             &text[span.range.clone()],
@@ -1035,7 +1035,7 @@ fn append_json(job: &mut egui::text::LayoutJob, text: &str) {
         );
         start = span.range.end;
     }
-    append_plain(job, &text[start..], theme::TEXT);
+    append_plain(job, &text[start..], theme::text());
 }
 
 fn append_plain(job: &mut egui::text::LayoutJob, text: &str, color: Color32) {
@@ -1262,13 +1262,13 @@ fn scheme_fields(ui: &mut Ui, state: &mut FileState, scheme: &spec::Scheme) {
                 ui.label(
                     RichText::new(format!("Bearer format: {format}"))
                         .small()
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             }
             token_field(ui, state, &scheme.name);
         }
         spec::SchemeKind::OAuth2 { flows } | spec::SchemeKind::OpenId { url: flows } => {
-            ui.label(RichText::new(flows).small().color(theme::MUTED));
+            ui.label(RichText::new(flows).small().color(theme::muted()));
             token_field(ui, state, &scheme.name);
         }
         spec::SchemeKind::Http {
@@ -1277,14 +1277,14 @@ fn scheme_fields(ui: &mut Ui, state: &mut FileState, scheme: &spec::Scheme) {
             ui.label(
                 RichText::new(format!("HTTP scheme: {http_scheme}"))
                     .small()
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             token_field(ui, state, &scheme.name);
         }
         spec::SchemeKind::Other { type_name } => {
             ui.label(
                 RichText::new(format!("Unsupported scheme type: {type_name}"))
-                    .color(theme::WARNING),
+                    .color(theme::warning()),
             );
             token_field(ui, state, &scheme.name);
         }
@@ -1295,7 +1295,7 @@ fn labeled_chip(ui: &mut Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         ui.label(label);
         egui::Frame::new()
-            .fill(Color32::from_rgb(58, 60, 64))
+            .fill(theme::chip())
             .corner_radius(4)
             .inner_margin(egui::Margin::symmetric(6, 2))
             .show(ui, |ui| {
@@ -1336,16 +1336,7 @@ fn toggle_set(set: &mut std::collections::HashSet<String>, key: &str) {
 }
 
 fn method_color(method: &str) -> Color32 {
-    match method {
-        "GET" => Color32::from_rgb(97, 175, 254),
-        "POST" => POST,
-        "PUT" => Color32::from_rgb(252, 161, 48),
-        "DELETE" => Color32::from_rgb(249, 62, 62),
-        "PATCH" => Color32::from_rgb(80, 227, 194),
-        "HEAD" => Color32::from_rgb(144, 18, 254),
-        "OPTIONS" => Color32::from_rgb(13, 90, 167),
-        _ => Color32::from_rgb(120, 120, 120),
-    }
+    theme::http_method(method)
 }
 
 fn paint_chevron(painter: &egui::Painter, center: Pos2, open: bool, color: Color32) {

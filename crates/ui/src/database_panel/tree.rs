@@ -1,15 +1,9 @@
 //! Compact database object tree. All measurements are logical pixels (2× on Retina).
 use super::DatabaseUi;
-use egui::{
-    Color32, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
-};
+use crate::theme;
+use egui::{FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use nozhik_database::{ConnectionProfile, DbDriverType, introspection::TableInfo};
 
-const TEXT: Color32 = Color32::from_rgb(205, 207, 212);
-const MUTED: Color32 = Color32::from_rgb(112, 115, 122);
-const BLUE: Color32 = Color32::from_rgb(78, 132, 255);
-const GOLD: Color32 = Color32::from_rgb(255, 199, 55);
-const SELECTED: Color32 = Color32::from_rgb(47, 67, 109);
 const HEIGHT: f32 = 24.0;
 const INDENT: f32 = 19.0;
 
@@ -62,16 +56,16 @@ impl Tree<'_> {
         detail: &str,
         open: Option<bool>,
     ) -> Response {
-        let label = ui
-            .painter()
-            .layout_no_wrap(name.into(), FontId::proportional(14.0), TEXT);
+        let label =
+            ui.painter()
+                .layout_no_wrap(name.into(), FontId::proportional(14.0), theme::text());
         // The proportional UI font has no arrow glyph. Paint references as vectors
         // between native text segments, so they never become missing-glyph squares.
         let secondary: Vec<_> = detail
             .split('→')
             .map(|part| {
                 ui.painter()
-                    .layout_no_wrap(part.into(), FontId::proportional(12.0), MUTED)
+                    .layout_no_wrap(part.into(), FontId::proportional(12.0), theme::muted())
             })
             .collect();
         let secondary_width: f32 = secondary
@@ -97,9 +91,9 @@ impl Tree<'_> {
                 rect,
                 0.0,
                 if selected {
-                    SELECTED
+                    theme::accent()
                 } else {
-                    crate::theme::HOVER
+                    theme::hover()
                 },
             );
         }
@@ -119,14 +113,18 @@ impl Tree<'_> {
                     pos2(x + 8.0, y + 4.0),
                 ]
             };
-            painter.add(Shape::line(points, Stroke::new(1.0_f32, TEXT)));
+            painter.add(Shape::line(points, Stroke::new(1.0_f32, theme::text())));
         }
         paint_icon(painter, pos2(x + 24.0, y), icon);
         let position = pos2(x + 38.0, y - label.size().y / 2.0);
         let label_width = label.size().x;
-        painter.galley(position, label, TEXT);
+        painter.galley(position, label, theme::text());
         let mut detail_x = position.x + label_width + 8.0;
-        let color = if selected { TEXT } else { MUTED };
+        let color = if selected {
+            theme::text()
+        } else {
+            theme::muted()
+        };
         for (index, part) in secondary.iter().enumerate() {
             if index > 0 {
                 painter.line_segment(
@@ -544,76 +542,113 @@ fn paint_icon(p: &egui::Painter, center: Pos2, icon: Icon) {
             ];
             p.add(Shape::convex_polygon(
                 points.clone(),
-                Color32::from_rgb(39, 49, 70),
+                theme::accent(),
                 Stroke::NONE,
             ));
-            p.add(Shape::closed_line(points, Stroke::new(1.0_f32, BLUE)));
+            p.add(Shape::closed_line(
+                points,
+                Stroke::new(1.0_f32, theme::info()),
+            ));
         }
         Icon::Table | Icon::View => {
-            outline(Rect::from_min_max(pt(1.0, 2.0), pt(14.0, 14.0)), TEXT);
-            line(pt(1.0, 5.0), pt(14.0, 5.0), TEXT);
-            line(pt(5.0, 2.0), pt(5.0, 14.0), TEXT);
-            line(pt(10.0, 2.0), pt(10.0, 14.0), TEXT);
+            outline(
+                Rect::from_min_max(pt(1.0, 2.0), pt(14.0, 14.0)),
+                theme::text(),
+            );
+            line(pt(1.0, 5.0), pt(14.0, 5.0), theme::text());
+            line(pt(5.0, 2.0), pt(5.0, 14.0), theme::text());
+            line(pt(10.0, 2.0), pt(10.0, 14.0), theme::text());
             if matches!(icon, Icon::View) {
-                p.circle_filled(pt(12.5, 12.0), 2.5, BLUE);
+                p.circle_filled(pt(12.5, 12.0), 2.5, theme::info());
             }
         }
         Icon::Database => {
-            line(pt(4.0, 8.0), pt(4.0, 4.0), TEXT);
-            line(pt(4.0, 4.0), pt(11.0, 4.0), TEXT);
-            line(pt(8.0, 11.0), pt(11.0, 11.0), TEXT);
-            outline(Rect::from_min_max(pt(1.0, 7.0), pt(8.0, 14.0)), TEXT);
-            outline(Rect::from_min_max(pt(10.0, 1.0), pt(15.0, 6.0)), TEXT);
-            outline(Rect::from_min_max(pt(10.0, 9.0), pt(15.0, 14.0)), TEXT);
+            line(pt(4.0, 8.0), pt(4.0, 4.0), theme::text());
+            line(pt(4.0, 4.0), pt(11.0, 4.0), theme::text());
+            line(pt(8.0, 11.0), pt(11.0, 11.0), theme::text());
+            outline(
+                Rect::from_min_max(pt(1.0, 7.0), pt(8.0, 14.0)),
+                theme::text(),
+            );
+            outline(
+                Rect::from_min_max(pt(10.0, 1.0), pt(15.0, 6.0)),
+                theme::text(),
+            );
+            outline(
+                Rect::from_min_max(pt(10.0, 9.0), pt(15.0, 14.0)),
+                theme::text(),
+            );
         }
         Icon::Column {
             nullable,
             primary,
             foreign,
         } => {
-            outline(Rect::from_min_max(pt(2.0, 2.0), pt(15.0, 14.0)), TEXT);
+            outline(
+                Rect::from_min_max(pt(2.0, 2.0), pt(15.0, 14.0)),
+                theme::text(),
+            );
             line(
                 pt(6.0, 2.0),
                 pt(6.0, 14.0),
-                if primary || foreign { BLUE } else { TEXT },
+                if primary || foreign {
+                    theme::info()
+                } else {
+                    theme::text()
+                },
             );
             if nullable {
-                p.circle_filled(pt(3.0, 14.0), 3.0, crate::theme::PANEL);
-                p.circle_stroke(pt(3.0, 14.0), 2.2, Stroke::new(1.0_f32, TEXT));
+                p.circle_filled(pt(3.0, 14.0), 3.0, crate::theme::panel());
+                p.circle_stroke(pt(3.0, 14.0), 2.2, Stroke::new(1.0_f32, theme::text()));
             }
             if primary || foreign {
-                p.circle_filled(pt(13.5, 9.0), 3.0, crate::theme::PANEL);
+                p.circle_filled(pt(13.5, 9.0), 3.0, crate::theme::panel());
                 p.circle_stroke(
                     pt(13.5, 9.0),
                     2.1,
-                    Stroke::new(1.0_f32, if primary { GOLD } else { BLUE }),
+                    Stroke::new(
+                        1.0_f32,
+                        if primary {
+                            theme::warning()
+                        } else {
+                            theme::info()
+                        },
+                    ),
                 );
                 line(
                     pt(13.5, 11.0),
                     pt(13.5, 15.5),
-                    if primary { GOLD } else { BLUE },
+                    if primary {
+                        theme::warning()
+                    } else {
+                        theme::info()
+                    },
                 );
                 line(
                     pt(13.5, 14.0),
                     pt(16.0, 14.0),
-                    if primary { GOLD } else { BLUE },
+                    if primary {
+                        theme::warning()
+                    } else {
+                        theme::info()
+                    },
                 );
             }
         }
-        Icon::Key => key(7.5, 4.5, GOLD),
-        Icon::ForeignKey => key(7.5, 4.5, BLUE),
+        Icon::Key => key(7.5, 4.5, theme::warning()),
+        Icon::ForeignKey => key(7.5, 4.5, theme::info()),
         Icon::Index { unique } => {
-            p.circle_filled(pt(7.0, 2.0), 0.9, BLUE);
-            line(pt(4.0, 6.0), pt(7.0, 6.0), BLUE);
-            line(pt(7.0, 6.0), pt(7.0, 14.0), BLUE);
-            line(pt(4.0, 14.0), pt(11.0, 14.0), BLUE);
+            p.circle_filled(pt(7.0, 2.0), 0.9, theme::info());
+            line(pt(4.0, 6.0), pt(7.0, 6.0), theme::info());
+            line(pt(7.0, 6.0), pt(7.0, 14.0), theme::info());
+            line(pt(4.0, 14.0), pt(11.0, 14.0), theme::info());
             if unique {
                 p.text(
                     pt(10.0, 7.0),
                     egui::Align2::LEFT_TOP,
                     "U",
                     FontId::proportional(8.0),
-                    TEXT,
+                    theme::text(),
                 );
             }
         }
@@ -623,6 +658,7 @@ fn paint_icon(p: &egui::Painter, center: Pos2, icon: Icon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme;
 
     #[test]
     fn reference_arrow_is_painted_without_a_font_glyph() {
@@ -656,7 +692,7 @@ mod tests {
         assert!(text.contains(&"(city_id) "));
         assert!(text.contains(&" cityes (id)"));
         assert!(text.iter().all(|part| !part.contains('→')));
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Path(path) if path.points.len() == 3 && path.stroke.color == egui::epaint::ColorMode::Solid(MUTED))));
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Path(path) if path.points.len() == 3 && path.stroke.color == egui::epaint::ColorMode::Solid(theme::muted()))));
     }
 
     #[test]
@@ -756,8 +792,8 @@ mod tests {
             |ctx| draw(ctx, &mut selected, &mut rows),
         );
         assert_eq!(selected, Some(egui::Id::new("id")));
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == SELECTED && rect.rect.height() == HEIGHT)));
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "int unsigned (auto increment)" && text.override_text_color == Some(TEXT))));
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == theme::accent() && rect.rect.height() == HEIGHT)));
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "int unsigned (auto increment)" && text.override_text_color == Some(theme::text()))));
         Ok(())
     }
 }

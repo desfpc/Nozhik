@@ -384,7 +384,11 @@ impl TerminalPanel {
                                 let font = egui::FontId::proportional(13.0);
                                 let width = ui
                                     .painter()
-                                    .layout_no_wrap(label.clone(), font.clone(), crate::theme::TEXT)
+                                    .layout_no_wrap(
+                                        label.clone(),
+                                        font.clone(),
+                                        crate::theme::text(),
+                                    )
                                     .size()
                                     .x
                                     + 48.0;
@@ -444,13 +448,13 @@ impl TerminalPanel {
                         let (rect, menu) =
                             ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
                         if menu.hovered() {
-                            ui.painter().rect_filled(rect, 5.0, crate::theme::HOVER);
+                            ui.painter().rect_filled(rect, 5.0, crate::theme::hover());
                         }
                         for y in [-5.0, 0.0, 5.0] {
                             ui.painter().circle_filled(
                                 rect.center() + egui::vec2(0.0, y),
                                 1.3,
-                                crate::theme::TEXT,
+                                crate::theme::text(),
                             );
                         }
                         menu.widget_info(|| {
@@ -497,7 +501,7 @@ impl TerminalPanel {
         ui.painter().hline(
             ui.min_rect().x_range(),
             ui.cursor().top(),
-            egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+            egui::Stroke::new(1.0_f32, crate::theme::border()),
         );
         ui.add_space(6.0);
         if let Some(id) = self.active

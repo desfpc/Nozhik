@@ -27,6 +27,8 @@ fn main() -> Result<()> {
         )
         .context("Cannot load user settings")?;
     let config = settings.snapshot()?;
+    let theme_id = config.theme.clone();
+    theme::install(&theme_id);
     eprintln!("Settings: {}", settings.path().display());
     let runtime = Runtime::new().context("Cannot start Tokio runtime")?;
     let lifecycle = nozhik_ai_completion::lifecycle::Lifecycle::start(runtime.handle(), None);
@@ -41,7 +43,7 @@ fn main() -> Result<()> {
         "Nozhik",
         options,
         Box::new(move |cc| {
-            theme::apply(&cc.egui_ctx);
+            theme::apply_id(&cc.egui_ctx, &theme_id);
             let mut ui = NozhikUi::new(bus.clone(), settings, config);
             ui.attach_runtime(&cc.egui_ctx, &ui_runtime);
             let mut ui = Workspace::new(ui, ui_runtime, ai_settings);

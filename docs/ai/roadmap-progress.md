@@ -3854,3 +3854,50 @@ executable и app archive; --check подтвердил source fingerprint
 Удалены untracked Finder .DS_Store. Финальный размер проекта — 392 MiB,
 binaries — 110 MiB. Исходники, история и готовые бинарники/legal materials
 сохранены; после очистки сборок не было.
+
+### GUI для OpenAPI JSON (v0.1.44, 2026-11-06)
+
+`openapi.json` и `swagger.json` (также `.yaml`/`.yml` и имена с `.openapi.` /
+`.swagger.`) в дереве и на вкладке получают зелёную круговую метку. Остальной
+JSON, включая коллекции Postman, остаётся со значком `{}`. YAML с таким именем
+получает только метку.
+
+Документ OpenAPI 3.x или Swagger 2.0 в JSON открывается как обычный редактор.
+Над ним переключатель JSON | GUI. GUI не пишет файл: можно выбрать сервер,
+заполнить авторизацию и отправить запрос. apiKey уходит в header, query или
+cookie; HTTP Basic и Bearer поддерживаются. OAuth2 и OpenID Connect принимают
+готовый токен и отправляют его как Bearer. Пустой `security` операции отменяет
+общую схему. Черновики Try it out, выбранный сервер и токены живут в памяти
+сессии и не сохраняются на диск. Сломанный JSON, в котором ещё узнаётся
+спецификация, оставляет переключатель и показывает ошибку разбора.
+
+Операции сгруппированы по тегам. В карточке — метод, путь, параметры, пример и
+схема тела, таблица ответов и результат вызова: код, заголовки, тело, curl и
+время. Локальные `$ref` раскрываются; цикл не роняет документ. Порядок полей
+примера совпадает с файлом (`serde_json` `preserve_order`). Запрос идёт вне
+потока интерфейса, timeout 30 с, тело ответа до 512 КиБ. Относительный URL
+сервера перед отправкой нужно заменить на абсолютный `http://` или `https://`.
+
+Версия workspace/lock — 0.1.44, следующая — 0.1.45.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 367 passed,
+0 failed, 10 прежних optional ignored. Новые тесты покрывают разбор OpenAPI 3
+и Swagger 2, порядок полей примера, path/query и заголовок Token, пустой
+security операции, Basic/Bearer и переменные сервера, относительный URL,
+обязательный path-параметр, локальный HTTP-вызов и переключатель JSON | GUI
+в headless egui. Иконка проверяется по имени файла: openapi.json и swagger.yaml
+получают метку, коллекция Postman — нет. Ручной native GUI и Windows
+build/Clippy не запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+6d95f61d3f41fd3481c14bdc8454b998196df0826a3fa82cd58c7abe728f2280 и SHA-256
+файлов. Упаковщик выполнил codesign --verify --deep --strict. Windows-комплект
+не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 8.2 GiB (25182 файла).
+Удалён untracked Finder .DS_Store в binaries/macos-arm64, из-за которого
+--check видел лишний файл. Финальный размер проекта — 392 MiB,
+binaries — 110 MiB. Исходники, история и готовые актуальные бинарники со всеми
+legal materials сохранены; после очистки сборок не было.

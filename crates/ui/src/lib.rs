@@ -20,6 +20,7 @@ mod language;
 mod layout;
 mod llm_panel;
 mod menu_bar;
+mod openapi;
 mod plugins;
 mod problems;
 mod project;
@@ -123,6 +124,7 @@ pub struct NozhikUi {
     language: language::LanguageUi,
     plugins: Option<PluginManager>,
     tools: tools::Tools,
+    openapi: openapi::OpenApiUi,
     plugins_open: bool,
     plugin_tab: Option<String>,
     editor_focus: Option<egui::Id>,
@@ -210,6 +212,7 @@ impl NozhikUi {
             language: language::LanguageUi::default(),
             plugins,
             tools: tools::Tools::default(),
+            openapi: openapi::OpenApiUi::default(),
             plugins_open: false,
             plugin_tab: None,
             editor_focus: None,

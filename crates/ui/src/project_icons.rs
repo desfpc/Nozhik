@@ -158,7 +158,13 @@ pub fn row(
             icon_color
         },
     );
-    if directory.is_none() && nozhik_docker::is_compose_file(path) {
+    if directory.is_none() && is_openapi_filename(path) {
+        paint_openapi_mark(
+            painter,
+            origin + Vec2::new(32.0, 0.0),
+            if excluded { theme::ERROR } else { OPENAPI },
+        );
+    } else if directory.is_none() && nozhik_docker::is_compose_file(path) {
         crate::tool_icons::paint(
             painter,
             origin + Vec2::new(32.0, 0.0),
@@ -173,14 +179,76 @@ pub fn row(
         text,
         color,
     );
-    response.on_hover_text(if excluded {
+    let mut tip = if excluded {
         format!(
             "{}\nExcluded by ignore rules / dependency or build directory",
             path.display()
         )
     } else {
         path.display().to_string()
-    })
+    };
+    if directory.is_none() && is_openapi_filename(path) {
+        tip.push_str("\nOpenAPI");
+    }
+    response.on_hover_text(tip)
+}
+
+const OPENAPI: Color32 = Color32::from_rgb(111, 199, 72);
+
+/// `OpenAPI` and Swagger documents use the circular mark instead of the JSON braces.
+#[must_use]
+pub fn is_openapi_filename(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "openapi.json"
+            | "openapi.yaml"
+            | "openapi.yml"
+            | "swagger.json"
+            | "swagger.yaml"
+            | "swagger.yml"
+    ) || name.ends_with(".openapi.json")
+        || name.ends_with(".openapi.yaml")
+        || name.ends_with(".openapi.yml")
+        || name.ends_with(".swagger.json")
+        || name.ends_with(".swagger.yaml")
+        || name.ends_with(".swagger.yml")
+}
+
+pub fn paint_openapi_mark(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.7_f32, color);
+    for start in [200.0_f32, 320.0, 80.0] {
+        let mut points = Vec::new();
+        for step in 0_u8..=8 {
+            let fraction = f32::from(step) / 8.0;
+            let radians = 92.0_f32.mul_add(fraction, start).to_radians();
+            points.push(center + Vec2::new(radians.cos() * 6.2, radians.sin() * 6.2));
+        }
+        painter.add(egui::Shape::line(points.clone(), stroke));
+        let Some((prev, end)) = points
+            .get(points.len().saturating_sub(2))
+            .copied()
+            .zip(points.last().copied())
+        else {
+            continue;
+        };
+        let delta = end - prev;
+        if delta.length() > 0.1 {
+            let dir = delta / delta.length();
+            let normal = Vec2::new(-dir.y, dir.x);
+            painter.add(egui::Shape::line(
+                vec![
+                    end + normal * 2.3 - dir * 3.0,
+                    end,
+                    end - normal * 2.3 - dir * 3.0,
+                ],
+                stroke,
+            ));
+        }
+    }
 }
 
 fn paint_icon(
@@ -292,5 +360,12 @@ mod tests {
         assert_eq!(badge(Path::new("unknown.xyz"), false), ("", theme::MUTED));
         assert_eq!(badge(Path::new("Dockerfile"), false).0, "DK");
         assert_eq!(badge(Path::new("main.ts"), false).0, "TS");
+        assert!(is_openapi_filename(Path::new(
+            "documentation/api/openapi.json"
+        )));
+        assert!(is_openapi_filename(Path::new("swagger.yaml")));
+        assert!(!is_openapi_filename(Path::new(
+            "IceCMS2.postman_collection.json"
+        )));
     }
 }

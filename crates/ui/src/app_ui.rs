@@ -665,19 +665,8 @@ impl NozhikUi {
                         ui.label("Binary file not supported");
                         return;
                     }
-                    if nozhik_config::languages::language_for_path(&self.documents[index].path)
-                        == Some(nozhik_config::languages::LanguageId::Json)
-                    {
-                        ui.horizontal(|ui| {
-                            if ui.button("Open in Tools / JSON").clicked() {
-                                self.tools
-                                    .load(self.documents[index].buffer.rope().to_string());
-                                self.left = Some(LeftTool::Tools);
-                            }
-                            if ui.button("Reformat JSON").clicked() {
-                                self.reformat_code(ctx);
-                            }
-                        });
+                    if self.openapi_toolbar(ui, ctx, index, enabled) {
+                        return;
                     }
                     let editor_id = ui
                         .id()

@@ -107,11 +107,7 @@ impl NozhikUi {
                     .layout_no_wrap(t.name.clone(), font.clone(), theme::TEXT)
                     .size()
                     .x
-                    + if nozhik_docker::is_compose_file(std::path::Path::new(&t.name)) {
-                        70.0
-                    } else {
-                        48.0
-                    }
+                    + tab_padding(&t.name)
             })
             .collect();
         let total: f32 = widths.iter().sum();
@@ -371,6 +367,7 @@ pub fn paint_tab(
         );
     }
     let docker = nozhik_docker::is_compose_file(std::path::Path::new(name));
+    let openapi = crate::project_icons::is_openapi_filename(std::path::Path::new(name));
     if docker {
         crate::tool_icons::paint(
             painter,
@@ -378,10 +375,16 @@ pub fn paint_tab(
             crate::tool_icons::Icon::Docker,
             theme::INFO,
         );
+    } else if openapi {
+        crate::project_icons::paint_openapi_mark(
+            painter,
+            pos2(rect.left() + 18.0, rect.center().y),
+            Color32::from_rgb(111, 199, 72),
+        );
     }
     painter.text(
         pos2(
-            rect.left() + if docker { 34.0 } else { 12.0 },
+            rect.left() + if docker || openapi { 34.0 } else { 12.0 },
             rect.center().y,
         ),
         Align2::LEFT_CENTER,
@@ -403,6 +406,15 @@ pub fn paint_tab(
         );
         painter.line_segment([center - vec2(3.0, 3.0), center + vec2(3.0, 3.0)], stroke);
         painter.line_segment([center + vec2(-3.0, 3.0), center + vec2(3.0, -3.0)], stroke);
+    }
+}
+
+fn tab_padding(name: &str) -> f32 {
+    let path = std::path::Path::new(name);
+    if nozhik_docker::is_compose_file(path) || crate::project_icons::is_openapi_filename(path) {
+        70.0
+    } else {
+        48.0
     }
 }
 

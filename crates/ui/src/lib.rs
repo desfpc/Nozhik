@@ -15,6 +15,7 @@ mod diff_view;
 mod docker_panel;
 mod editor_tabs;
 pub mod editor_view;
+mod http_requests;
 mod integration;
 mod language;
 mod layout;
@@ -92,6 +93,8 @@ pub enum LeftTool {
     Docker,
     /// Project notes, commands and code fragments.
     Snippets,
+    /// Saved HTTP calls and their cURL form.
+    HttpRequests,
     /// Tools catalog and the selected full-size tool.
     Tools,
 }
@@ -119,6 +122,8 @@ pub struct NozhikUi {
     deployment: deployment::DeploymentUi,
     docker: docker_panel::DockerUi,
     snippets: snippets::Snippets,
+    http_requests: http_requests::HttpRequests,
+    pending_openapi_export: Option<http_requests::PendingExport>,
     terminal: Option<terminal_panel::TerminalPanel>,
     llm: Option<llm_panel::LlmPanel>,
     language: language::LanguageUi,
@@ -207,6 +212,8 @@ impl NozhikUi {
             deployment: deployment::DeploymentUi::default(),
             docker: docker_panel::DockerUi::default(),
             snippets: snippets::Snippets::default(),
+            http_requests: http_requests::HttpRequests::default(),
+            pending_openapi_export: None,
             terminal: None,
             llm: None,
             language: language::LanguageUi::default(),
@@ -273,7 +280,10 @@ impl NozhikUi {
     }
 
     fn open_document(&mut self, index: usize) {
-        if matches!(self.left, Some(LeftTool::Tools | LeftTool::Snippets)) {
+        if matches!(
+            self.left,
+            Some(LeftTool::Tools | LeftTool::Snippets | LeftTool::HttpRequests)
+        ) {
             self.left = Some(LeftTool::Project);
         }
         self.database.active = None;

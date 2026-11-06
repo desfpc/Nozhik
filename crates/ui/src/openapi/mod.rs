@@ -97,6 +97,10 @@ pub struct OpenApiUi {
 }
 
 impl OpenApiUi {
+    pub(crate) fn contains_path(&self, path: &Path) -> bool {
+        self.files.contains_key(path)
+    }
+
     fn reload(&mut self, path: &Path, revision: u64, text: &str) {
         let mode = self.files.get(path).map_or(Mode::Json, |state| state.mode);
         let previous = self.files.remove(path);
@@ -275,10 +279,14 @@ impl crate::NozhikUi {
         if !gui {
             return false;
         }
-        let OpenApiUi { files, http } = &mut self.openapi;
-        if let Some(state) = files.get_mut(&path) {
-            view::show(ui, ctx, &path, state, http, enabled);
+        let mut transfers = Vec::new();
+        {
+            let OpenApiUi { files, http } = &mut self.openapi;
+            if let Some(state) = files.get_mut(&path) {
+                view::show(ui, ctx, &path, state, http, enabled, &mut transfers);
+            }
         }
+        self.import_openapi_requests(ctx, transfers);
         true
     }
 }
@@ -357,6 +365,13 @@ mod tests {
         assert!(contains(&second, "Authorize"), "GUI should list Authorize");
         assert!(contains(&second, "POST"));
         assert!(contains(&second, "/api/v1/profile/auth"));
+        let post = galley(&second, "POST").ok_or_else(|| "POST card is missing".to_string())?;
+        let _ = frame(&mut shell, &ctx, click(post.center()));
+        let expanded = frame(&mut shell, &ctx, Vec::new());
+        assert!(
+            contains(&expanded, "To HTTP Requests"),
+            "an expanded operation should offer HTTP Requests"
+        );
         assert!(contains(&second, "nozhove.com API"));
         assert!(!contains(&second, "Open in Tools / JSON"));
         Ok(())

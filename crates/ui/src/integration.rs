@@ -313,7 +313,7 @@ impl NozhikUi {
                 }
                 "ui.exit" => self.request_close(CloseTarget::Window, ctx),
                 "ui.undo" | "ui.redo" => {
-                    if self.left == Some(LeftTool::Snippets) {
+                    if matches!(self.left, Some(LeftTool::Snippets | LeftTool::HttpRequests)) {
                         continue;
                     }
                     if let Some(buffer) = self.active_buffer() {
@@ -367,6 +367,10 @@ impl NozhikUi {
                         let _handled = self.snippets.handle_clipboard(ctx, action.as_str());
                         continue;
                     }
+                    if self.left == Some(LeftTool::HttpRequests) {
+                        let _handled = self.http_requests.handle_clipboard(ctx, action.as_str());
+                        continue;
+                    }
                     if action == "ui.copy"
                         && let Some(text) = self
                             .database
@@ -407,7 +411,7 @@ impl NozhikUi {
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
                 "ui.find" | "ui.replace" => {
-                    if self.left != Some(LeftTool::Snippets) {
+                    if !matches!(self.left, Some(LeftTool::Snippets | LeftTool::HttpRequests)) {
                         self.integration.find = true;
                     }
                 }
@@ -792,6 +796,7 @@ impl NozhikUi {
         self.settings_dialog.finish();
         self.layout.finish();
         self.snippets.finish();
+        self.http_requests.finish();
         self.recent_projects.finish();
         self.shutdown_language();
         if let Some(panel) = &mut self.terminal {

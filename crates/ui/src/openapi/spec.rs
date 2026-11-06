@@ -1443,6 +1443,157 @@ pub fn prepare(
     })
 }
 
+/// Builds the HTTP Requests record for the same call Try it out would send.
+///
+/// # Errors
+/// Returns the same errors as [`prepare`]: a missing server, a required parameter, or a bad body.
+pub fn transfer_request(
+    spec: &Spec,
+    operation: &Operation,
+    draft: &CallDraft<'_>,
+) -> Result<crate::http_requests::Incoming, String> {
+    let prepared = prepare(spec, operation, draft)?;
+    Ok(incoming_from(operation, &prepared))
+}
+
+fn incoming_from(operation: &Operation, prepared: &Prepared) -> crate::http_requests::Incoming {
+    use crate::http_requests::{Incoming, MAX_TAGS, normalize_tag};
+    let content_type = prepared
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str());
+    let (body_kind, body, form) = split_transfer_body(content_type, prepared.body.as_deref());
+    let tags = operation
+        .tags
+        .iter()
+        .filter_map(|tag| normalize_tag(tag))
+        .take(MAX_TAGS)
+        .collect();
+    Incoming {
+        name: clean_transfer_name(&operation.summary, &operation.method, &operation.path),
+        method: prepared.method.clone(),
+        url: prepared.url.clone(),
+        query: Vec::new(),
+        headers: prepared.headers.clone(),
+        body_kind,
+        body,
+        form,
+        tags,
+    }
+}
+
+fn clean_transfer_name(summary: &str, method: &str, path: &str) -> String {
+    let raw = if summary.trim().is_empty() {
+        format!("{method} {path}")
+    } else {
+        summary.to_owned()
+    };
+    let cleaned: String = raw
+        .chars()
+        .map(|symbol| if symbol.is_control() { ' ' } else { symbol })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "Untitled request".into()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn split_transfer_body(
+    content_type: Option<&str>,
+    bytes: Option<&[u8]>,
+) -> (
+    crate::http_requests::BodyKind,
+    String,
+    Vec<(String, String)>,
+) {
+    use crate::http_requests::{BodyKind, content_type_kind};
+    let Some(bytes) = bytes.filter(|bytes| !bytes.is_empty()) else {
+        return (BodyKind::None, String::new(), Vec::new());
+    };
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    match content_type.and_then(content_type_kind) {
+        Some(BodyKind::Form) => (BodyKind::Form, String::new(), form_transfer_fields(&text)),
+        Some(BodyKind::Multipart) => {
+            let fields = content_type
+                .and_then(boundary_value)
+                .map(|boundary| multipart_transfer_fields(&text, boundary))
+                .unwrap_or_default();
+            if fields.is_empty() {
+                (BodyKind::Text, text, Vec::new())
+            } else {
+                (BodyKind::Multipart, String::new(), fields)
+            }
+        }
+        Some(BodyKind::Json) => (BodyKind::Json, text, Vec::new()),
+        Some(BodyKind::Text | BodyKind::None) | None => (BodyKind::Text, text, Vec::new()),
+    }
+}
+
+fn form_transfer_fields(body: &str) -> Vec<(String, String)> {
+    use crate::http_requests::percent_decode;
+    body.split('&')
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.split_once('=') {
+            Some((name, value)) => (percent_decode(name, true), percent_decode(value, true)),
+            None => (percent_decode(part, true), String::new()),
+        })
+        .collect()
+}
+
+fn boundary_value(content_type: &str) -> Option<&str> {
+    let lower = content_type.to_ascii_lowercase();
+    let index = lower.find("boundary=")? + "boundary=".len();
+    let rest = content_type.get(index..)?.trim();
+    let rest = rest.trim_start_matches('"');
+    let end = rest.find(['"', ';', ' ', '\r', '\n']).unwrap_or(rest.len());
+    let value = rest.get(..end)?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn multipart_transfer_fields(body: &str, boundary: &str) -> Vec<(String, String)> {
+    let marker = format!("--{boundary}");
+    let mut fields = Vec::new();
+    for part in body.split(&marker) {
+        let part = part.trim_start_matches(['\r', '\n']);
+        if part.is_empty() || part.starts_with("--") {
+            continue;
+        }
+        let Some((headers, content)) = part
+            .split_once("\r\n\r\n")
+            .or_else(|| part.split_once("\n\n"))
+        else {
+            continue;
+        };
+        let Some(name) = disposition_name(headers) else {
+            continue;
+        };
+        let value = content.trim_end_matches("\r\n").trim_end_matches('\n');
+        fields.push((name, value.to_owned()));
+    }
+    fields
+}
+
+fn disposition_name(headers: &str) -> Option<String> {
+    for line in headers.split(['\n', '\r']) {
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("content-disposition") {
+            continue;
+        }
+        let index = lower.find("name=")? + "name=".len();
+        let rest = line.get(index..)?.trim().trim_matches('"');
+        let end = rest.find(['"', ';']).unwrap_or(rest.len());
+        let name = rest.get(..end)?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        return Some(name.to_owned());
+    }
+    None
+}
+
 fn fill_path(
     template: &str,
     parameters: &[Parameter],
@@ -1936,6 +2087,58 @@ mod tests {
                 .any(|(name, value)| name == "Token" && value == "secret")
         );
         assert!(call.curl.contains("curl -X GET"));
+        Ok(())
+    }
+
+    #[test]
+    fn transfers_post_json_into_an_http_request() -> Result<(), String> {
+        let value = serde_json::json!({
+            "openapi": "3.0.3",
+            "info": {"title": "Shop", "version": "1.0.0"},
+            "servers": [{"url": "https://example.com"}],
+            "paths": {
+                "/login": {
+                    "post": {
+                        "summary": "Login",
+                        "tags": ["auth"],
+                        "parameters": [{
+                            "name": "next",
+                            "in": "query",
+                            "schema": {"type": "string"}
+                        }],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {"example": {"n": 1}}
+                            }
+                        },
+                        "responses": {"200": {"description": "ok"}}
+                    }
+                }
+            }
+        });
+        let spec = parse_document(&value)?;
+        let operation = spec.operations.first().ok_or("operation")?;
+        let mut params = std::collections::HashMap::new();
+        params.insert("query:next".into(), "/home".into());
+        let incoming = transfer_request(
+            &spec,
+            operation,
+            &CallDraft {
+                server_index: 0,
+                server_values: &[],
+                params: &params,
+                content_index: 0,
+                body_text: "{\"n\":1}",
+                auth: &std::collections::HashMap::new(),
+            },
+        )?;
+        assert_eq!(incoming.name, "Login");
+        assert_eq!(incoming.method, "POST");
+        assert!(incoming.url.starts_with("https://example.com/login?"));
+        assert!(incoming.url.contains("next=%2Fhome"));
+        assert_eq!(incoming.body_kind, crate::http_requests::BodyKind::Json);
+        assert_eq!(incoming.body, "{\"n\":1}");
+        assert_eq!(incoming.tags, vec!["auth".to_owned()]);
         Ok(())
     }
 

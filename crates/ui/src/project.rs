@@ -226,6 +226,9 @@ impl NozhikUi {
                 }
                 Reply::Matches { token, files } => self.search.accept(token, files),
                 Reply::Error(error) => {
+                    if self.openapi_export_failed(&error) {
+                        continue;
+                    }
                     if self.workspace.managed && self.project.is_none() {
                         self.workspace.failed = Some(error.clone());
                     }
@@ -291,7 +294,12 @@ impl NozhikUi {
     }
     pub(crate) fn loaded_file(&mut self, path: PathBuf, text: &str, binary: bool) {
         if let Some(index) = self.documents.iter().position(|d| d.path == path) {
-            self.open_document(index);
+            let pending = self.pending_openapi_export.is_some();
+            self.finish_openapi_export(&path);
+            let consumed = pending && self.pending_openapi_export.is_none();
+            if !consumed {
+                self.open_document(index);
+            }
             return;
         }
         let Some(next) = self.next_buffer_id.checked_add(1) else {
@@ -325,6 +333,7 @@ impl NozhikUi {
             .map(|doc| doc.buffer.snapshot().buffer_id);
         self.database.active = None;
         self.search.note_file(path.clone());
+        self.finish_openapi_export(&path);
         self.bus.publish(Event::FileOpened(path));
     }
     fn active_project_file(&self) -> Option<PathBuf> {

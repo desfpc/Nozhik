@@ -18,6 +18,7 @@ pub fn show(
     state: &mut FileState,
     hub: &mut http::Hub,
     enabled: bool,
+    transfers: &mut Vec<Result<crate::http_requests::Incoming, String>>,
 ) {
     if !state.pending.is_empty() {
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -32,7 +33,7 @@ pub fn show(
                     ui.colored_label(theme::ERROR, error);
                 }
                 Parsed::Spec(_) => {
-                    authorize = document(ui, state, hub);
+                    authorize = document(ui, state, hub, transfers);
                 }
             });
         });
@@ -44,7 +45,12 @@ pub fn show(
     }
 }
 
-fn document(ui: &mut Ui, state: &mut FileState, hub: &mut http::Hub) -> bool {
+fn document(
+    ui: &mut Ui,
+    state: &mut FileState,
+    hub: &mut http::Hub,
+    transfers: &mut Vec<Result<crate::http_requests::Incoming, String>>,
+) -> bool {
     sync_server_vars(state);
     let (title, version, openapi, description, extra, docs, warnings) = {
         let Parsed::Spec(spec) = &state.parsed else {
@@ -103,7 +109,7 @@ fn document(ui: &mut Ui, state: &mut FileState, hub: &mut http::Hub) -> bool {
         }
     };
     for (name, description, operations) in groups {
-        tag_block(ui, state, hub, &name, &description, &operations);
+        tag_block(ui, state, hub, &name, &description, &operations, transfers);
         ui.add_space(8.0);
     }
     schemas_block(ui, state);
@@ -261,6 +267,7 @@ fn tag_block(
     name: &str,
     description: &str,
     operations: &[usize],
+    transfers: &mut Vec<Result<crate::http_requests::Incoming, String>>,
 ) {
     let open = !state.collapsed_tags.contains(name);
     let response = section_header(ui, name, open);
@@ -278,7 +285,7 @@ fn tag_block(
         ui.label(RichText::new(description).color(theme::MUTED));
     }
     for index in operations {
-        operation_card(ui, state, hub, *index);
+        operation_card(ui, state, hub, *index, transfers);
         ui.add_space(6.0);
     }
 }
@@ -305,7 +312,13 @@ fn section_header(ui: &mut Ui, title: &str, open: bool) -> egui::Response {
     response
 }
 
-fn operation_card(ui: &mut Ui, state: &mut FileState, hub: &mut http::Hub, index: usize) {
+fn operation_card(
+    ui: &mut Ui,
+    state: &mut FileState,
+    hub: &mut http::Hub,
+    index: usize,
+    transfers: &mut Vec<Result<crate::http_requests::Incoming, String>>,
+) {
     let Some(operation) = operation_clone(state, index) else {
         return;
     };
@@ -325,6 +338,9 @@ fn operation_card(ui: &mut Ui, state: &mut FileState, hub: &mut http::Hub, index
             }
             if open {
                 ui.add_space(6.0);
+                if ui.button("To HTTP Requests").clicked() {
+                    transfers.push(capture_request(state, &operation));
+                }
                 if !operation.description.is_empty() {
                     ui.label(&operation.description);
                 }
@@ -1041,6 +1057,37 @@ fn underline(ui: &mut Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 2.0), Sense::hover());
     let bar = Rect::from_min_max(rect.min, Pos2::new(rect.left() + 88.0, rect.bottom()));
     ui.painter().rect_filled(bar, 0.0, color);
+}
+
+fn capture_request(
+    state: &FileState,
+    operation: &spec::Operation,
+) -> Result<crate::http_requests::Incoming, String> {
+    let draft = state
+        .drafts
+        .get(&operation.key)
+        .cloned()
+        .unwrap_or_else(|| Draft::from_operation(operation));
+    let Parsed::Spec(spec) = &state.parsed else {
+        return Err("OpenAPI document is not valid".into());
+    };
+    let (server_index, server_values) = if operation.servers.is_empty() {
+        (state.server, state.vars.clone())
+    } else {
+        (draft.server, draft.vars.clone())
+    };
+    spec::transfer_request(
+        spec,
+        operation,
+        &spec::CallDraft {
+            server_index,
+            server_values: &server_values,
+            params: &draft.params,
+            content_index: draft.content,
+            body_text: &draft.body,
+            auth: &state.auth,
+        },
+    )
 }
 
 fn execute(state: &mut FileState, hub: &mut http::Hub, operation: &spec::Operation) {

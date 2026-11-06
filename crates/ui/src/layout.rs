@@ -22,6 +22,13 @@ pub struct Layout {
     pub sql: f32,
     /// Snippets tag sidebar width / viewport width, independent of the project dock.
     pub snippets: f32,
+    /// HTTP Requests tag sidebar width / viewport width, independent of the project dock.
+    #[serde(default = "default_http_requests")]
+    pub http_requests: f32,
+}
+
+const fn default_http_requests() -> f32 {
+    0.18
 }
 impl Default for Layout {
     fn default() -> Self {
@@ -32,14 +39,22 @@ impl Default for Layout {
             bottom: 0.40,
             sql: 0.45,
             snippets: 0.18,
+            http_requests: default_http_requests(),
         }
     }
 }
 impl Layout {
     fn valid(self) -> bool {
-        [self.left, self.git, self.right, self.sql, self.snippets]
-            .into_iter()
-            .all(|v| v.is_finite() && (0.1..=0.8).contains(&v))
+        [
+            self.left,
+            self.git,
+            self.right,
+            self.sql,
+            self.snippets,
+            self.http_requests,
+        ]
+        .into_iter()
+        .all(|v| v.is_finite() && (0.1..=0.8).contains(&v))
             && self.bottom.is_finite()
             && (0.05..=1.0).contains(&self.bottom)
             && self.left + self.right <= 0.8
@@ -184,6 +199,12 @@ mod tests {
         };
         save(&path, value)?;
         assert_eq!(load(&path)?, value);
+        std::fs::write(
+            &path,
+            r#"{"left":0.21,"git":0.27,"right":0.22,"bottom":0.4,"sql":0.45,"snippets":0.18}"#,
+        )?;
+        let older = load(&path)?;
+        assert!((older.http_requests - 0.18).abs() < f32::EPSILON);
         std::fs::write(&path, "bad")?;
         assert!(save(&path, value).is_err());
         assert_eq!(std::fs::read_to_string(&path)?, "bad");

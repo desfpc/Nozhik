@@ -10,7 +10,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 const fn dock_title(tool: LeftTool) -> Option<&'static str> {
     match tool {
-        LeftTool::Project | LeftTool::Commit | LeftTool::Snippets => None,
+        LeftTool::Project | LeftTool::Commit | LeftTool::Snippets | LeftTool::HttpRequests => None,
         LeftTool::Database => Some("Database"),
         LeftTool::Docker => Some("Docker"),
         LeftTool::Remote => Some("Remote Host / SSH"),
@@ -81,13 +81,18 @@ impl NozhikUi {
                     alt: chord.alt,
                     shift: chord.shift,
                 };
-                if self.left == Some(LeftTool::Snippets) {
+                if matches!(self.left, Some(LeftTool::Snippets | LeftTool::HttpRequests)) {
                     let editing = matches!(
                         binding.action.as_str(),
                         "ui.undo" | "ui.redo" | "ui.cut" | "ui.copy" | "ui.paste"
                     );
                     let find = matches!(binding.action.as_str(), "ui.find" | "ui.replace");
-                    if find || (editing && self.snippets.editor_focused(ctx)) {
+                    let focused = if self.left == Some(LeftTool::Snippets) {
+                        self.snippets.editor_focused(ctx)
+                    } else {
+                        self.http_requests.editor_focused(ctx)
+                    };
+                    if find || (editing && focused) {
                         continue;
                     }
                 }
@@ -161,6 +166,13 @@ impl NozhikUi {
                                 Some(LeftTool::Snippets)
                             };
                         }
+                        "ui.http_requests" => {
+                            self.left = if self.left == Some(LeftTool::HttpRequests) {
+                                None
+                            } else {
+                                Some(LeftTool::HttpRequests)
+                            };
+                        }
                         "ui.project" => {
                             self.left = if self.left == Some(LeftTool::Project) {
                                 None
@@ -178,8 +190,11 @@ impl NozhikUi {
                             .is_some_and(|p| path.starts_with(&p.root_path))
                         {
                             let snippet_file = self.snippets.is_store_path(path);
+                            let http_file = self.http_requests.is_store_path(path);
                             if snippet_file {
                                 self.snippets.note_disk_change();
+                            } else if http_file {
+                                self.http_requests.note_disk_change();
                             } else {
                                 self.status = format!(
                                     "Disk changed: {} (open buffers retained)",
@@ -460,6 +475,7 @@ impl NozhikUi {
                     (Icon::Database, "Database", LeftTool::Database),
                     (Icon::Docker, "Docker", LeftTool::Docker),
                     (Icon::Snippets, "Snippets", LeftTool::Snippets),
+                    (Icon::Http, "HTTP Requests", LeftTool::HttpRequests),
                     (Icon::Tools, "Tools", LeftTool::Tools),
                 ] {
                     if ui
@@ -521,11 +537,13 @@ impl NozhikUi {
             let dock_id = match tool {
                 LeftTool::Commit => "git_dock",
                 LeftTool::Snippets => "snippets_dock",
+                LeftTool::HttpRequests => "http_requests_dock",
                 _ => "left_dock",
             };
             let proportion = match tool {
                 LeftTool::Commit => self.layout.value.git,
                 LeftTool::Snippets => self.layout.value.snippets,
+                LeftTool::HttpRequests => self.layout.value.http_requests,
                 _ => self.layout.value.left,
             };
             crate::layout::seed(
@@ -540,7 +558,7 @@ impl NozhikUi {
                 .width_range(
                     (match tool {
                         LeftTool::Project => 180.0,
-                        LeftTool::Snippets => 200.0,
+                        LeftTool::Snippets | LeftTool::HttpRequests => 200.0,
                         _ => 150.0,
                     })..=viewport.width() * 0.4,
                 )
@@ -550,10 +568,18 @@ impl NozhikUi {
                         .fill(egui::Color32::from_rgb(35, 42, 48))
                         .inner_margin(0),
                     LeftTool::Snippets => crate::snippets::sidebar_frame(),
+                    LeftTool::HttpRequests => crate::http_requests::sidebar_frame(),
                     _ => theme::dock_frame(theme::PANEL),
                 })
                 .show(ctx, |ui| {
-                    if tool == LeftTool::Snippets {
+                    if tool == LeftTool::HttpRequests {
+                        let enabled = !self.global_modal();
+                        let root = self
+                            .project
+                            .as_ref()
+                            .map(|project| project.root_path.as_path());
+                        self.http_requests.show_nav(ui, root, enabled);
+                    } else if tool == LeftTool::Snippets {
                         let enabled = !self.global_modal();
                         let root = self
                             .project
@@ -581,6 +607,7 @@ impl NozhikUi {
             match tool {
                 LeftTool::Commit => layout.git = width,
                 LeftTool::Snippets => layout.snippets = width,
+                LeftTool::HttpRequests => layout.http_requests = width,
                 _ => layout.left = width,
             }
             if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
@@ -630,6 +657,25 @@ impl NozhikUi {
                         self.snippets.show_main(ui, root, enabled)
                     {
                         self.open_snippet_in_console(ctx, &text);
+                    }
+                });
+            self.editor_focus = None;
+            return;
+        }
+        if self.left == Some(LeftTool::HttpRequests) {
+            egui::CentralPanel::default()
+                .frame(crate::http_requests::editor_frame())
+                .show(ctx, |ui| {
+                    let enabled = !self.global_modal();
+                    let root = self
+                        .project
+                        .as_ref()
+                        .map(|project| project.root_path.as_path());
+                    let targets = self.openapi_export_targets();
+                    if let Some(crate::http_requests::PanelCommand::Export { id, path }) =
+                        self.http_requests.show_main(ui, root, enabled, &targets)
+                    {
+                        self.export_saved_request(&path, &id);
                     }
                 });
             self.editor_focus = None;
@@ -831,6 +877,7 @@ impl NozhikUi {
         self.receive_files();
         if self.project.is_none() {
             self.snippets.finish();
+            self.http_requests.finish();
             self.receive_events();
             self.integration_tick(ctx);
             #[cfg(target_os = "macos")]
@@ -883,6 +930,10 @@ impl NozhikUi {
         self.snippets.tick(ctx);
         if let Some((severity, message)) = self.snippets.take_problem() {
             self.note_problem("snippets", "Snippets", severity, &message);
+        }
+        self.http_requests.tick(ctx);
+        if let Some((severity, message)) = self.http_requests.take_problem() {
+            self.note_problem("http-requests", "HTTP Requests", severity, &message);
         }
         if let Some(paths) = self.vcs.take_deploy_paths() {
             self.deploy_files(paths);
@@ -1177,11 +1228,13 @@ mod tests {
         let rail = egui::containers::panel::PanelState::load(&ctx, egui::Id::new("left_strip"))
             .ok_or("missing rail")?
             .rect;
-        // Sixth top button is Snippets. Seventh is Tools. The next slot is empty.
+        // Sixth top button is Snippets. Seventh is HTTP Requests. Eighth is Tools.
+        // The next slot is empty.
         for (index, position) in [
             rail.left_top() + vec2(18.0, 178.0),
             rail.left_top() + vec2(18.0, 210.0),
             rail.left_top() + vec2(18.0, 242.0),
+            rail.left_top() + vec2(18.0, 274.0),
         ]
         .into_iter()
         .enumerate()
@@ -1204,6 +1257,8 @@ mod tests {
             if index == 0 {
                 assert!(shell.left == Some(LeftTool::Snippets));
             } else if index == 1 {
+                assert!(shell.left == Some(LeftTool::HttpRequests));
+            } else if index == 2 {
                 assert!(shell.left == Some(LeftTool::Tools));
             } else {
                 assert!(shell.left == before);

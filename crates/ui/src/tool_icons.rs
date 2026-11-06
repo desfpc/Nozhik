@@ -14,6 +14,7 @@ pub enum Icon {
     Database,
     Docker,
     Snippets,
+    Http,
     Copy,
     Settings,
     Search,
@@ -223,6 +224,12 @@ pub fn paint(painter: &egui::Painter, center: Pos2, icon: Icon, color: Color32) 
                 stroke,
             ));
             circle(7.2, 10.0, 1.2);
+        }
+        Icon::Http => {
+            line(&[(2.0, 6.0), (16.0, 6.0)]);
+            line(&[(12.0, 2.5), (16.0, 6.0), (12.0, 9.5)]);
+            line(&[(18.0, 14.0), (4.0, 14.0)]);
+            line(&[(8.0, 10.5), (4.0, 14.0), (8.0, 17.5)]);
         }
         Icon::Copy => {
             painter.rect_stroke(

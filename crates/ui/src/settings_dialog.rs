@@ -26,6 +26,7 @@ pub struct SettingsDialog {
     category: usize,
     deployment: crate::deployment::DeploymentSettings,
     extension: String,
+    linter_draft: nozhik_config::linters::LinterTool,
     requests: mpsc::Sender<Request>,
     replies: mpsc::Receiver<Reply>,
     pending: usize,
@@ -105,6 +106,7 @@ impl SettingsDialog {
             category: 0,
             deployment: crate::deployment::DeploymentSettings::default(),
             extension: "php".into(),
+            linter_draft: crate::linters::blank_draft("phpstan"),
             requests,
             replies,
             pending: 0,
@@ -120,6 +122,7 @@ impl SettingsDialog {
         ui.selectable_value(&mut self.category, 3, "Languages");
         ui.selectable_value(&mut self.category, 4, "Git");
         ui.selectable_value(&mut self.category, 5, "SFTP Deployment");
+        ui.selectable_value(&mut self.category, 6, "Linters");
         ui.button("Plugins…").clicked()
     }
 
@@ -130,6 +133,7 @@ impl SettingsDialog {
         size: egui::Vec2,
         vcs: &mut crate::vcs_panel::VcsPanel,
         deployment_profiles: Option<&[nozhik_remote_ssh::SshProfile]>,
+        containers: &[(String, String)],
     ) {
         egui::ScrollArea::both()
             .id_salt(("settings_options", self.category))
@@ -151,6 +155,13 @@ impl SettingsDialog {
                         self.deployment.show(ui, config, deployment_profiles);
                     } else if self.category == 4 {
                         vcs.git_settings_ui(ui);
+                    } else if self.category == 6 {
+                        crate::linters::show_settings(
+                            ui,
+                            config,
+                            containers,
+                            &mut self.linter_draft,
+                        );
                     } else {
                         Self::languages(ui, config);
                     }
@@ -165,11 +176,20 @@ impl SettingsDialog {
         size: egui::Vec2,
         vcs: &mut crate::vcs_panel::VcsPanel,
         deployment_profiles: Option<&[nozhik_remote_ssh::SshProfile]>,
+        containers: &[(String, String)],
     ) -> bool {
         let compact = size.x < 560.0;
         let height = (size.y - if compact { 126.0 } else { 86.0 }).max(0.0);
         if compact {
-            let plugins = ui.horizontal_wrapped(|ui| self.navigation(ui)).inner;
+            // One category row keeps the modal inside a short window; further rows scroll.
+            let plugins = egui::ScrollArea::vertical()
+                .id_salt("settings_categories_compact")
+                .auto_shrink([false, true])
+                .max_height(40.0)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| self.navigation(ui)).inner
+                })
+                .inner;
             ui.separator();
             self.options(
                 ui,
@@ -177,6 +197,7 @@ impl SettingsDialog {
                 egui::vec2(size.x, height),
                 vcs,
                 deployment_profiles,
+                containers,
             );
             plugins
         } else {
@@ -216,6 +237,7 @@ impl SettingsDialog {
                     ),
                     vcs,
                     deployment_profiles,
+                    containers,
                 );
                 plugins
             })
@@ -406,6 +428,15 @@ impl SettingsDialog {
             self.pending += 1;
         }
     }
+
+    pub(crate) fn queue_save(&mut self, config: Config) -> bool {
+        if self.requests.send(Request::Save(config)).is_ok() {
+            self.pending += 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 impl crate::NozhikUi {
     pub(crate) fn settings_tick(&mut self, ctx: &egui::Context) {
@@ -469,12 +500,19 @@ impl crate::NozhikUi {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
+
     pub(crate) fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             self.vcs.clear_git_secrets();
             return;
         }
         let mut config = self.config.clone();
+        let containers: Vec<(String, String)> = self
+            .docker
+            .containers()
+            .into_iter()
+            .map(|container| (container.id, container.name))
+            .collect();
         let modal = egui::Modal::new(egui::Id::new("settings"))
             .frame(
                 egui::Frame::new()
@@ -506,6 +544,7 @@ impl crate::NozhikUi {
                     self.project
                         .as_ref()
                         .map(|_| self.remote.database_profiles()),
+                    &containers,
                 ) {
                     self.plugins_open = true;
                     self.settings_open = false;

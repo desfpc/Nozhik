@@ -21,6 +21,7 @@ pub struct TerminalPanel {
     was_visible: bool,
     shown_active: Option<TerminalSessionId>,
     labels: HashMap<TerminalSessionId, String>,
+    docker: HashMap<TerminalSessionId, (String, String)>,
     pub focus: bool,
     pending_paste: Option<PendingPaste>,
     paste_notice: Option<String>,
@@ -39,6 +40,13 @@ pub enum PasteDelivery {
     Sent,
     /// Multiline text is held until the shell enables bracketed paste.
     Waiting,
+}
+
+/// One command line submitted to a PTY. Docker consoles carry the container identity.
+pub struct SubmittedCommand {
+    pub container_id: Option<String>,
+    pub container_name: Option<String>,
+    pub line: String,
 }
 
 const PASTE_LIMIT: usize = 64 * 1024;
@@ -73,6 +81,7 @@ impl TerminalPanel {
             was_visible: false,
             shown_active: None,
             labels: HashMap::new(),
+            docker: HashMap::new(),
             focus: true,
             pending_paste: None,
             paste_notice: None,
@@ -265,6 +274,7 @@ impl TerminalPanel {
         root: &Path,
         program: std::path::PathBuf,
         args: Vec<std::ffi::OsString>,
+        container_id: &str,
         name: &str,
     ) -> nozhik_terminal::Result<()> {
         let mut options = SessionOptions::new(root.into());
@@ -274,9 +284,27 @@ impl TerminalPanel {
         });
         let id = self.manager.create(options)?;
         self.labels.insert(id, format!("[Docker: {name}]"));
+        self.docker
+            .insert(id, (container_id.to_owned(), name.to_owned()));
         self.active = Some(id);
         self.focus = true;
         Ok(())
+    }
+
+    /// Commands submitted since the last frame, with the Docker session identity when known.
+    pub(crate) fn take_commands(&mut self) -> Vec<SubmittedCommand> {
+        self.view
+            .take_submitted()
+            .into_iter()
+            .map(|(id, line)| {
+                let docker = self.docker.get(&id);
+                SubmittedCommand {
+                    container_id: docker.map(|(container_id, _)| container_id.clone()),
+                    container_name: docker.map(|(_, name)| name.clone()),
+                    line,
+                }
+            })
+            .collect()
     }
     pub(crate) fn create(&mut self, root: &Path) -> Option<String> {
         let mut options = SessionOptions::new(root.into());
@@ -298,6 +326,7 @@ impl TerminalPanel {
         let _closed = self.manager.remove(id);
         self.snapshots.remove(&id);
         self.labels.remove(&id);
+        self.docker.remove(&id);
         self.view.forget(id);
         if self.active == Some(id) {
             self.active = self

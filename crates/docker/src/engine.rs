@@ -180,6 +180,7 @@ impl Engine {
                     program: self.program.clone(),
                     args: strings(&["exec", "-it", "--", &target.id, "/bin/sh"]),
                     name: target.name.clone(),
+                    id: target.id.clone(),
                 }))
             }
             Action::Start(_) | Action::Stop(_) => {

@@ -109,12 +109,14 @@ fn cli_scope_controls_logs_and_console_arguments()
         program: actual,
         args,
         name,
+        id,
     } = response
     else {
         return Err("console response".into());
     };
     assert_eq!(actual, program);
     assert_eq!(name, "example-web-1");
+    assert_eq!(id, "aaaaaaaaaaaa");
     assert_eq!(
         args,
         ["exec", "-it", "--", "aaaaaaaaaaaa", "/bin/sh"].map(OsString::from)

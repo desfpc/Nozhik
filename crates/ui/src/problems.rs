@@ -282,16 +282,23 @@ impl ProblemLog {
     }
 
     /// Expandable category tabs and their notification rows.
+    #[allow(
+        dead_code,
+        reason = "Tests render the incident list without linter tabs"
+    )]
     pub(crate) fn show_panel(&mut self, ui: &mut Ui) {
         ui.heading("Problems");
         ui.separator();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for category in ProblemCategory::ALL {
-                    self.show_category(ui, category);
-                }
-            });
+            .show(ui, |ui| self.show_incidents(ui));
+    }
+
+    /// Session incident categories. Linter tabs share this scroll when the dock is open.
+    pub(crate) fn show_incidents(&mut self, ui: &mut Ui) {
+        for category in ProblemCategory::ALL {
+            self.show_category(ui, category);
+        }
     }
 
     /// Bottom-right toasts. Hover pauses the timer. The close control dismisses one toast.

@@ -1,8 +1,10 @@
 //! Project-scoped Docker Compose discovery and background CLI commands.
 pub mod compose;
 mod engine;
+pub mod linter;
 mod process;
 pub use compose::{RunMarker, is_compose_file};
+pub use process::docker_program;
 use std::{
     ffi::OsString,
     path::PathBuf,
@@ -149,6 +151,8 @@ pub enum Response {
         args: Vec<OsString>,
         /// Container display name.
         name: String,
+        /// Full container id. Exec arguments already target this id.
+        id: String,
     },
 }
 /// One worker per IDE project; dropping it cancels only its CLI subprocess.

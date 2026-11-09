@@ -19,6 +19,7 @@ pub struct TextEditorView {
     css_picker: Option<crate::css_colors::Picker>,
     pub(crate) docker_gutter: Option<(u64, u64, Vec<nozhik_docker::RunMarker>)>,
     pub(crate) docker_run: Option<(u64, u64, Option<String>)>,
+    pub(crate) linter_marks: Vec<crate::linters::LinterMark>,
     #[cfg(test)]
     pub(crate) docker_rects: Vec<(nozhik_docker::RunMarker, egui::Rect)>,
     mouse_anchor: Option<(nozhik_core::BufferId, u64, usize)>,
@@ -672,6 +673,19 @@ impl TextEditorView {
                             )
                             .on_hover_text(&diagnostic.message);
                         }
+                    }
+                    if !synthetic {
+                        paint_linter_marks(
+                            ui,
+                            id,
+                            &self.linter_marks,
+                            line,
+                            text,
+                            &galley,
+                            origin,
+                            rect,
+                            gutter,
+                        );
                     }
                     ui.painter().text(
                         rect.min + egui::vec2(48.0, 3.0),
@@ -1882,6 +1896,68 @@ fn doc_popup(
                 });
         });
 }
+#[allow(
+    clippy::too_many_arguments,
+    clippy::while_float,
+    reason = "The squiggle uses the same pixel walk as language diagnostics"
+)]
+fn paint_linter_marks(
+    ui: &Ui,
+    id: egui::Id,
+    marks: &[crate::linters::LinterMark],
+    line: usize,
+    text: &str,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    rect: egui::Rect,
+    gutter: f32,
+) {
+    for (index, mark) in marks.iter().enumerate() {
+        if mark.line != line {
+            continue;
+        }
+        let color = match mark.severity {
+            nozhik_docker::linter::Severity::Warning => theme::warning(),
+            nozhik_docker::linter::Severity::Info => theme::info(),
+            nozhik_docker::linter::Severity::Error => theme::error(),
+        };
+        let marker = rect.min + egui::vec2((gutter - 12.0).max(30.0), 10.0);
+        ui.painter().circle_filled(marker, 3.0, color);
+        let chars = text.chars().count();
+        let start = mark.column.unwrap_or(1).saturating_sub(1).min(chars);
+        let x1 = origin.x + galley.pos_from_cursor(CCursor::new(start)).min.x;
+        let x2 = (origin.x + galley.pos_from_cursor(CCursor::new(chars)).min.x).max(x1 + 5.0);
+        let x1 = x1.max(ui.clip_rect().left());
+        let x2 = x2.min(ui.clip_rect().right());
+        if x1 < x2 {
+            let y = rect.bottom() - 2.0;
+            let mut points = Vec::new();
+            let mut x = x1;
+            let mut down = false;
+            while x <= x2 {
+                points.push(egui::pos2(x, y + if down { 2.0 } else { 0.0 }));
+                x += 2.0;
+                down = !down;
+            }
+            ui.painter()
+                .add(egui::Shape::line(points, Stroke::new(1.0_f32, color)));
+        }
+        let hit = if x1 < x2 {
+            egui::Rect::from_min_max(egui::pos2(x1, rect.top()), egui::pos2(x2, rect.bottom()))
+        } else {
+            egui::Rect::from_center_size(marker, egui::vec2(12.0, rect.height()))
+        };
+        let mut tip = format!("[{}] {}", mark.linter, mark.message);
+        if let Some(rule) = &mark.rule {
+            tip.push_str(" (");
+            tip.push_str(rule);
+            tip.push(')');
+        }
+        ui.interact(hit, id.with(("linter", line, index)), Sense::hover())
+            .on_hover_text(tip);
+    }
+}
+
 pub(crate) fn open_documentation(url: String) {
     if let Err(error) = std::thread::Builder::new()
         .name("documentation-browser".into())

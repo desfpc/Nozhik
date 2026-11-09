@@ -43,6 +43,21 @@ impl DockerUi {
     pub(crate) fn shutdown(&mut self) {
         self.worker = None;
     }
+
+    /// Running and known containers: id, display name, and mount source/destination pairs.
+    pub(crate) fn containers(&self) -> Vec<crate::linters::KnownContainer> {
+        self.snapshot.as_ref().map_or_else(Vec::new, |snapshot| {
+            snapshot
+                .containers
+                .iter()
+                .map(|container| crate::linters::KnownContainer {
+                    id: container.id.clone(),
+                    name: container.name.clone(),
+                    mounts: container.mounts.clone(),
+                })
+                .collect()
+        })
+    }
     fn configuration(&self) -> Vec<PathBuf> {
         self.selected.as_ref().map_or_else(Vec::new, |file| {
             nozhik_docker::compose::configuration(file, &self.files)
@@ -249,12 +264,13 @@ impl crate::NozhikUi {
                         program,
                         args,
                         name,
+                        id,
                     }) => {
                         let root = self.docker.root.clone().unwrap_or_default();
                         let panel = self
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
-                        if let Err(error) = panel.create_docker(&root, program, args, &name) {
+                        if let Err(error) = panel.create_docker(&root, program, args, &id, &name) {
                             self.docker.error = Some(error.to_string());
                         } else {
                             self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);

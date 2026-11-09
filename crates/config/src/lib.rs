@@ -3,6 +3,7 @@
 pub mod code_style;
 pub mod deployment;
 pub mod languages;
+pub mod linters;
 
 use std::{
     fs,
@@ -49,6 +50,8 @@ pub struct Config {
     pub sftp_deployment: Option<deployment::SftpDeployment>,
     /// Per-extension profile and syntax palette selections.
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
+    /// PHP linters run inside Docker. Empty until the user configures or runs one.
+    pub linters: Vec<linters::LinterTool>,
 }
 
 impl Default for Config {
@@ -66,6 +69,7 @@ impl Default for Config {
             ai_debounce_ms: 1000,
             file_types: std::collections::BTreeMap::new(),
             sftp_deployment: None,
+            linters: Vec::new(),
         }
     }
 }
@@ -79,6 +83,7 @@ impl Config {
         if let Some(deployment) = &self.sftp_deployment {
             deployment.validate()?;
         }
+        linters::validate(&self.linters)?;
         if !(1..=16).contains(&self.tab_width) {
             return Err(ConfigError::Invalid("tab_width must be between 1 and 16"));
         }

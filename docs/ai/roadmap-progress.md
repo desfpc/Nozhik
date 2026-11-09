@@ -4072,3 +4072,33 @@ Windows-комплект не обновлялся.
 Исходники, история и готовые актуальные бинарники со всеми legal materials
 сохранены; после очистки сборок не было.
 
+### PHP-линтеры в Docker (v0.1.49, 2026-11-09)
+
+Кнопка с жучком запускает настроенные PHP-линтеры текущего проекта внутри
+Docker-контейнера: `PHPStan`, `PHPCS`, `Psalm` и `PHPMD`. Запуск только по
+нажатию. Команда в терминале контейнера запоминает линтер, если его ещё нет
+в Settings → Linters; уже сохранённая запись не меняется. JSON разбирается
+в общие диагностики, пути контейнера переводятся на хост, Problems показывает
+вкладки, редактор отмечает строки, панель агента вставляет список в черновик.
+Ненулевой код при валидном JSON — это отчёт. Невалидный JSON и ошибка
+конфигурации остаются в Problems.
+
+Версия workspace/lock — 0.1.49, следующая — 0.1.50.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings,
+затем повторный Clippy `nozhik-ui` после ограничения компактного списка
+категорий; cargo test --workspace --all-features --offline -- --test-threads=8 —
+395 passed, 0 failed, 10 прежних optional ignored. Ручной native GUI и Windows
+build/Clippy не запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+f4e343453a93414bcaddf62b53a730d67f64090c2bc7beb13811b4e493bff97e и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 9.5 GiB (26628 файлов).
+Удалены Finder .DS_Store. Финальный размер проекта — 396 MiB, binaries — 111 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+

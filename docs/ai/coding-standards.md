@@ -79,6 +79,9 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   Без UI; parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - docker: tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix-only nix signals; no UI/runtime dependency.
   File traversal, AST extraction and Docker CLI I/O belong to its project worker.
+  PHP linter JSON runs use `process::capture` on a dedicated thread. The Compose
+  worker stays free. `nozhik-config` stores `LinterTool`; `nozhik-docker` parses
+  reports and builds `docker exec` arguments. The UI does not call the Docker CLI.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, base64 (bounded OSC 52 clipboard writes), Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
 - remote_ssh: russh/keys, russh-sftp, tokio, keyring (native OS stores), zeroize,

@@ -20,6 +20,7 @@ mod http_requests;
 mod integration;
 mod language;
 mod layout;
+mod linters;
 mod llm_panel;
 mod menu_bar;
 mod openapi;
@@ -161,6 +162,7 @@ pub struct NozhikUi {
     editor: editor_view::TextEditorView,
     /// Session problems and their bottom-right toasts. Cleared with the project shell.
     problems: problems::ProblemLog,
+    linters: linters::LinterUi,
 }
 
 impl NozhikUi {
@@ -249,6 +251,7 @@ impl NozhikUi {
             status: "Open a project folder".into(),
             editor: editor_view::TextEditorView::default(),
             problems: problems::ProblemLog::default(),
+            linters: linters::LinterUi::new(),
         }
     }
 

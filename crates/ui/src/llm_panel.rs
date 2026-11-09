@@ -95,6 +95,10 @@ impl LlmPanel {
     pub fn clipboard_action(&mut self, ctx: &egui::Context, action: &str) -> bool {
         self.terminal.clipboard_action(ctx, action)
     }
+    pub(crate) fn take_commands(&mut self) -> Vec<crate::terminal_panel::SubmittedCommand> {
+        self.terminal.take_commands()
+    }
+
     pub fn shutdown(&mut self) {
         self.terminal.shutdown();
         self.requests.take();
@@ -125,6 +129,7 @@ impl LlmPanel {
     }
     #[allow(
         clippy::too_many_arguments,
+        clippy::too_many_lines,
         reason = "The toolbar reads project-local editor and remote-document identities without owning buffers"
     )]
     pub fn show(
@@ -136,6 +141,7 @@ impl LlmPanel {
         documents: &[Document],
         active: Option<usize>,
         remote: &std::collections::HashMap<PathBuf, (String, String)>,
+        linters: &crate::linters::Attach,
     ) -> bool {
         let area = ui.available_rect_before_wrap();
         let recognized = self.terminal.active_agent();
@@ -189,6 +195,30 @@ impl LlmPanel {
                         && let Some(d) = document
                     {
                         context = Some(Context::Selection(d.path.clone(), d.buffer.snapshot()));
+                    }
+                    if ui
+                        .add_enabled(linters.file.is_some(), egui::Button::new("Linter file"))
+                        .on_hover_text("Attach linter diagnostics for the active file")
+                        .clicked()
+                        && let Some(text) = &linters.file
+                        && let Some((id, agent)) = recognized
+                    {
+                        self.message = self.terminal.paste_context(id, agent, text).map_or_else(
+                            |error| error,
+                            |()| "Linter diagnostics added to the draft.".into(),
+                        );
+                    }
+                    if ui
+                        .add_enabled(linters.all.is_some(), egui::Button::new("All linters"))
+                        .on_hover_text("Attach linter diagnostics for the project")
+                        .clicked()
+                        && let Some(text) = &linters.all
+                        && let Some((id, agent)) = recognized
+                    {
+                        self.message = self.terminal.paste_context(id, agent, text).map_or_else(
+                            |error| error,
+                            |()| "Linter diagnostics added to the draft.".into(),
+                        );
                     }
                     if ui
                         .button("Attach file…")

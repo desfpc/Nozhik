@@ -21,8 +21,13 @@ pub struct TerminalView {
     mouse: HashMap<TerminalSessionId, MouseState>,
     auto_scroll: f64,
     selections: HashMap<TerminalSessionId, Selection>,
+    submitted: Vec<(TerminalSessionId, String)>,
 }
 impl TerminalView {
+    pub fn take_submitted(&mut self) -> Vec<(TerminalSessionId, String)> {
+        std::mem::take(&mut self.submitted)
+    }
+
     pub fn forget(&mut self, id: TerminalSessionId) {
         self.sizes.remove(&id);
         self.selections.remove(&id);
@@ -323,6 +328,7 @@ impl TerminalView {
             let clipboard_event = events
                 .iter()
                 .any(|e| matches!(e, Event::Copy | Event::Cut | Event::Paste(_)));
+            let mut submitted = Vec::new();
             for event in events {
                 if matches!(&event, Event::Key { key: Key::V, modifiers, .. } if modifiers.command)
                     || (clipboard_event
@@ -374,9 +380,14 @@ impl TerminalView {
                     modifiers,
                     grid.is_some_and(|g| g.application_cursor),
                     grid.is_some_and(|g| g.bracketed_paste),
-                ) && let Err(e) = session.write(bytes)
-                {
-                    error = Some(e.to_string());
+                ) {
+                    match session.write(bytes) {
+                        Ok(()) => {
+                            submitted.extend(submitted_lines(&event, grid));
+                            selection.end = selection.anchor;
+                        }
+                        Err(e) => error = Some(e.to_string()),
+                    }
                 } else if matches!(
                     event,
                     Event::Text(_) | Event::Paste(_) | Event::Key { pressed: true, .. }
@@ -384,6 +395,9 @@ impl TerminalView {
                     selection.end = selection.anchor;
                 }
             }
+            let session_id = session.id();
+            self.submitted
+                .extend(submitted.into_iter().map(|line| (session_id, line)));
         }
         let Some(grid) = grid else {
             ui.painter().text(
@@ -462,6 +476,33 @@ impl TerminalView {
         }
         error
     }
+}
+
+fn submitted_lines(event: &Event, grid: Option<&TerminalGrid>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Event::Key {
+        key: Key::Enter,
+        pressed: true,
+        modifiers,
+        ..
+    } = event
+        && modifiers.is_none()
+        && let Some(grid) = grid
+    {
+        let line = screen_command(grid);
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    if let Event::Paste(text) = event {
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.is_empty() && nozhik_docker::linter::detect(line).is_some() {
+                lines.push(line.to_owned());
+            }
+        }
+    }
+    lines
 }
 fn paint_text(
     ui: &Ui,
@@ -613,6 +654,34 @@ impl Selection {
         bytes.extend(vec![127; glyphs(start.1, end.1)]);
         Some(bytes)
     }
+}
+
+/// Visible command on the cursor row, including rows joined by a terminal wrap.
+pub fn screen_command(grid: &TerminalGrid) -> String {
+    if grid.rows == 0 || grid.cols == 0 {
+        return String::new();
+    }
+    let mut row = grid.cursor.0.min(grid.rows.saturating_sub(1));
+    while row > 0 && grid.wrapped_rows.get(usize::from(row - 1)) == Some(&true) {
+        row -= 1;
+    }
+    let mut text = String::new();
+    loop {
+        for col in 0..grid.cols {
+            let Some(cell) = grid.cell(row, col) else {
+                continue;
+            };
+            if cell.continuation {
+                continue;
+            }
+            text.push_str(&cell.text);
+        }
+        if grid.wrapped_rows.get(usize::from(row)) != Some(&true) || row + 1 >= grid.rows {
+            break;
+        }
+        row += 1;
+    }
+    text.trim().to_owned()
 }
 
 #[allow(
@@ -789,6 +858,14 @@ mod tests {
         scrolled.scrollback = 0;
         scrolled.alternate = true;
         assert!(selection.cut_bytes(&scrolled).is_none());
+    }
+
+    #[test]
+    fn screen_command_joins_the_wrapped_cursor_line() {
+        let mut emulator = nozhik_terminal::grid::Emulator::new(6, 16);
+        emulator.process(b"root@box:/var/www/html# vendor/bin/phpstan analyse src");
+        let line = screen_command(&emulator.snapshot());
+        assert!(line.contains("vendor/bin/phpstan analyse src"), "{line}");
     }
 
     #[test]

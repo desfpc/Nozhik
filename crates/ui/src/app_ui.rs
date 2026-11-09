@@ -282,8 +282,24 @@ impl NozhikUi {
                         {
                             self.action(SEARCH_ACTION);
                         }
-                        ui.add_enabled(false, Icon::Debug)
-                            .on_hover_text("Debug · planned");
+                        let linters_ready = !self.config.linters.is_empty() && !self.linters.running();
+                        let linter_hover = if self.linters.running() {
+                            "Running PHP linters…"
+                        } else if self.config.linters.is_empty() {
+                            "Run linters · add one in Settings → Linters, or run it in a container terminal"
+                        } else {
+                            "Run PHP linters"
+                        };
+                        if ui
+                            .add_enabled(linters_ready, Icon::Debug)
+                            .on_hover_text(linter_hover)
+                            .clicked()
+                        {
+                            self.start_linters(ctx);
+                        }
+                        if self.linters.running() {
+                            ui.spinner();
+                        }
                         ui.add_enabled(false, Icon::Run)
                             .on_hover_text("Run · planned");
                     });
@@ -397,6 +413,11 @@ impl NozhikUi {
                             .llm
                             .get_or_insert_with(|| crate::llm_panel::LlmPanel::new(ctx));
                         let root = self.project.as_ref().map(|p| p.root_path.as_path());
+                        let file = self
+                            .active
+                            .and_then(|index| self.documents.get(index))
+                            .map(|document| document.path.as_path());
+                        let linters = self.linters.attach(root, file);
                         if panel.show(
                             ui,
                             root,
@@ -405,6 +426,7 @@ impl NozhikUi {
                             &self.documents,
                             self.active,
                             &self.remote.documents,
+                            &linters,
                         ) {
                             self.bottom = None;
                         }
@@ -435,7 +457,23 @@ impl NozhikUi {
                             );
                         }
                     } else if label == "! Problems" {
-                        self.problems.show_panel(ui);
+                        let root = self
+                            .project
+                            .as_ref()
+                            .map(|project| project.root_path.clone());
+                        let tools = self.config.linters.clone();
+                        ui.heading("Problems");
+                        ui.separator();
+                        let mut clicked = None;
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                self.problems.show_incidents(ui);
+                                clicked = self.linters.show_tabs(ui, &tools, root.as_deref());
+                            });
+                        if let Some(item) = clicked {
+                            self.linters.queue_jump(&item);
+                        }
                     } else {
                         ui.label(label);
                         ui.separator();
@@ -740,6 +778,8 @@ impl NozhikUi {
                             .get(&extension)
                             .map_or_else(|| "default".into(), |s| s.syntax_theme.clone());
                     }
+                    let path = self.documents[index].path.clone();
+                    self.editor.linter_marks = self.linters.marks(&path);
                     let document = &mut self.documents[index];
                     if let Err(error) = self.editor.show_language(
                         ui,
@@ -893,6 +933,10 @@ impl NozhikUi {
         self.deployment_tick();
         self.language_tick(ctx);
         self.docker_tick(ctx);
+        self.poll_linters();
+        if self.linters.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if let Some(panel) = &mut self.terminal
             && let Some(message) = panel.tick()
         {
@@ -946,6 +990,7 @@ impl NozhikUi {
         if self.active.is_none() || self.database.active.is_some() {
             self.editor.ai.cancel();
         }
+        self.apply_linter_jump();
         self.editor_area(ctx);
         self.docker_window(ctx);
         if let Some(manager) = &self.plugins {
@@ -986,10 +1031,148 @@ impl NozhikUi {
         self.welcome.clone.show(ctx);
         self.index_dialogs(ctx);
         self.project_entry_dialog(ctx);
+        self.remember_linters();
         self.observe_session_problems();
         self.problems.show_toasts(ctx);
         if !self.integration.actions.is_empty() {
             ctx.request_repaint();
+        }
+    }
+
+    fn start_linters(&mut self, ctx: &egui::Context) {
+        let Some(root) = self
+            .project
+            .as_ref()
+            .map(|project| project.root_path.clone())
+        else {
+            return;
+        };
+        let containers = self.docker.containers();
+        if let Err(error) = self.linters.start(ctx, &self.config, &root, &containers) {
+            self.note_status("linter", "Linter", crate::problems::Severity::Error, error);
+        }
+    }
+
+    fn poll_linters(&mut self) {
+        let Some(finished) = self.linters.poll() else {
+            return;
+        };
+        let failed = !finished.failures.is_empty();
+        for (kind, message) in finished.failures {
+            let title = nozhik_docker::linter::LinterKind::parse(&kind)
+                .map_or("Linter", nozhik_docker::linter::LinterKind::label);
+            self.note_status(
+                &format!("linter-{kind}"),
+                title,
+                crate::problems::Severity::Error,
+                message,
+            );
+        }
+        if !failed {
+            let count = self.linters.len();
+            self.status = format!("Linters found {count} diagnostics");
+        }
+        if failed || !self.linters.is_empty() {
+            self.bottom = Some("! Problems");
+        }
+    }
+
+    fn apply_linter_jump(&mut self) {
+        if let Some(path) = self.linters.take_missing_jump() {
+            self.note_status(
+                "linter-navigation",
+                "Linter",
+                crate::problems::Severity::Warning,
+                format!("Linter file is not on this machine: {}", path.display()),
+            );
+            return;
+        }
+        if let Some(path) = self
+            .linters
+            .jump_request()
+            .map(std::path::Path::to_path_buf)
+        {
+            self.open_file(path);
+            self.linters.mark_jump_opened();
+        }
+        match self.linters.take_jump(&mut self.documents) {
+            Ok(Some((line, buffer))) => {
+                self.editor.reveal_line = Some(line);
+                self.editor.focus_buffer = Some(buffer);
+                if let Some(index) = self
+                    .documents
+                    .iter()
+                    .position(|document| document.buffer.snapshot().buffer_id == buffer)
+                {
+                    self.active = Some(index);
+                    self.database.active = None;
+                }
+            }
+            Ok(None) => {}
+            Err(message) => self.note_status(
+                "linter-navigation",
+                "Linter",
+                crate::problems::Severity::Warning,
+                message,
+            ),
+        }
+    }
+
+    fn remember_linters(&mut self) {
+        let mut commands = Vec::new();
+        if let Some(panel) = &mut self.terminal {
+            commands.extend(panel.take_commands());
+        }
+        if let Some(panel) = &mut self.llm {
+            commands.extend(panel.take_commands());
+        }
+        if commands.is_empty() {
+            return;
+        }
+        let Some(root) = self
+            .project
+            .as_ref()
+            .map(|project| project.root_path.clone())
+        else {
+            return;
+        };
+        let containers = self.docker.containers();
+        let mut config = self.config.clone();
+        let mut changed = false;
+        for command in &commands {
+            let session = match (&command.container_id, &command.container_name) {
+                (Some(id), name) if !id.trim().is_empty() => {
+                    Some((id.as_str(), name.as_deref().unwrap_or("")))
+                }
+                _ => None,
+            };
+            if crate::linters::remember(&mut config, &root, &command.line, session, &containers) {
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        match self.settings.replace(config.clone()) {
+            Ok(()) => {
+                self.config = config.clone();
+                if self.settings_dialog.queue_save(config) {
+                    self.status = "Remembered the PHP linter from the terminal".into();
+                } else {
+                    self.note_status(
+                        "linter-settings",
+                        "Linter",
+                        crate::problems::Severity::Error,
+                        "Could not save the remembered PHP linter",
+                    );
+                }
+            }
+            Err(error) => self.note_status(
+                "linter-settings",
+                "Linter",
+                crate::problems::Severity::Error,
+                error.to_string(),
+            ),
         }
     }
 }

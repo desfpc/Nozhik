@@ -26,6 +26,11 @@ fn collect(mut pipe: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
     }
     Ok((result, truncated))
 }
+/// Resolves the Docker CLI.
+///
+/// A matching file on `PATH` wins. Otherwise the function checks known install
+/// locations and finally returns the bare name `docker`.
+#[must_use]
 pub fn docker_program() -> PathBuf {
     if let Some(paths) = std::env::var_os("PATH") {
         for path in std::env::split_paths(&paths) {
@@ -50,6 +55,23 @@ pub fn docker_program() -> PathBuf {
     }
     "docker".into()
 }
+struct RawOutput {
+    code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+}
+
+/// Stdout and stderr of one CLI child. A nonzero exit is still a successful capture.
+pub struct Captured {
+    /// Process exit code. `-1` means the child ended without a code.
+    pub code: i32,
+    /// Standard output, lossy-decoded as UTF-8.
+    pub stdout: String,
+    /// Standard error, lossy-decoded as UTF-8.
+    pub stderr: String,
+}
+
 pub fn run(
     program: &Path,
     cwd: &Path,
@@ -57,10 +79,59 @@ pub fn run(
     stop: &Arc<AtomicBool>,
     timeout: Duration,
 ) -> crate::Result<String> {
+    let merge = args.first().is_some_and(|arg| arg == "logs");
+    let raw = execute(program, cwd, args, stop, timeout, merge)?;
+    if raw.code != 0 {
+        return Err(crate::Error::Message(
+            String::from_utf8_lossy(if merge { &raw.stdout } else { &raw.stderr })
+                .chars()
+                .take(4000)
+                .collect(),
+        ));
+    }
+    if raw.truncated {
+        return Err(crate::Error::Message(
+            "Docker output exceeds 4 MiB; narrow the requested output".into(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&raw.stdout).into_owned())
+}
+
+/// Runs a CLI child and keeps stdout when the process exits nonzero.
+///
+/// # Errors
+/// Returns cancellation, timeout, spawn, truncation, or reader failures.
+pub fn capture(
+    program: &Path,
+    cwd: &Path,
+    args: &[OsString],
+    stop: &Arc<AtomicBool>,
+    timeout: Duration,
+) -> crate::Result<Captured> {
+    let raw = execute(program, cwd, args, stop, timeout, false)?;
+    if raw.truncated {
+        return Err(crate::Error::Message(
+            "Docker output exceeds 4 MiB; narrow the requested output".into(),
+        ));
+    }
+    Ok(Captured {
+        code: raw.code,
+        stdout: String::from_utf8_lossy(&raw.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&raw.stderr).into_owned(),
+    })
+}
+
+fn execute(
+    program: &Path,
+    cwd: &Path,
+    args: &[OsString],
+    stop: &Arc<AtomicBool>,
+    timeout: Duration,
+    merge: bool,
+) -> crate::Result<RawOutput> {
     if stop.load(Ordering::Relaxed) {
         return Err(crate::Error::Message("Docker command cancelled".into()));
     }
-    let merge = args.first().is_some_and(|arg| arg == "logs");
     let (stdout, stdout_writer) = std::io::pipe()?;
     let (stderr, stderr_writer) = std::io::pipe()?;
     let mut command = Command::new(program);
@@ -111,26 +182,18 @@ pub fn run(
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let (stdout, truncated) = out
+    let (stdout, stdout_truncated) = out
         .join()
         .map_err(|_| crate::Error::Message("Docker output reader failed".into()))??;
     let (stderr, stderr_truncated) = err
         .join()
         .map_err(|_| crate::Error::Message("Docker error reader failed".into()))??;
-    if !status.success() {
-        return Err(crate::Error::Message(
-            String::from_utf8_lossy(if merge { &stdout } else { &stderr })
-                .chars()
-                .take(4000)
-                .collect(),
-        ));
-    }
-    if truncated || stderr_truncated {
-        return Err(crate::Error::Message(
-            "Docker output exceeds 4 MiB; narrow the requested output".into(),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
+    Ok(RawOutput {
+        code: status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+        truncated: stdout_truncated || stderr_truncated,
+    })
 }
 
 // Compose is commonly a child plugin process. Cancel the whole owned CLI tree,

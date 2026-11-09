@@ -806,6 +806,7 @@ impl NozhikUi {
         if let Some(panel) = &mut self.llm {
             panel.shutdown();
         }
+        self.linters.shutdown();
         self.docker.shutdown();
         self.database.shutdown();
         self.deployment.shutdown();

@@ -12,7 +12,7 @@
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP/CSS/YAML incremental syntax, local formatting, PHP/CSS project indexes, PHP stdio LSP | tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
-| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
+| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP linter JSON reports | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -2088,3 +2088,30 @@ Project. Красные подписи ошибок убраны из панел
 Пока toast виден, кадры запрашиваются через `request_repaint_after`: 16 мс во
 время затухания и не чаще чем до следующего шага удержания. Безусловного
 repaint нет. Новых зависимостей нет.
+
+## PHP-линтеры в Docker (v0.1.49)
+
+Проект хранит список `Config.linters`: по одной записи на `phpstan`, `phpcs`,
+`psalm` и `phpmd`. В записи — id и имя контейнера, путь к бинарю внутри
+контейнера, рабочий каталог и аргументы. Пустой файл настроек по-прежнему
+означает пустой список. Ручная правка в Settings → Linters не перезаписывается
+автообнаружением.
+
+Кнопка с жучком на верхней панели запускает все настроенные линтеры текущего
+проекта. Пока список пуст, кнопка неактивна. Команда идёт через `docker exec -i`
+(`-w`, когда рабочий каталог задан) отдельным потоком, не через Compose worker:
+линтер может работать минуты и завершается с ненулевым кодом, когда находит
+замечания. `process::capture` сохраняет stdout в этом случае. Формат вывода
+принудительно JSON. Невалидный JSON и фатальная ошибка конфигурации становятся
+записью Problems и не роняют интерфейс.
+
+Путь из отчёта склеивается с корнем проекта, если он относительный. Абсолютный
+путь сначала отрезает рабочий каталог контейнера, затем самый длинный подходящий
+mount. Вкладка линтера в `! Problems` группирует строки по файлам; клик открывает
+файл и ставит курсор. В редакторе строка получает метку на полях и подчёркивание.
+Панель агента вставляет тот же список в черновик заголовком
+`### Linter Diagnostics Context:`.
+
+Если линтер ещё не записан в настройках, ввод команды в терминале контейнера
+или `docker exec` запоминает бинарь, аргументы и контейнер. Уже сохранённый вид
+линтера не меняется. Оригинальные байты команды в PTY не подменяются.

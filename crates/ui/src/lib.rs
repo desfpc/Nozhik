@@ -22,6 +22,7 @@ mod language;
 mod layout;
 mod linters;
 mod llm_panel;
+mod markdown;
 mod menu_bar;
 mod openapi;
 mod plugins;
@@ -134,6 +135,7 @@ pub struct NozhikUi {
     plugins: Option<PluginManager>,
     tools: tools::Tools,
     openapi: openapi::OpenApiUi,
+    markdown: markdown::MarkdownUi,
     plugins_open: bool,
     plugin_tab: Option<String>,
     editor_focus: Option<egui::Id>,
@@ -227,6 +229,7 @@ impl NozhikUi {
             plugins,
             tools: tools::Tools::default(),
             openapi: openapi::OpenApiUi::default(),
+            markdown: markdown::MarkdownUi::default(),
             plugins_open: false,
             plugin_tab: None,
             editor_focus: None,

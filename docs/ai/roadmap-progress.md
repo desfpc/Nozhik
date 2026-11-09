@@ -4173,3 +4173,31 @@ Windows-комплект не обновлялся.
 Исходники, история и готовые актуальные бинарники со всеми legal materials
 сохранены; после очистки сборок не было.
 
+### Markdown Text / GUI (v0.1.53, 2026-11-09)
+
+Файлы `.md` и `.markdown` открываются как исходник с переключателем Text / GUI.
+Text подсвечивает маркеры и рисует курсив, зачёркивание и фон встроенного кода.
+GUI показывает оформленный документ: заголовки, жирный шрифт, таблицы, списки,
+цитаты и ссылки. Картинки не скачиваются. Превью ограничено 1 МиБ. Reformat Code
+для Markdown не запускается. Уже сохранённый непустой список языков получает
+Markdown один раз; пустой список остаётся пустым.
+
+Версия workspace/lock — 0.1.53, следующая — 0.1.54.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 415 passed,
+0 failed, 10 прежних optional ignored. Headless-тесты проверяют подсветку
+исходника и переключение Text/GUI. Ручной native GUI и Windows
+build/Clippy не запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+54822fe9fafa7ba5cf0a33fa146b65aa6a91cdb6e6400f08339258a7d4aee78f и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 10.3 GiB (29565 файлов).
+Удалены Finder .DS_Store. Финальный размер проекта — 400 MiB, binaries — 112 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+

@@ -20,6 +20,8 @@ pub enum LanguageId {
     Yaml,
     /// JSON syntax and local formatting (no semantic index).
     Json,
+    /// Markdown source highlighting. The rendered view lives in the UI.
+    Markdown,
     /// Go (reserved).
     #[serde(alias = "Go")]
     Go,
@@ -76,6 +78,12 @@ pub const LANGUAGES: &[LanguageSpec] = &[
         available: true,
     },
     LanguageSpec {
+        id: LanguageId::Markdown,
+        label: "Markdown",
+        extensions: &["md", "markdown"],
+        available: true,
+    },
+    LanguageSpec {
         id: LanguageId::Go,
         label: "Go",
         extensions: &["go"],
@@ -129,6 +137,8 @@ mod tests {
             "a.JSON",
             "a.YAML",
             "a.yml",
+            "README.md",
+            "notes.MARKDOWN",
         ] {
             assert!(enabled_for_path(&defaults, Path::new(path)));
         }

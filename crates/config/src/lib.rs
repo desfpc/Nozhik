@@ -37,7 +37,7 @@ pub struct Config {
     pub php_language_level: String,
     /// Enabled language services/indexers. Empty means plain-text editing only.
     pub enabled_languages: std::collections::BTreeSet<languages::LanguageId>,
-    /// Language catalog migration marker. Zero identifies settings predating JSON support.
+    /// Language catalog migration marker. Zero predates JSON; one predates Markdown.
     #[serde(default)]
     pub language_catalog_version: u8,
     /// Enable local Ollama ghost completions.
@@ -66,7 +66,7 @@ impl Default for Config {
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
             enabled_languages: languages::default_enabled(),
-            language_catalog_version: 1,
+            language_catalog_version: 2,
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 1000,
@@ -215,13 +215,18 @@ impl ConfigManager {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Config::default(),
             Err(error) => return Err(error.into()),
         };
-        if config.language_catalog_version == 0 {
-            // Old explicit lists could not express an opt-out of the new JSON backend.
+        if config.language_catalog_version < 2 {
+            // Old explicit lists could not express an opt-out of a language added later.
             // Keep an intentionally empty (all services disabled) selection unchanged.
-            if !config.enabled_languages.is_empty() {
+            if config.language_catalog_version == 0 && !config.enabled_languages.is_empty() {
                 config.enabled_languages.insert(languages::LanguageId::Json);
             }
-            config.language_catalog_version = 1;
+            if !config.enabled_languages.is_empty() {
+                config
+                    .enabled_languages
+                    .insert(languages::LanguageId::Markdown);
+            }
+            config.language_catalog_version = 2;
         }
         config.validate()?;
         Ok(config)
@@ -371,7 +376,12 @@ mod tests {
                     .enabled_languages
                     .contains(&languages::LanguageId::Json)
             );
-            assert_eq!(config.language_catalog_version, 1);
+            assert!(
+                config
+                    .enabled_languages
+                    .contains(&languages::LanguageId::Markdown)
+            );
+            assert_eq!(config.language_catalog_version, 2);
             assert_eq!(
                 fs::read_to_string(&path)?,
                 source,
@@ -395,6 +405,29 @@ mod tests {
                 .enabled_languages
                 .is_empty()
         );
+        let markdown = dir.path().join("markdown.toml");
+        fs::write(
+            &markdown,
+            "language_catalog_version = 1\nenabled_languages = ['php']\n",
+        )?;
+        let migrated = ConfigManager::from_path(markdown, EventBus::new(8)?)?.snapshot()?;
+        assert!(
+            migrated
+                .enabled_languages
+                .contains(&languages::LanguageId::Php)
+        );
+        assert!(
+            migrated
+                .enabled_languages
+                .contains(&languages::LanguageId::Markdown)
+        );
+        assert!(
+            !migrated
+                .enabled_languages
+                .contains(&languages::LanguageId::Json),
+            "a version 1 opt-out of JSON stays opted out"
+        );
+        assert_eq!(migrated.language_catalog_version, 2);
         Ok(())
     }
     #[test]

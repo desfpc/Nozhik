@@ -337,10 +337,7 @@ impl crate::NozhikUi {
             {
                 self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
             }
-            if nozhik_language_support::css::is_css(&uri)
-                || nozhik_language_support::yaml::is_yaml(&uri)
-                || nozhik_language_support::json::is_json(&uri)
-            {
+            if nozhik_language_support::local_syntax(&uri) {
                 view.stubs = None;
             } else {
                 view.stubs.clone_from(&self.settings_dialog.php_stubs);
@@ -371,10 +368,7 @@ impl crate::NozhikUi {
                     std::time::Duration::from_millis(200).saturating_sub(at.elapsed()),
                 );
             }
-            if nozhik_language_support::css::is_css(&uri)
-                || nozhik_language_support::yaml::is_yaml(&uri)
-                || nozhik_language_support::json::is_json(&uri)
-            {
+            if nozhik_language_support::local_syntax(&uri) {
                 view.request = None;
                 continue;
             }

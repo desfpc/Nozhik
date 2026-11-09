@@ -3,7 +3,7 @@
 //! The source of truth is `crates/ui/assets/color-schemes.json`. Paint code reads
 //! the active scheme through the functions in this module. Corner radius and
 //! splitter width stay shared so layout does not change with the palette.
-use egui::{Color32, Context, Stroke, Visuals};
+use egui::{Color32, Context, FontId, Stroke, TextFormat, Visuals};
 use serde::Deserialize;
 use std::{cell::RefCell, sync::Arc, sync::OnceLock};
 
@@ -93,6 +93,10 @@ struct Syntax {
     constant: Color32,
     css_color: Color32,
     css_value: Color32,
+    heading: Color32,
+    strong: Color32,
+    emphasis: Color32,
+    raw: Color32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -189,6 +193,10 @@ struct RawSyntax {
     constant: String,
     css_color: String,
     css_value: String,
+    heading: String,
+    strong: String,
+    emphasis: String,
+    raw: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,6 +434,43 @@ pub fn syntax_color(token: &str) -> Color32 {
     read(|scheme| syntax_token(&scheme.syntax, scheme.text, token))
 }
 
+/// Proportional bold face used by the Markdown preview.
+#[must_use]
+pub fn bold_family() -> egui::FontFamily {
+    egui::FontFamily::Name("Noto Sans Bold".into())
+}
+
+/// Editor text face for one syntax token: color, italics, strike and code background.
+#[must_use]
+pub fn syntax_format(
+    token: &str,
+    color: Color32,
+    font_size: f32,
+    proportional: bool,
+) -> TextFormat {
+    let emphasis = matches!(
+        token,
+        "comment" | "markup.emphasis" | "markup.strong_emphasis"
+    );
+    let raw = token == "markup.raw";
+    TextFormat {
+        font_id: if proportional {
+            FontId::proportional(font_size)
+        } else {
+            FontId::monospace(font_size)
+        },
+        color,
+        italics: emphasis,
+        background: if raw { chip() } else { Color32::TRANSPARENT },
+        strikethrough: if token == "markup.strike" {
+            Stroke::new(1.0_f32, color)
+        } else {
+            Stroke::NONE
+        },
+        ..Default::default()
+    }
+}
+
 fn syntax_token(syntax: &Syntax, fallback: Color32, token: &str) -> Color32 {
     match token {
         "yaml.key" => return syntax.keyword,
@@ -433,6 +478,13 @@ fn syntax_token(syntax: &Syntax, fallback: Color32, token: &str) -> Color32 {
         "css.property" => return syntax.property,
         "css.color" => return syntax.css_color,
         "css.value" => return syntax.css_value,
+        "markup.heading" => return syntax.heading,
+        "markup.strong" | "markup.strong_emphasis" => return syntax.strong,
+        "markup.emphasis" => return syntax.emphasis,
+        "markup.raw" => return syntax.raw,
+        "markup.link" => return syntax.function,
+        "markup.strike" | "markup.quote" => return syntax.comment,
+        "markup.list" | "markup.rule" => return syntax.constant,
         _ => {}
     }
     match token.split('.').next().unwrap_or(token) {
@@ -610,6 +662,12 @@ fn ensure_fonts(ctx: &Context) {
     fonts
         .families
         .insert(egui::FontFamily::Name("Terminal".into()), terminal);
+    fonts.font_data.insert(
+        "Noto Sans Bold".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSans-Bold.ttf"
+        ))),
+    );
     // Ubuntu-Light has no black circle or arrow, so proportional labels such as
     // "● Connected" and "Mouse → agent" were drawing missing-glyph squares.
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -620,6 +678,17 @@ fn ensure_fonts(ctx: &Context) {
             }
         }
     }
+    let mut bold = vec!["Noto Sans Bold".into()];
+    if let Some(stack) = fonts.families.get(&egui::FontFamily::Proportional) {
+        for name in stack {
+            if name != "Noto Sans Bold" {
+                bold.push(name.clone());
+            }
+        }
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("Noto Sans Bold".into()), bold);
     ctx.set_fonts(fonts);
     ctx.data_mut(|data| data.insert_temp(id, FontsReady));
 }
@@ -641,6 +710,28 @@ fn parse_schemes(source: &str) -> Result<Vec<Scheme>, String> {
         schemes.push(scheme);
     }
     Ok(schemes)
+}
+
+fn convert_syntax(raw: &RawSyntax) -> Result<Syntax, String> {
+    Ok(Syntax {
+        keyword: hex_color(&raw.keyword)?,
+        string: hex_color(&raw.string)?,
+        comment: hex_color(&raw.comment)?,
+        function: hex_color(&raw.function)?,
+        r#type: hex_color(&raw.r#type)?,
+        number: hex_color(&raw.number)?,
+        variable: hex_color(&raw.variable)?,
+        tag: hex_color(&raw.tag)?,
+        property: hex_color(&raw.property)?,
+        selector: hex_color(&raw.selector)?,
+        constant: hex_color(&raw.constant)?,
+        css_color: hex_color(&raw.css_color)?,
+        css_value: hex_color(&raw.css_value)?,
+        heading: hex_color(&raw.heading)?,
+        strong: hex_color(&raw.strong)?,
+        emphasis: hex_color(&raw.emphasis)?,
+        raw: hex_color(&raw.raw)?,
+    })
 }
 
 fn convert_scheme(raw: RawScheme) -> Result<Scheme, String> {
@@ -704,21 +795,7 @@ fn convert_scheme(raw: RawScheme) -> Result<Scheme, String> {
         link: hex_color(&raw.link)?,
         openapi: hex_color(&raw.openapi)?,
         button: hex_color(&raw.button)?,
-        syntax: Syntax {
-            keyword: hex_color(&raw.syntax.keyword)?,
-            string: hex_color(&raw.syntax.string)?,
-            comment: hex_color(&raw.syntax.comment)?,
-            function: hex_color(&raw.syntax.function)?,
-            r#type: hex_color(&raw.syntax.r#type)?,
-            number: hex_color(&raw.syntax.number)?,
-            variable: hex_color(&raw.syntax.variable)?,
-            tag: hex_color(&raw.syntax.tag)?,
-            property: hex_color(&raw.syntax.property)?,
-            selector: hex_color(&raw.syntax.selector)?,
-            constant: hex_color(&raw.syntax.constant)?,
-            css_color: hex_color(&raw.syntax.css_color)?,
-            css_value: hex_color(&raw.syntax.css_value)?,
-        },
+        syntax: convert_syntax(&raw.syntax)?,
         ansi,
         http: Http {
             get: hex_color(&raw.http.get)?,
@@ -778,6 +855,10 @@ fn fallback_scheme() -> Scheme {
         constant: color,
         css_color: color,
         css_value: color,
+        heading: color,
+        strong: color,
+        emphasis: color,
+        raw: color,
     };
     Scheme {
         id: "fallback".into(),
@@ -847,8 +928,8 @@ fn fallback_scheme() -> Scheme {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHOICES, Color32, apply_id, background, border, chrome, hover, http_method, install, muted,
-        panel, parse_schemes, resolve, success, syntax_color, text,
+        CHOICES, Color32, apply_id, background, border, chip, chrome, hover, http_method, install,
+        muted, panel, parse_schemes, resolve, success, syntax_color, syntax_format, text,
     };
 
     #[test]
@@ -878,6 +959,31 @@ mod tests {
         assert_eq!(syntax_color("keyword"), Color32::from_rgb(207, 142, 109));
         assert_eq!(syntax_color("string"), Color32::from_rgb(106, 171, 115));
         assert_eq!(syntax_color("comment"), Color32::from_rgb(122, 126, 133));
+        assert_eq!(
+            syntax_color("markup.heading"),
+            Color32::from_rgb(199, 125, 187)
+        );
+        assert_eq!(
+            syntax_color("markup.strong"),
+            Color32::from_rgb(229, 192, 123)
+        );
+        let emphasis = syntax_format(
+            "markup.emphasis",
+            syntax_color("markup.emphasis"),
+            14.0,
+            false,
+        );
+        assert!(emphasis.italics);
+        assert_eq!(emphasis.background, Color32::TRANSPARENT);
+        let raw = syntax_format("markup.raw", syntax_color("markup.raw"), 14.0, false);
+        assert_eq!(raw.background, chip());
+        assert!(
+            syntax_format("markup.strike", text(), 14.0, true)
+                .strikethrough
+                .width
+                > 0.0
+        );
+        assert!(syntax_format("comment", text(), 14.0, false).italics);
         assert_eq!(super::ansi()[0], (30, 31, 34));
         assert_eq!(super::ansi()[7], (188, 190, 196));
         assert_eq!(super::ansi()[15], (255, 255, 255));

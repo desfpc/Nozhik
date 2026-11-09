@@ -1,4 +1,4 @@
-//! Background PHP/CSS/YAML syntax, local formatting and PHP LSP services. UI owns authoritative document text.
+//! Background PHP/CSS/YAML/JSON/Markdown syntax, local formatting and PHP LSP services. UI owns authoritative document text.
 pub mod completion;
 pub mod css;
 pub mod css_completion;
@@ -8,6 +8,7 @@ pub mod formatting;
 pub mod highlighter;
 pub mod json;
 pub mod lsp;
+pub mod markdown;
 mod override_completion;
 pub mod php_stubs;
 mod php_symbols;
@@ -41,6 +42,12 @@ pub enum Error {
 }
 /// Language subsystem result.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// CSS, YAML, JSON and Markdown stay on the local syntax thread.
+#[must_use]
+pub fn local_syntax(uri: &lsp_types::Url) -> bool {
+    css::is_css(uri) || yaml::is_yaml(uri) || json::is_json(uri) || markdown::is_markdown(uri)
+}
 
 /// Converts a valid UTF-8 byte boundary to LSP UTF-16 coordinates.
 #[must_use]
@@ -258,6 +265,8 @@ impl LanguageService {
                             json::format(&source, &style, range.as_ref())
                         } else if yaml::is_yaml(&uri) {
                             yaml::format(&source, &style, range.as_ref())
+                        } else if markdown::is_markdown(&uri) {
+                            Err(Error::Protocol("No Markdown source formatter".into()))
                         } else {
                             css::format(&source, &style, range.as_ref())
                         };
@@ -312,7 +321,7 @@ impl LanguageService {
             Command::Sync { uri, .. }
             | Command::Format { uri, .. }
             | Command::Request { uri, .. }
-            | Command::Close(uri) => css::is_css(uri) || yaml::is_yaml(uri) || json::is_json(uri),
+            | Command::Close(uri) => local_syntax(uri),
         };
         if local_command {
             return self.syntax.try_send(command).is_ok();
@@ -539,6 +548,15 @@ fn syntax_snapshot(
             uri,
             revision,
             spans: json::highlight(source),
+            syntax: Vec::new(),
+            colors: Vec::new(),
+        });
+    }
+    if markdown::is_markdown(&uri) {
+        return Ok(Event::Highlights {
+            uri,
+            revision,
+            spans: markdown::highlight(source),
             syntax: Vec::new(),
             colors: Vec::new(),
         });

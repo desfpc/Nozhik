@@ -759,6 +759,9 @@ impl NozhikUi {
                     if self.openapi_toolbar(ui, ctx, index, enabled) {
                         return;
                     }
+                    if self.markdown_toolbar(ui, index, enabled) {
+                        return;
+                    }
                     let editor_id = ui
                         .id()
                         .with(("editor", self.documents[index].buffer.snapshot().buffer_id));

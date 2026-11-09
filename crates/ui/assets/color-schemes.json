@@ -52,7 +52,11 @@
         "selector": "#DABA70",
         "constant": "#2AACB8",
         "css_color": "#56A8F5",
-        "css_value": "#6AAB73"
+        "css_value": "#6AAB73",
+        "heading": "#C77DBB",
+        "strong": "#E5C07B",
+        "emphasis": "#DABA70",
+        "raw": "#CF8E6D"
       },
       "ansi": [
         "#1E1F22",
@@ -146,7 +150,11 @@
         "selector": "#9E6C00",
         "constant": "#1750EB",
         "css_color": "#1750EB",
-        "css_value": "#067D17"
+        "css_value": "#067D17",
+        "heading": "#871094",
+        "strong": "#9A6200",
+        "emphasis": "#9E6C00",
+        "raw": "#B45309"
       },
       "ansi": [
         "#000000",
@@ -240,7 +248,11 @@
         "selector": "#F9E2AF",
         "constant": "#FAB387",
         "css_color": "#74C7EC",
-        "css_value": "#A6E3A1"
+        "css_value": "#A6E3A1",
+        "heading": "#F5C2E7",
+        "strong": "#F9E2AF",
+        "emphasis": "#F5C2E7",
+        "raw": "#FAB387"
       },
       "ansi": [
         "#45475A",

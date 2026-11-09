@@ -31,6 +31,7 @@ nozhik-buffer.workspace = true
 nozhik-event-bus.workspace = true
 nozhik-config.workspace = true
 tokio.workspace = true
+pulldown-cmark.workspace = true
 
 [lints]
 workspace = true

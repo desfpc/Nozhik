@@ -76,6 +76,8 @@ def collect(destination, target):
             text.append("")
     text.extend(["=" * 72, "JetBrains Mono Regular",
                  (ROOT / "crates/ui/assets/fonts/OFL.txt").read_text(encoding="utf-8")])
+    text.extend(["=" * 72, "Noto Sans Bold",
+                 (ROOT / "crates/ui/assets/fonts/NotoSans-OFL.txt").read_text(encoding="utf-8")])
     text.extend(["=" * 72, "Noto Sans Symbols 2 Regular",
                  (ROOT / "crates/ui/assets/fonts/NotoSansSymbols2-OFL.txt").read_text(encoding="utf-8")])
     text.extend(["=" * 72, "Noto Emoji",

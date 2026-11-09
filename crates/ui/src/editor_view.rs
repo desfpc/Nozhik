@@ -428,16 +428,12 @@ impl TextEditorView {
                         job.append(
                             &text[range[0]..range[1]],
                             0.0,
-                            egui::TextFormat {
-                                font_id: if self.proportional_font {
-                                    FontId::proportional(font_size)
-                                } else {
-                                    FontId::monospace(font_size)
-                                },
+                            theme::syntax_format(
+                                span.map_or("", |item| item.token.as_str()),
                                 color,
-                                italics: span.is_some_and(|s| s.token == "comment"),
-                                ..Default::default()
-                            },
+                                font_size,
+                                self.proportional_font,
+                            ),
                         );
                     }
                     if let Some(part) = ghost_row {

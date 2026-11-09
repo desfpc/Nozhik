@@ -4102,3 +4102,29 @@ Windows-комплект не обновлялся.
 Исходники, история и готовые актуальные бинарники со всеми legal materials
 сохранены; после очистки сборок не было.
 
+### PHPUnit в консоли Docker (v0.1.50, 2026-11-09)
+
+Кнопка запуска открывает консоль настроенного контейнера и выполняет PHPUnit.
+Вывод остаётся в терминале. Settings → Linters и Settings → Tests переключают
+языки, включённые в Languages: у PHP прежние линтеры и форма PHPUnit, у
+остальных языков страницы пустые. Команда `phpunit` в терминале контейнера
+запоминается, если настройки ещё нет.
+
+Версия workspace/lock — 0.1.50, следующая — 0.1.51.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features --offline -- --test-threads=8 — 400 passed,
+0 failed, 10 прежних optional ignored. Ручной native GUI и Windows build/Clippy не
+запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+0b9ad5c0d1b14f4d5b82cd40daeff028401352bfb46fd2226eae28fb7ee02ece и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 7.5 GiB (24537 файлов).
+Удалены Finder .DS_Store. Финальный размер проекта — 397 MiB, binaries — 111 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+

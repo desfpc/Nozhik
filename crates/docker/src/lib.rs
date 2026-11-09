@@ -3,6 +3,7 @@ pub mod compose;
 mod engine;
 pub mod linter;
 mod process;
+pub mod test_run;
 pub use compose::{RunMarker, is_compose_file};
 pub use process::docker_program;
 use std::{

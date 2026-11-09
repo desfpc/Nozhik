@@ -81,7 +81,10 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   File traversal, AST extraction and Docker CLI I/O belong to its project worker.
   PHP linter JSON runs use `process::capture` on a dedicated thread. The Compose
   worker stays free. `nozhik-config` stores `LinterTool`; `nozhik-docker` parses
-  reports and builds `docker exec` arguments. The UI does not call the Docker CLI.
+  reports and builds `docker exec` arguments. PHPUnit consoles are a separate
+  `docker exec -it` argv in `nozhik-docker`; the UI opens that terminal and does
+  not parse the output. `nozhik-config` stores `TestTool` beside `LinterTool`.
+  The UI does not call the Docker CLI.
 - terminal: portable-pty, vt100 (vte), parking_lot, thiserror, base64 (bounded OSC 52 clipboard writes), Unix-only nix signals.
   Без UI/runtime/event_bus; I/O/ANSI parsing — только workers, UI получает Arc grid.
 - remote_ssh: russh/keys, russh-sftp, tokio, keyring (native OS stores), zeroize,

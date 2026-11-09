@@ -395,7 +395,8 @@ pub fn remember(
     {
         return false;
     }
-    let Some(container) = container_of(&found, session, containers) else {
+    let Some(container) = attached_container(found.container.as_deref(), session, containers)
+    else {
         return false;
     };
     let workdir = found
@@ -437,7 +438,6 @@ pub fn show_settings(
     containers: &[(String, String)],
     draft: &mut LinterTool,
 ) {
-    ui.heading("Linters");
     ui.label("PHP linters run inside a Docker container when you press the bug button.");
     let mut remove = None;
     for index in 0..config.linters.len() {
@@ -631,12 +631,12 @@ fn canonicalize_item(mut item: DiagnosticItem) -> DiagnosticItem {
     item
 }
 
-fn container_of(
-    found: &nozhik_docker::linter::Detected,
+pub fn attached_container(
+    named: Option<&str>,
     session: Option<(&str, &str)>,
     containers: &[KnownContainer],
 ) -> Option<KnownContainer> {
-    if let Some(token) = found.container.as_deref() {
+    if let Some(token) = named.map(str::trim).filter(|token| !token.is_empty()) {
         return Some(resolve_container(token, containers));
     }
     let (id, name) = session.filter(|(id, _)| !id.trim().is_empty())?;
@@ -707,7 +707,7 @@ fn row_label(item: &DiagnosticItem) -> String {
     )
 }
 
-fn container_picker(
+pub fn container_picker(
     ui: &mut egui::Ui,
     id: &mut String,
     name: &mut String,

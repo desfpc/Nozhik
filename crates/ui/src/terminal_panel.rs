@@ -282,8 +282,41 @@ impl TerminalPanel {
             program: program.into_os_string(),
             args,
         });
+        self.spawn_docker(options, container_id, name, &format!("[Docker: {name}]"))
+    }
+
+    /// Opens a Docker console whose tab name includes the tool, for example `PHPUnit`.
+    pub(crate) fn create_tool_console(
+        &mut self,
+        root: &Path,
+        program: std::path::PathBuf,
+        args: Vec<std::ffi::OsString>,
+        container_id: &str,
+        name: &str,
+        title: &str,
+    ) -> nozhik_terminal::Result<()> {
+        let mut options = SessionOptions::new(root.into());
+        options.shell = Some(nozhik_terminal::pty::ShellCommand {
+            program: program.into_os_string(),
+            args,
+        });
+        self.spawn_docker(
+            options,
+            container_id,
+            name,
+            &format!("[Docker: {name} · {title}]"),
+        )
+    }
+
+    fn spawn_docker(
+        &mut self,
+        options: SessionOptions,
+        container_id: &str,
+        name: &str,
+        label: &str,
+    ) -> nozhik_terminal::Result<()> {
         let id = self.manager.create(options)?;
-        self.labels.insert(id, format!("[Docker: {name}]"));
+        self.labels.insert(id, label.to_owned());
         self.docker
             .insert(id, (container_id.to_owned(), name.to_owned()));
         self.active = Some(id);

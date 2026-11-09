@@ -818,7 +818,9 @@ fn kind_of_token(token: &str) -> Option<LinterKind> {
     }
 }
 
-fn split_docker_exec(tokens: &[String]) -> Option<(Option<String>, Option<String>, Vec<String>)> {
+pub(crate) fn split_docker_exec(
+    tokens: &[String],
+) -> Option<(Option<String>, Option<String>, Vec<String>)> {
     let docker_at = tokens.iter().position(|token| is_docker(token))?;
     let after = tokens.get(docker_at + 1..)?;
     if after.first().map(String::as_str) != Some("exec") {
@@ -874,7 +876,7 @@ fn is_docker(token: &str) -> bool {
     name == "docker" || name == "docker.exe"
 }
 
-fn prompt_workdir(line: &str, binary: &str) -> Option<String> {
+pub(crate) fn prompt_workdir(line: &str, binary: &str) -> Option<String> {
     let index = line.find(binary)?;
     let prefix = &line[..index];
     let mut found = None;
@@ -897,7 +899,7 @@ fn prompt_workdir(line: &str, binary: &str) -> Option<String> {
     found
 }
 
-fn tokenize(line: &str) -> Vec<String> {
+pub(crate) fn tokenize(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut quote = None;
@@ -928,7 +930,7 @@ fn tokenize(line: &str) -> Vec<String> {
     out
 }
 
-fn shell_join(args: &[String]) -> String {
+pub(crate) fn shell_join(args: &[String]) -> String {
     args.iter()
         .map(|arg| {
             if arg.chars().any(char::is_whitespace) {

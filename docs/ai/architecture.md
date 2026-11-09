@@ -12,7 +12,7 @@
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP/CSS/YAML incremental syntax, local formatting, PHP/CSS project indexes, PHP stdio LSP | tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
-| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP linter JSON reports | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
+| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP linter JSON reports, PHPUnit console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -2115,3 +2115,21 @@ mount. Вкладка линтера в `! Problems` группирует стр
 Если линтер ещё не записан в настройках, ввод команды в терминале контейнера
 или `docker exec` запоминает бинарь, аргументы и контейнер. Уже сохранённый вид
 линтера не меняется. Оригинальные байты команды в PTY не подменяются.
+
+## PHPUnit в консоли Docker (v0.1.50)
+
+Кнопка запуска на верхней панели открывает отдельную консоль на каждый
+настроенный тест включённого языка. Сейчас это только `PHPUnit`: вкладка
+`[Docker: контейнер · PHPUnit]` выполняет `docker exec -it` с сохранёнными
+бинарём, рабочим каталогом и аргументами. IDE не разбирает вывод.
+
+`Config.tests` хранит язык, вид, контейнер, бинарь, каталог и аргументы.
+Пустые настройки остаются пустым списком. Settings → Linters и Settings → Tests
+начинаются с переключателя языков, включённых в Settings → Languages. У PHP
+показаны текущие линтеры и форма PHPUnit. У остальных включённых языков обе
+страницы пустые, пока для них нет раннера.
+
+Команда `phpunit` или `vendor/bin/phpunit` в терминале контейнера запоминается,
+если PHPUnit ещё не записан. Уже сохранённая команда не меняется. `--version`
+и `--help` регистрируют бинарь без аргументов. Язык, выключенный в Languages,
+не запускается кнопкой.

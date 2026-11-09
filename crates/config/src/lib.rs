@@ -4,6 +4,7 @@ pub mod code_style;
 pub mod deployment;
 pub mod languages;
 pub mod linters;
+pub mod test_tools;
 
 use std::{
     fs,
@@ -52,6 +53,8 @@ pub struct Config {
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
     /// PHP linters run inside Docker. Empty until the user configures or runs one.
     pub linters: Vec<linters::LinterTool>,
+    /// Test commands run inside Docker consoles. Empty until the user configures or runs one.
+    pub tests: Vec<test_tools::TestTool>,
 }
 
 impl Default for Config {
@@ -70,6 +73,7 @@ impl Default for Config {
             file_types: std::collections::BTreeMap::new(),
             sftp_deployment: None,
             linters: Vec::new(),
+            tests: Vec::new(),
         }
     }
 }
@@ -84,6 +88,7 @@ impl Config {
             deployment.validate()?;
         }
         linters::validate(&self.linters)?;
+        test_tools::validate(&self.tests)?;
         if !(1..=16).contains(&self.tab_width) {
             return Err(ConfigError::Invalid("tab_width must be between 1 and 16"));
         }

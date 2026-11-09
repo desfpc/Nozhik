@@ -2,12 +2,13 @@
 use nozhik_config::{
     Config, ConfigManager,
     code_style::{CodeStyles, FileTypeSettings},
+    languages::LanguageId,
 };
 use std::{path::PathBuf, sync::mpsc};
 
 enum Request {
     Scan,
-    Save(Config),
+    Save(Box<Config>),
     Php(String),
 }
 enum Reply {
@@ -27,6 +28,8 @@ pub struct SettingsDialog {
     deployment: crate::deployment::DeploymentSettings,
     extension: String,
     linter_draft: nozhik_config::linters::LinterTool,
+    test_draft: nozhik_config::test_tools::TestTool,
+    tool_language: LanguageId,
     requests: mpsc::Sender<Request>,
     replies: mpsc::Receiver<Reply>,
     pending: usize,
@@ -86,7 +89,7 @@ impl SettingsDialog {
                     Request::Save(config) => Reply::Saved(
                         (|| {
                             let manager = ConfigManager::from_path(path.clone(), bus.clone())?;
-                            manager.replace(config)?;
+                            manager.replace(*config)?;
                             manager.save()
                         })()
                         .map_err(|e| e.to_string()),
@@ -107,6 +110,8 @@ impl SettingsDialog {
             deployment: crate::deployment::DeploymentSettings::default(),
             extension: "php".into(),
             linter_draft: crate::linters::blank_draft("phpstan"),
+            test_draft: crate::test_runs::blank_draft(),
+            tool_language: LanguageId::Php,
             requests,
             replies,
             pending: 0,
@@ -123,7 +128,36 @@ impl SettingsDialog {
         ui.selectable_value(&mut self.category, 4, "Git");
         ui.selectable_value(&mut self.category, 5, "SFTP Deployment");
         ui.selectable_value(&mut self.category, 6, "Linters");
+        ui.selectable_value(&mut self.category, 7, "Tests");
         ui.button("Plugins…").clicked()
+    }
+
+    fn tool_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &mut Config,
+        containers: &[(String, String)],
+        tests: bool,
+    ) {
+        ui.heading(if tests { "Tests" } else { "Linters" });
+        if !crate::tool_languages::switch(ui, config, &mut self.tool_language) {
+            ui.label("Enable a language in Settings → Languages.");
+            return;
+        }
+        let language = self.tool_language;
+        if language == LanguageId::Php {
+            if tests {
+                crate::test_runs::show_settings(ui, config, containers, &mut self.test_draft);
+            } else {
+                crate::linters::show_settings(ui, config, containers, &mut self.linter_draft);
+            }
+            return;
+        }
+        ui.label(if tests {
+            "No test runners are available for this language."
+        } else {
+            "No linters are available for this language."
+        });
     }
 
     fn options(
@@ -156,12 +190,9 @@ impl SettingsDialog {
                     } else if self.category == 4 {
                         vcs.git_settings_ui(ui);
                     } else if self.category == 6 {
-                        crate::linters::show_settings(
-                            ui,
-                            config,
-                            containers,
-                            &mut self.linter_draft,
-                        );
+                        self.tool_page(ui, config, containers, false);
+                    } else if self.category == 7 {
+                        self.tool_page(ui, config, containers, true);
                     } else {
                         Self::languages(ui, config);
                     }
@@ -430,7 +461,7 @@ impl SettingsDialog {
     }
 
     pub(crate) fn queue_save(&mut self, config: Config) -> bool {
-        if self.requests.send(Request::Save(config)).is_ok() {
+        if self.requests.send(Request::Save(Box::new(config))).is_ok() {
             self.pending += 1;
             true
         } else {
@@ -561,7 +592,7 @@ impl crate::NozhikUi {
                     if self
                         .settings_dialog
                         .requests
-                        .send(Request::Save(config))
+                        .send(Request::Save(Box::new(config)))
                         .is_ok()
                     {
                         self.settings_dialog.pending += 1;

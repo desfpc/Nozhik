@@ -300,8 +300,19 @@ impl NozhikUi {
                         if self.linters.running() {
                             ui.spinner();
                         }
-                        ui.add_enabled(false, Icon::Run)
-                            .on_hover_text("Run · planned");
+                        let tests_ready = crate::test_runs::ready(&self.config);
+                        let test_hover = if tests_ready {
+                            "Run tests"
+                        } else {
+                            "Run tests · add PHPUnit in Settings → Tests, or run it in a container terminal"
+                        };
+                        if ui
+                            .add_enabled(tests_ready, Icon::Run)
+                            .on_hover_text(test_hover)
+                            .clicked()
+                        {
+                            self.start_tests(ctx);
+                        }
                     });
                 });
             });
@@ -1039,6 +1050,50 @@ impl NozhikUi {
         }
     }
 
+    fn start_tests(&mut self, ctx: &egui::Context) {
+        let Some(root) = self
+            .project
+            .as_ref()
+            .map(|project| project.root_path.clone())
+        else {
+            return;
+        };
+        let launches = crate::test_runs::launches(&self.config);
+        if launches.is_empty() {
+            return;
+        }
+        let program = nozhik_docker::docker_program();
+        let panel = self
+            .terminal
+            .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+        let mut started = 0_usize;
+        let mut failures = Vec::new();
+        for launch in launches {
+            match panel.create_tool_console(
+                &root,
+                program.clone(),
+                launch.args,
+                &launch.container_id,
+                &launch.container_name,
+                launch.title,
+            ) {
+                Ok(()) => started += 1,
+                Err(error) => failures.push((launch.title, error.to_string())),
+            }
+        }
+        for (title, error) in failures {
+            self.note_status("tests", title, crate::problems::Severity::Error, error);
+        }
+        if started > 0 {
+            self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
+            self.status = if started == 1 {
+                "PHPUnit is running in the container console".into()
+            } else {
+                format!("{started} test consoles started")
+            };
+        }
+    }
+
     fn start_linters(&mut self, ctx: &egui::Context) {
         let Some(root) = self
             .project
@@ -1138,7 +1193,8 @@ impl NozhikUi {
         };
         let containers = self.docker.containers();
         let mut config = self.config.clone();
-        let mut changed = false;
+        let mut remembered_linter = false;
+        let mut remembered_test = false;
         for command in &commands {
             let session = match (&command.container_id, &command.container_name) {
                 (Some(id), name) if !id.trim().is_empty() => {
@@ -1147,23 +1203,32 @@ impl NozhikUi {
                 _ => None,
             };
             if crate::linters::remember(&mut config, &root, &command.line, session, &containers) {
-                changed = true;
+                remembered_linter = true;
+            }
+            if crate::test_runs::remember(&mut config, &root, &command.line, session, &containers) {
+                remembered_test = true;
             }
         }
-        if !changed {
+        if !remembered_linter && !remembered_test {
             return;
         }
         match self.settings.replace(config.clone()) {
             Ok(()) => {
                 self.config = config.clone();
                 if self.settings_dialog.queue_save(config) {
-                    self.status = "Remembered the PHP linter from the terminal".into();
+                    self.status = match (remembered_linter, remembered_test) {
+                        (true, true) => {
+                            "Remembered the PHP linter and PHPUnit from the terminal".into()
+                        }
+                        (false, true) => "Remembered PHPUnit from the terminal".into(),
+                        _ => "Remembered the PHP linter from the terminal".into(),
+                    };
                 } else {
                     self.note_status(
                         "linter-settings",
                         "Linter",
                         crate::problems::Severity::Error,
-                        "Could not save the remembered PHP linter",
+                        "Could not save the remembered command",
                     );
                 }
             }

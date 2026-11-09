@@ -590,22 +590,31 @@ impl crate::NozhikUi {
                                 &text[nozhik_language_support::completion::prefix(&text, caret)];
                             let remote = nozhik_language_support::completion::filter(items, prefix);
                             let mut items = view.local_completions(&text, caret);
-                            let access = view.triggers.access(&text[..caret]);
-                            for item in remote {
-                                use lsp_types::CompletionItemKind as K;
-                                let allowed = access.is_none()
-                                    || matches!(
-                                        item.kind,
-                                        Some(K::METHOD | K::PROPERTY | K::FIELD)
-                                    )
-                                    || (access.is_some_and(|(_, _, static_access)| static_access)
-                                        && item.kind == Some(K::CONSTANT));
-                                if allowed
-                                    && !items
-                                        .iter()
-                                        .any(|other| other.label.eq_ignore_ascii_case(&item.label))
-                                {
-                                    items.push(item);
+                            let method_names = !items.is_empty()
+                                && items.iter().all(|item| {
+                                    item.data
+                                        .as_ref()
+                                        .is_some_and(|data| data["nozhik_override"] == "method")
+                                });
+                            let access = view.triggers.access(text.get(..caret).unwrap_or(""));
+                            if !method_names {
+                                for item in remote {
+                                    use lsp_types::CompletionItemKind as K;
+                                    let allowed = access.is_none()
+                                        || matches!(
+                                            item.kind,
+                                            Some(K::METHOD | K::PROPERTY | K::FIELD)
+                                        )
+                                        || (access
+                                            .is_some_and(|(_, _, static_access)| static_access)
+                                            && item.kind == Some(K::CONSTANT));
+                                    if allowed
+                                        && !items.iter().any(|other| {
+                                            other.label.eq_ignore_ascii_case(&item.label)
+                                        })
+                                    {
+                                        items.push(item);
+                                    }
                                 }
                             }
                             view.completions = items;
@@ -729,19 +738,41 @@ impl EditorLanguage {
                 let (old_range, new_range) = changed_range(old, new);
                 map_byte(absolute_byte, &new_range, &old_range)
             });
-        let mut items =
-            index
-                .zip(self.project_path.as_ref())
-                .map_or_else(Vec::new, |(index, path)| {
-                    nozhik_language_support::type_inference::complete_fragment(
-                        index,
-                        path,
-                        source,
-                        byte,
-                        absolute_byte,
-                    )
-                });
-        let access = self.triggers.access(&source[..byte]);
+        let class_prefix = source
+            .contains("function")
+            .then(|| {
+                index
+                    .zip(self.project_path.as_ref())
+                    .and_then(|(index, path)| {
+                        let scope = nozhik_language_support::class_scope_containing(
+                            index,
+                            path,
+                            absolute_byte,
+                        )?;
+                        let rope = self.completion_text.as_ref()?;
+                        let end = absolute_byte.min(rope.len_bytes());
+                        if end < scope.start {
+                            return None;
+                        }
+                        rope.get_byte_slice(scope.start..end)
+                            .map(|slice| slice.to_string())
+                    })
+            })
+            .flatten();
+        let batch = index.zip(self.project_path.as_ref()).map(|(index, path)| {
+            nozhik_language_support::type_inference::complete_with_catalog(
+                index,
+                path,
+                source,
+                byte,
+                absolute_byte,
+                self.stubs.as_deref(),
+                class_prefix.as_deref(),
+            )
+        });
+        let method_name = batch.as_ref().is_some_and(|batch| batch.method_name);
+        let mut items = batch.map(|batch| batch.items).unwrap_or_default();
+        let access = self.triggers.access(source.get(..byte).unwrap_or(""));
         let project_receiver = access
             .and_then(|(left, _, _)| {
                 index
@@ -756,7 +787,8 @@ impl EditorLanguage {
                     })
             })
             .filter(|name| index.is_some_and(|i| i.declaration(name).is_some()));
-        if project_receiver.is_none()
+        if !method_name
+            && project_receiver.is_none()
             && let Some(stubs) = &self.stubs
         {
             let query = nozhik_language_support::completion::query(source, byte);

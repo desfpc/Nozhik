@@ -4117,13 +4117,27 @@ cargo test --workspace --all-features --offline -- --test-threads=8 — 400 pass
 0 failed, 10 прежних optional ignored. Ручной native GUI и Windows build/Clippy не
 запускались. Commit и push не выполнялись.
 
+### PHP override completion и закрытие usages (v0.1.51, 2026-11-09)
+
+Окно использований закрывается кликом снаружи рамки. Крестик совпадает по
+размеру с соседней кнопкой отдельного окна. В объявлении метода PHP предлагаются
+public и protected методы родителя, интерфейса и трейта, вместе с параметрами
+и типом возврата. Private и final не предлагаются.
+
+Версия workspace/lock — 0.1.51, следующая — 0.1.52.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 403 passed,
+0 failed, 10 прежних optional ignored. Ручной native GUI и Windows build/Clippy не
+запускались. Commit и push не выполнялись.
+
 Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
 executable и app archive; --check подтвердил source fingerprint
-0b9ad5c0d1b14f4d5b82cd40daeff028401352bfb46fd2226eae28fb7ee02ece и контрольные
+e1b1375b1c90abe189ab2b1e40f456c13d5cbc85b26030693765c89f1d02a4e8 и контрольные
 суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
 Windows-комплект не обновлялся.
 
-После проверки готовых бинарников cargo clean удалил 7.5 GiB (24537 файлов).
+После проверки готовых бинарников cargo clean удалил 9.2 GiB (27548 файлов).
 Удалены Finder .DS_Store. Финальный размер проекта — 397 MiB, binaries — 111 MiB.
 Исходники, история и готовые актуальные бинарники со всеми legal materials
 сохранены; после очистки сборок не было.

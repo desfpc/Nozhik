@@ -8,6 +8,7 @@ pub mod formatting;
 pub mod highlighter;
 pub mod json;
 pub mod lsp;
+mod override_completion;
 pub mod php_stubs;
 mod php_symbols;
 pub mod project_indexer;
@@ -20,6 +21,7 @@ pub use lsp_types;
 use lsp_types::{
     CompletionResponse, GotoDefinitionResponse, Hover, Position, PublishDiagnosticsParams, Url,
 };
+pub use override_completion::{CompletionBatch, class_scope_containing};
 use ropey::Rope;
 use serde_json::json;
 use std::{collections::HashMap, ops::Range, path::PathBuf, sync::mpsc};

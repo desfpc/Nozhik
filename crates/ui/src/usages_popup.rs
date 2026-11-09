@@ -16,6 +16,8 @@ pub struct UsagesPopup {
     incoming_only: bool,
     css_definitions: Option<bool>,
     filter: String,
+    /// Outside clicks dismiss only after the pointer that opened the window is released.
+    dismiss_armed: bool,
 }
 impl UsagesPopup {
     pub fn new(index: &SymbolIndex, symbol: &SymbolDeclaration) -> Self {
@@ -38,6 +40,7 @@ impl UsagesPopup {
             incoming_only: false,
             css_definitions: None,
             filter: String::new(),
+            dismiss_armed: false,
         }
     }
     pub fn css(name: &str, rows: Vec<ReferenceLocation>, definitions: bool) -> Self {
@@ -56,6 +59,7 @@ impl UsagesPopup {
             incoming_only: false,
             css_definitions: Some(definitions),
             filter: String::new(),
+            dismiss_armed: false,
         }
     }
     pub fn show(&mut self, ctx: &egui::Context) -> Option<ReferenceLocation> {
@@ -91,7 +95,7 @@ impl UsagesPopup {
     )]
     fn show_window(&mut self, ctx: &egui::Context) -> Option<ReferenceLocation> {
         let mut open = self.open;
-        let target = egui::Window::new(&self.title)
+        let shown = egui::Window::new(&self.title)
             .id(egui::Id::new("usages_popup"))
             .open(&mut open)
             .title_bar(false)
@@ -107,10 +111,29 @@ impl UsagesPopup {
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .corner_radius(7),
             )
-            .show(ctx, |ui| self.contents(ui))
-            .and_then(|response| response.inner)
+            .show(ctx, |ui| self.contents(ui));
+        let target = shown
+            .as_ref()
+            .and_then(|response| response.inner.clone())
             .flatten();
+        let rect = shown.as_ref().map(|response| response.response.rect);
         self.open &= open && target.is_none();
+        let outside = self.dismiss_armed
+            && rect.is_some_and(|rect| {
+                ctx.input(|input| {
+                    input.pointer.any_pressed()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|pos| !rect.contains(pos))
+                })
+            });
+        if outside {
+            self.open = false;
+        }
+        if self.open && !ctx.input(|input| input.pointer.any_down()) {
+            self.dismiss_armed = true;
+        }
         target
     }
     #[allow(
@@ -123,14 +146,17 @@ impl UsagesPopup {
         ui.horizontal(|ui| {
             ui.strong(&self.title);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("↗")
+                let side = ui.spacing().interact_size.y;
+                let icon = |ui: &mut egui::Ui, glyph: &str| {
+                    ui.add(egui::Button::new(glyph).min_size(egui::Vec2::splat(side)))
+                };
+                if icon(ui, "↗")
                     .on_hover_text("Open usages in a separate window")
                     .clicked()
                 {
                     self.detached = !self.detached;
                 }
-                if ui.small_button("×").clicked() {
+                if icon(ui, "×").on_hover_text("Close").clicked() {
                     self.open = false;
                 }
                 ui.weak(format!(
@@ -305,6 +331,7 @@ mod tests {
             incoming_only: false,
             css_definitions: None,
             filter: String::new(),
+            dismiss_armed: false,
         };
         let ctx = egui::Context::default();
         let mut target = None;
@@ -354,6 +381,80 @@ mod tests {
                 popup.show(ctx);
             },
         );
+        assert!(!popup.open);
+        Ok(())
+    }
+
+    #[test]
+    fn usages_window_closes_on_outside_press() -> Result<(), Box<dyn std::error::Error>> {
+        let mut popup = UsagesPopup {
+            open: true,
+            title: "Class \\App\\Child".into(),
+            name: "Child".into(),
+            rows: Vec::new(),
+            selected: 0,
+            detached: false,
+            grouped: true,
+            incoming_only: false,
+            css_definitions: None,
+            filter: String::new(),
+            dismiss_armed: false,
+        };
+        let ctx = egui::Context::default();
+        let screen = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 700.0),
+        ));
+        let frame = |popup: &mut UsagesPopup, events: Vec<egui::Event>| {
+            let _output = ctx.run(
+                egui::RawInput {
+                    screen_rect: screen,
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    popup.show(ctx);
+                },
+            );
+        };
+        let click = |popup: &mut UsagesPopup, pos: egui::Pos2| {
+            frame(
+                popup,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            frame(
+                popup,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        };
+        frame(&mut popup, Vec::new());
+        frame(&mut popup, Vec::new());
+        assert!(popup.open);
+        assert!(popup.dismiss_armed);
+        let rect = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("usages_popup")))
+            .ok_or("usages window")?;
+        let outside = egui::pos2(2.0, 2.0);
+        assert!(
+            !rect.contains(outside),
+            "outside point must miss the window"
+        );
+        click(&mut popup, rect.center());
+        assert!(popup.open);
+        click(&mut popup, outside);
         assert!(!popup.open);
         Ok(())
     }

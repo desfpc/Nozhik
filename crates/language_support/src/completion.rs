@@ -68,12 +68,26 @@ pub fn edits(
             crate::byte_range(source, edit.replace)?,
             edit.new_text.clone(),
         ),
-        None => (
-            prefix(source, caret),
-            item.insert_text
-                .clone()
-                .unwrap_or_else(|| item.label.clone()),
-        ),
+        None => {
+            let mut range = prefix(source, caret);
+            if let Some(kind) = item
+                .data
+                .as_ref()
+                .and_then(|data| data["nozhik_override"].as_str())
+                && let Some(start) =
+                    crate::override_completion::replacement_start(source, caret, kind)
+                && start <= caret
+                && source.is_char_boundary(start)
+            {
+                range.start = start;
+            }
+            (
+                range,
+                item.insert_text
+                    .clone()
+                    .unwrap_or_else(|| item.label.clone()),
+            )
+        }
     };
     if item
         .data

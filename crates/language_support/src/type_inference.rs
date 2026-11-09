@@ -87,6 +87,39 @@ pub fn complete_fragment(
     byte: usize,
     absolute_byte: usize,
 ) -> Vec<crate::lsp_types::CompletionItem> {
+    complete_with_catalog(index, path, source, byte, absolute_byte, None, None).items
+}
+/// Project completion plus inherited PHP methods. `class_prefix` is the indexed
+/// class text up to the caret, used when `source` is only the edited line.
+#[must_use]
+pub fn complete_with_catalog(
+    index: &SymbolIndex,
+    path: &Path,
+    source: &str,
+    byte: usize,
+    absolute_byte: usize,
+    stubs: Option<&crate::php_stubs::PhpVersionStubs>,
+    class_prefix: Option<&str>,
+) -> crate::override_completion::CompletionBatch {
+    let ordinary = ordinary_items(index, path, source, byte, absolute_byte);
+    crate::override_completion::complete(
+        index,
+        path,
+        source,
+        byte,
+        absolute_byte,
+        stubs,
+        class_prefix,
+        ordinary,
+    )
+}
+fn ordinary_items(
+    index: &SymbolIndex,
+    path: &Path,
+    source: &str,
+    byte: usize,
+    absolute_byte: usize,
+) -> Vec<crate::lsp_types::CompletionItem> {
     let Some(before) = source.get(..byte) else {
         return Vec::new();
     };

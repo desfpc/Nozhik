@@ -156,6 +156,8 @@ pub struct NozhikUi {
     left: Option<LeftTool>,
     bottom: Option<&'static str>,
     search: search_everywhere::SearchEverywhere,
+    /// Byte range to select after a project-search hit opens its file.
+    search_jump: Option<(PathBuf, usize, usize)>,
     settings_open: bool,
     settings_dialog: settings_dialog::SettingsDialog,
     shift_down: bool,
@@ -247,6 +249,7 @@ impl NozhikUi {
             left: Some(LeftTool::Project),
             bottom: None,
             search: search_everywhere::SearchEverywhere::default(),
+            search_jump: None,
             settings_open: false,
             shift_down: false,
             last_shift: None,

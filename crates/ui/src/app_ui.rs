@@ -183,6 +183,8 @@ impl NozhikUi {
                         _ => self.integration.actions.push(action.clone()),
                     },
                     Event::File(FileEvent::Changed(path)) => {
+                        self.search.forget_path(path);
+                        self.queue(nozhik_fs_model::Command::ForgetSearch(path.clone()));
                         self.index_changed(path.clone());
                         if self
                             .project
@@ -1018,15 +1020,28 @@ impl NozhikUi {
                 );
             }
         }
+        self.sync_search_classes();
         if let Some(target) = self.search.show(ctx, &self.documents) {
             match target {
                 SearchTarget::File(path) => self.open_file(path),
                 SearchTarget::Document(index) => self.open_document(index),
                 SearchTarget::Action(action) => self.action(&action),
+                SearchTarget::Location { path, byte, end } => {
+                    self.search_jump = Some((path.clone(), byte, end));
+                    self.open_file(path);
+                    self.apply_search_jump();
+                }
             }
         }
         if let Some((token, query)) = self.search.take_request() {
             self.queue(Command::Search { token, query });
+        }
+        if let Some((token, query)) = self.search.take_text_request() {
+            self.queue(Command::SearchContent {
+                token,
+                query,
+                indexed_extensions: crate::search_everywhere::indexed_extensions(),
+            });
         }
         self.settings_window(ctx);
         self.plugins_window(ctx);

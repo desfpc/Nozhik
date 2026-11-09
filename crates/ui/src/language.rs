@@ -80,6 +80,8 @@ pub struct LanguageUi {
     pub(crate) invalidate_dialog: bool,
     pub(crate) indexing: Option<(usize, usize)>,
     pub(crate) usages: Option<crate::usages_popup::UsagesPopup>,
+    /// Bumped when the class or PHP snapshot used by Search Everywhere changes.
+    search_generation: u64,
     root: Option<PathBuf>,
     enabled_languages: Option<std::collections::BTreeSet<nozhik_config::languages::LanguageId>>,
     service: Option<LanguageService>,
@@ -836,10 +838,14 @@ impl crate::NozhikUi {
                     IndexEvent::Snapshot(index, revisions) => {
                         self.language.index = Some(index);
                         self.language.indexed_revisions = revisions;
+                        self.language.search_generation =
+                            self.language.search_generation.wrapping_add(1);
                     }
                     IndexEvent::Classes(index, revisions) => {
                         self.language.class_index = Some(index);
                         self.language.class_revisions = revisions;
+                        self.language.search_generation =
+                            self.language.search_generation.wrapping_add(1);
                     }
                     // CSS navigation/completion use the shared class catalog.
                     IndexEvent::CssSnapshot(_, _) => {}
@@ -864,6 +870,18 @@ impl crate::NozhikUi {
             );
         }
     }
+    pub(crate) fn sync_search_classes(&mut self) {
+        if self.search.class_generation() == self.language.search_generation {
+            return;
+        }
+        let classes = crate::search_everywhere::class_matches(
+            self.language.index.as_deref(),
+            self.language.class_index.as_deref(),
+        );
+        let generation = self.language.search_generation;
+        self.search.set_classes(generation, classes);
+    }
+
     pub(crate) fn index_changed(&self, path: PathBuf) {
         if let Some(indexer) = &self.language.indexer {
             let _sent =
@@ -896,6 +914,8 @@ impl crate::NozhikUi {
                             self.language.index = None;
                             self.language.class_index = None;
                             self.language.class_revisions.clear();
+                            self.language.search_generation =
+                                self.language.search_generation.wrapping_add(1);
                             self.language.indexing = Some((0, 0));
                             for view in self.language.views.values_mut() {
                                 view.project_index = None;

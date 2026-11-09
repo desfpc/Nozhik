@@ -1,8 +1,11 @@
 //! Filesystem model and a serial background command worker. No UI dependencies.
+mod content_search;
 mod entries;
 pub mod fuzzy;
 pub mod tree;
 pub mod watcher;
+
+pub use content_search::TextHit;
 
 use fuzzy::{FileIndex, FileMatch};
 use nozhik_event_bus::EventBus;
@@ -122,6 +125,19 @@ pub enum Command {
         /// Relative fuzzy query.
         query: String,
     },
+    /// Literal text search across every project file. Indexed extensions are reported first.
+    SearchContent {
+        /// Query generation. Stale scans are ignored by the UI.
+        token: u64,
+        /// Case-sensitive literal. Empty queries do not read files.
+        query: String,
+        /// Lowercase extensions that belong to the supported-language index.
+        indexed_extensions: Vec<String>,
+    },
+    /// Drop cached text hits for a changed or deleted path and its descendants.
+    ForgetSearch(PathBuf),
+    /// Drop the in-memory text search cache. Called on shutdown and project switch.
+    ClearSearchCache,
 }
 /// Reliable command completions, separate from best-effort bus notifications.
 pub enum Reply {
@@ -167,6 +183,19 @@ pub enum Reply {
         /// Ranked paths.
         files: Vec<FileMatch>,
     },
+    /// A batch of literal text matches. `done` is the last batch for `token`.
+    TextMatches {
+        /// Query generation.
+        token: u64,
+        /// New matches. Indexed files are sent before the rest.
+        hits: Vec<TextHit>,
+        /// True while project files are still being read.
+        scanning: bool,
+        /// True on the final batch for this token.
+        done: bool,
+        /// Files read from disk in this batch. Cache hits stay at zero.
+        files_read: usize,
+    },
     /// Recoverable failure for the status/log.
     Error(String),
 }
@@ -184,6 +213,10 @@ impl FileSystem {
         let (results, replies) = mpsc::channel();
         let wakeup = Arc::new(Wakeup::default());
         let notification = wakeup.clone();
+        let search = content_search::SearchHub::spawn(results.clone(), {
+            let wakeup = notification.clone();
+            move || wakeup.wake()
+        });
         thread::spawn(move || {
             let mut worker = Worker {
                 tree: None,
@@ -191,7 +224,9 @@ impl FileSystem {
                 watcher: None,
                 bus,
                 wakeup: notification.clone(),
+                search: Arc::clone(&search),
             };
+            let _search_shutdown = content_search::ShutdownGuard(search);
             while let Ok(command) = requests.recv() {
                 let creating = matches!(command, Command::CreateProject { .. });
                 let entry = matches!(command, Command::CreateEntry { .. });
@@ -256,6 +291,7 @@ struct Worker {
     watcher: Option<ProjectWatcher>,
     wakeup: Arc<Wakeup>,
     bus: EventBus,
+    search: Arc<content_search::SearchHub>,
 }
 impl Worker {
     fn create_project(&mut self, parent: &Path, name: &str) -> Result<Vec<Reply>, FsError> {
@@ -281,30 +317,11 @@ impl Worker {
     }
     fn execute(&mut self, command: Command) -> Result<Vec<Reply>, FsError> {
         let reply = match command {
-            Command::OpenProject(root) => {
-                let mut tree = ProjectTree::new(&root)?;
-                let root = tree.root_path.clone();
-                tree.load(&root)?;
-                // Start observing before scanning so changes during the scan invalidate it.
-                let watcher = ProjectWatcher::start_with_wakeup(
-                    root.clone(),
-                    self.bus.clone(),
-                    self.wakeup.clone(),
-                );
-                let index = FileIndex::scan(&root)?;
-                self.watcher = match watcher {
-                    Ok(watcher) => Some(watcher),
-                    Err(error) => {
-                        self.bus.publish(nozhik_event_bus::Event::File(
-                            nozhik_event_bus::FileEvent::Error(error.to_string()),
-                        ));
-                        None
-                    }
-                };
-                self.index = index;
-                self.tree = Some(tree.clone());
-                Reply::ProjectOpened(tree)
-            }
+            Command::OpenProject(root) => self.open_project(&root)?,
+            Command::Search { .. }
+            | Command::SearchContent { .. }
+            | Command::ForgetSearch(_)
+            | Command::ClearSearchCache => return self.search_command(command),
             Command::CreateProject { parent, name } => return self.create_project(&parent, &name),
             Command::CreateEntry {
                 parent,
@@ -374,12 +391,62 @@ impl Worker {
                 write_text(&path, &text)?;
                 Reply::Saved { path, revision }
             }
-            Command::Search { token, query } => Reply::Matches {
-                token,
-                files: self.index.search(&query, 100),
-            },
         };
         Ok(vec![reply])
+    }
+
+    fn open_project(&mut self, root: &Path) -> Result<Reply, FsError> {
+        let mut tree = ProjectTree::new(root)?;
+        let root = tree.root_path.clone();
+        tree.load(&root)?;
+        // Start observing before scanning so changes during the scan invalidate it.
+        let watcher =
+            ProjectWatcher::start_with_wakeup(root.clone(), self.bus.clone(), self.wakeup.clone());
+        let index = FileIndex::scan(&root)?;
+        self.search.clear()?;
+        self.watcher = match watcher {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                self.bus.publish(nozhik_event_bus::Event::File(
+                    nozhik_event_bus::FileEvent::Error(error.to_string()),
+                ));
+                None
+            }
+        };
+        self.index = index;
+        self.tree = Some(tree.clone());
+        Ok(Reply::ProjectOpened(tree))
+    }
+
+    fn search_command(&self, command: Command) -> Result<Vec<Reply>, FsError> {
+        match command {
+            Command::Search { token, query } => Ok(vec![Reply::Matches {
+                token,
+                files: self.index.search(&query, 500),
+            }]),
+            Command::SearchContent {
+                token,
+                query,
+                indexed_extensions,
+            } => {
+                self.search.submit(content_search::SearchJob {
+                    token,
+                    query,
+                    extensions: indexed_extensions,
+                    files: self.index.snapshot(),
+                });
+                Ok(Vec::new())
+            }
+            Command::ForgetSearch(path) => {
+                self.search.forget(&path)?;
+                Ok(Vec::new())
+            }
+            Command::ClearSearchCache => {
+                self.search.clear()?;
+                Ok(Vec::new())
+            }
+            _ => Ok(Vec::new()),
+        }
     }
 }
 fn write_text(path: &std::path::Path, text: &Rope) -> Result<(), FsError> {
@@ -583,5 +650,220 @@ mod tests {
         assert!(matches!(read_text(&path), Err(FsError::Encoding(_))));
         assert!(read_text(&dir.path().join("missing")).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn content_search_covers_unindexed_files_and_caches_until_change_or_clear()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        write_search_fixture(root)?;
+        let worker = FileSystem::start(EventBus::new(32)?);
+        assert!(worker.send(Command::OpenProject(root.into())));
+        let opened = worker
+            .replies
+            .recv_timeout(std::time::Duration::from_secs(5))?;
+        assert!(matches!(opened, Reply::ProjectOpened(_)));
+        let extensions = ["php", "phtml", "css", "json", "yaml", "yml"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let shared = collect_text(&worker, 1, "SHARED_NEEDLE", &extensions)?;
+        assert!(shared.files_read > 0, "cold scan reads project files");
+        assert!(
+            shared.saw_scanning,
+            "results keep a spinner while unscanned files are still open"
+        );
+        let mut saw_plain = false;
+        for hit in &shared.hits {
+            if hit.indexed && saw_plain {
+                return Err("indexed hit arrived after an unindexed file".into());
+            }
+            saw_plain |= !hit.indexed;
+        }
+        assert!(
+            shared
+                .hits
+                .iter()
+                .any(|hit| hit.relative.ends_with("Widget.php") && hit.indexed)
+        );
+        assert!(
+            shared
+                .hits
+                .iter()
+                .any(|hit| hit.relative == "notes/readme.txt" && !hit.indexed)
+        );
+        let plain = collect_text(&worker, 2, "PLAIN_NEEDLE", &extensions)?;
+        let plain_paths: Vec<_> = plain.hits.iter().map(|hit| hit.relative.as_str()).collect();
+        assert!(plain_paths.contains(&"notes/readme.txt"));
+        assert!(plain_paths.contains(&"vendor/extra.md"));
+        assert!(plain.hits.iter().all(|hit| !hit.relative.contains("blob")
+            && !hit.path.components().any(|c| c.as_os_str() == ".git")));
+        let script = collect_text(&worker, 3, "SCRIPT_NEEDLE", &extensions)?;
+        assert_eq!(script.hits.len(), 1);
+        assert!(!script.hits[0].indexed);
+        assert_eq!(script.hits[0].relative, "app.js");
+        let indexed = collect_text(&worker, 4, "INDEX_NEEDLE", &extensions)?;
+        assert_eq!(indexed.hits.len(), 1);
+        assert!(indexed.hits[0].indexed);
+        let css = collect_text(&worker, 11, "CSS_NEEDLE", &extensions)?;
+        assert_eq!(css.hits.len(), 1);
+        assert!(css.hits[0].indexed);
+        assert!(css.hits[0].relative.ends_with("theme.css"));
+        assert_cache_and_names(&worker, root, &extensions, plain.hits.len())?;
+        Ok(())
+    }
+
+    fn write_search_fixture(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(root.join("src"))?;
+        std::fs::create_dir_all(root.join("notes"))?;
+        std::fs::create_dir_all(root.join("vendor"))?;
+        std::fs::create_dir_all(root.join("data"))?;
+        std::fs::create_dir_all(root.join(".git"))?;
+        std::fs::write(root.join(".gitignore"), "notes/\n")?;
+        std::fs::write(
+            root.join("src/Widget.php"),
+            "<?php\nclass Widget { const INDEX_NEEDLE = 1; const SHARED_NEEDLE = 2; }\n",
+        )?;
+        std::fs::write(root.join("src/theme.css"), ".box { color: CSS_NEEDLE; }\n")?;
+        std::fs::write(
+            root.join("notes/readme.txt"),
+            "plain PLAIN_NEEDLE\nshared SHARED_NEEDLE\n",
+        )?;
+        std::fs::write(root.join("vendor/extra.md"), "markdown PLAIN_NEEDLE\n")?;
+        std::fs::write(root.join("app.js"), "const SCRIPT_NEEDLE = true;\n")?;
+        std::fs::write(root.join("data/blob.bin"), b"PLAIN_NEEDLE\0HIDDEN")?;
+        std::fs::write(root.join(".git/config"), "PLAIN_NEEDLE\n")?;
+        Ok(())
+    }
+
+    fn assert_cache_and_names(
+        worker: &FileSystem,
+        root: &std::path::Path,
+        extensions: &[String],
+        plain_len: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let again = collect_text(worker, 5, "PLAIN_NEEDLE", extensions)?;
+        assert_eq!(
+            again.files_read, 0,
+            "the same query must not reread the project"
+        );
+        assert_eq!(again.hits.len(), plain_len);
+        std::fs::write(root.join("notes/readme.txt"), "plain edited\n")?;
+        assert!(worker.send(Command::ForgetSearch(root.join("notes/readme.txt"))));
+        let forgotten = collect_text(worker, 6, "PLAIN_NEEDLE", extensions)?;
+        assert_eq!(
+            forgotten.files_read, 1,
+            "only the changed file is read again"
+        );
+        assert!(
+            forgotten
+                .hits
+                .iter()
+                .all(|hit| hit.relative != "notes/readme.txt")
+        );
+        assert!(
+            forgotten
+                .hits
+                .iter()
+                .any(|hit| hit.relative == "vendor/extra.md")
+        );
+        std::fs::write(
+            root.join("src/Widget.php"),
+            "<?php\nclass Widget { const FRESH = 1; }\n",
+        )?;
+        assert!(worker.send(Command::ClearSearchCache));
+        let cleared = collect_text(worker, 7, "INDEX_NEEDLE", extensions)?;
+        assert!(
+            cleared.files_read > 1,
+            "clearing the cache scans the project again"
+        );
+        assert_eq!(cleared.hits.len(), 0);
+        let fresh = collect_text(worker, 8, "FRESH", extensions)?;
+        assert!(
+            fresh
+                .hits
+                .iter()
+                .any(|hit| hit.relative.ends_with("Widget.php"))
+        );
+        assert_file_name(worker, 9, "readme", "notes/readme.txt")?;
+        assert_file_name(worker, 10, "Widget", "Widget.php")?;
+        Ok(())
+    }
+
+    fn assert_file_name(
+        worker: &FileSystem,
+        token: u64,
+        query: &str,
+        relative_suffix: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert!(worker.send(Command::Search {
+            token,
+            query: query.to_owned(),
+        }));
+        let names = worker
+            .replies
+            .recv_timeout(std::time::Duration::from_secs(5))?;
+        let Reply::Matches { files, .. } = names else {
+            return Err("expected file name matches".into());
+        };
+        assert!(
+            files
+                .iter()
+                .any(|file| file.relative.ends_with(relative_suffix))
+        );
+        Ok(())
+    }
+
+    struct Collected {
+        hits: Vec<TextHit>,
+        files_read: usize,
+        saw_scanning: bool,
+    }
+
+    fn collect_text(
+        worker: &FileSystem,
+        token: u64,
+        query: &str,
+        extensions: &[String],
+    ) -> Result<Collected, Box<dyn std::error::Error>> {
+        assert!(worker.send(Command::SearchContent {
+            token,
+            query: query.to_owned(),
+            indexed_extensions: extensions.to_vec(),
+        }));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut collected = Collected {
+            hits: Vec::new(),
+            files_read: 0,
+            saw_scanning: false,
+        };
+        while std::time::Instant::now() < deadline {
+            match worker
+                .replies
+                .recv_timeout(std::time::Duration::from_millis(200))
+            {
+                Ok(Reply::TextMatches {
+                    token: reply_token,
+                    hits,
+                    scanning,
+                    done,
+                    files_read,
+                }) => {
+                    assert_eq!(reply_token, token);
+                    collected.files_read += files_read;
+                    collected.saw_scanning |= scanning;
+                    collected.hits.extend(hits);
+                    if done {
+                        return Ok(collected);
+                    }
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("search worker stopped".into());
+                }
+            }
+        }
+        Err("timed out waiting for text search".into())
     }
 }

@@ -90,6 +90,45 @@ impl NozhikUi {
         }
     }
 
+    pub(crate) fn apply_search_jump(&mut self) {
+        let Some((path, start, end)) = self.search_jump.clone() else {
+            return;
+        };
+        let Some(index) = self
+            .documents
+            .iter()
+            .position(|document| document.path == path)
+        else {
+            return;
+        };
+        if self.documents[index].binary {
+            self.search_jump = None;
+            return;
+        }
+        let jumped = {
+            let document = &mut self.documents[index];
+            document.buffer.position_at(start).and_then(|anchor| {
+                let head = document.buffer.position_at(end)?;
+                document
+                    .buffer
+                    .set_cursors(vec![nozhik_buffer::Cursor { anchor, head }])?;
+                Ok(anchor.line)
+            })
+        };
+        self.search_jump = None;
+        match jumped {
+            Ok(line) => {
+                self.editor.reveal_line = usize::try_from(line).ok();
+            }
+            Err(error) => self.note_status(
+                "navigation",
+                "Search",
+                crate::problems::Severity::Warning,
+                error.to_string(),
+            ),
+        }
+    }
+
     pub(crate) fn open_file(&mut self, path: PathBuf) {
         if let Some(index) = self.documents.iter().position(|d| d.path == path) {
             self.open_document(index);
@@ -214,6 +253,8 @@ impl NozhikUi {
                 Reply::Read { path, text } => self.loaded_file(path, &text, false),
                 Reply::Binary(path) => self.loaded_file(path, "", true),
                 Reply::Saved { path, revision } => {
+                    self.search.forget_path(&path);
+                    self.queue(nozhik_fs_model::Command::ForgetSearch(path.clone()));
                     self.saved(&path, revision);
                     if let Some(document) = self.documents.iter_mut().find(|d| d.path == path)
                         && document.buffer.snapshot().revision == revision
@@ -225,6 +266,13 @@ impl NozhikUi {
                     self.vcs.invalidate();
                 }
                 Reply::Matches { token, files } => self.search.accept(token, files),
+                Reply::TextMatches {
+                    token,
+                    hits,
+                    scanning,
+                    done,
+                    ..
+                } => self.search.accept_text(token, hits, scanning, done),
                 Reply::Error(error) => {
                     if self.openapi_export_failed(&error) {
                         continue;
@@ -326,6 +374,7 @@ impl NozhikUi {
             open: true,
             binary,
         });
+        self.apply_search_jump();
         self.active = self.documents.len().checked_sub(1);
         self.editor.focus_buffer = self
             .documents

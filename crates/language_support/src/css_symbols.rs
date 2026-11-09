@@ -64,6 +64,13 @@ impl ClassIndex {
             .iter()
             .find(|o| (o.location.byte..o.location.byte + o.location.length).contains(&byte))
     }
+    /// CSS selector declarations in name order. Markup usages are omitted.
+    pub fn declarations(&self) -> impl Iterator<Item = &ClassOccurrence> {
+        self.by_name
+            .values()
+            .flat_map(|rows| rows.iter().filter(|row| row.declaration))
+    }
+
     /// All indexed selectors and markup usages, in deterministic path/byte order.
     #[must_use]
     pub fn occurrences(&self, name: &str) -> &[ClassOccurrence] {

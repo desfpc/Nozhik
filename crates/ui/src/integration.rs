@@ -38,6 +38,7 @@ pub struct Integration {
     pub saving: HashMap<PathBuf, u64>,
     pub save_error: Option<String>,
     find: bool,
+    find_focus: bool,
     query: String,
     replacement: String,
     about: bool,
@@ -413,6 +414,7 @@ impl NozhikUi {
                 "ui.find" | "ui.replace" => {
                     if !matches!(self.left, Some(LeftTool::Snippets | LeftTool::HttpRequests)) {
                         self.integration.find = true;
+                        self.integration.find_focus = true;
                     }
                 }
                 "ui.database" => {
@@ -435,8 +437,13 @@ impl NozhikUi {
                         self.integration.fullscreen,
                     ));
                 }
-                "ui.go_file" => self.search.open_filter(2),
-                "ui.recent_files" => self.search.open_filter(6),
+                "ui.go_file" => self
+                    .search
+                    .open_filter(crate::search_everywhere::SearchFilter::Files),
+                "ui.recent_files" => {
+                    self.search
+                        .open_filter(crate::search_everywhere::SearchFilter::Recent);
+                }
                 "ui.recent_projects" => self.left = Some(LeftTool::Project),
                 "ui.definition" => {
                     if let Some(i) = self.active
@@ -706,7 +713,14 @@ impl NozhikUi {
         let mut all = false;
         ui.horizontal(|ui| {
             ui.label("Find");
-            ui.add(crate::form::singleline(&mut self.integration.query));
+            let find_field = ui.add(
+                crate::form::singleline(&mut self.integration.query)
+                    .id(egui::Id::new("nozhik-find-query")),
+            );
+            if self.integration.find_focus {
+                find_field.request_focus();
+                self.integration.find_focus = false;
+            }
             ui.label("Replace");
             ui.add(crate::form::singleline(&mut self.integration.replacement));
             find = ui.button("Next").clicked();
@@ -787,6 +801,7 @@ impl NozhikUi {
             return;
         }
         self.integration.stopped = true;
+        let _cleared = self.fs.send(nozhik_fs_model::Command::ClearSearchCache);
         self.editor.ai.cancel();
         self.vcs.commit_ai.cancel();
         self.vcs.clear_git_secrets();
@@ -993,6 +1008,164 @@ mod tests {
             "Idle frames must sleep until input/worker wake, got {delay:?}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn find_bar_focuses_the_find_field() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut shell = shell(dir.path())?;
+        shell.integration.find = true;
+        shell.integration.find_focus = true;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| shell.find_bar(ui));
+        });
+        let find_id = egui::Id::new("nozhik-find-query");
+        assert!(
+            ctx.memory(|memory| memory.has_focus(find_id)),
+            "Cmd/Ctrl+F must focus the Find field"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn search_hit_selects_the_match_in_an_open_buffer() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut shell = shell(dir.path())?;
+        let path = dir.path().join("notes.txt");
+        shell.loaded_file(path.clone(), "one\nPLAIN_NEEDLE\n", false);
+        let start = "one\n".len();
+        let end = start + "PLAIN_NEEDLE".len();
+        shell.search_jump = Some((path, start, end));
+        assert_eq!(shell.documents.len(), 1);
+        shell.apply_search_jump();
+        let cursors = shell.documents[0].buffer.cursors();
+        let cursor = cursors.as_slice().first().ok_or("expected a caret")?;
+        assert_eq!(cursor.anchor.byte_offset, start);
+        assert_eq!(cursor.head.byte_offset, end);
+        assert_eq!(shell.editor.reveal_line, Some(1));
+        assert!(shell.search_jump.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn search_everywhere_reads_indexed_and_plain_project_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src"))?;
+        std::fs::create_dir_all(root.join("notes"))?;
+        std::fs::write(
+            root.join("src/Widget.php"),
+            "<?php\nconst INDEX_NEEDLE = 1;\n",
+        )?;
+        std::fs::write(root.join("notes/readme.txt"), "plain PLAIN_NEEDLE\n")?;
+        std::fs::write(root.join("data.bin"), b"PLAIN_NEEDLE\0NO")?;
+        let mut shell = shell(root)?;
+        shell.open_project(root.to_path_buf());
+        wait_until(&mut shell, |shell| shell.project.is_some())?;
+        shell
+            .search
+            .stage_query(crate::search_everywhere::SearchFilter::All, "NEEDLE");
+        let (token, query) = shell.search.take_request().ok_or("missing file request")?;
+        shell.queue(nozhik_fs_model::Command::Search { token, query });
+        let (token, query) = shell
+            .search
+            .take_text_request()
+            .ok_or("missing text request")?;
+        shell.queue(nozhik_fs_model::Command::SearchContent {
+            token,
+            query,
+            indexed_extensions: crate::search_everywhere::indexed_extensions(),
+        });
+        wait_until(&mut shell, |shell| {
+            !shell.search.scanning()
+                && shell
+                    .search
+                    .labels(&shell.documents)
+                    .iter()
+                    .any(|label| label.contains("INDEX_NEEDLE"))
+        })?;
+        let labels = shell.search.labels(&shell.documents);
+        assert!(labels.iter().any(|label| label.contains("PLAIN_NEEDLE")));
+        assert!(labels.iter().all(|label| !label.contains("data.bin")));
+        let indexed_at = labels
+            .iter()
+            .position(|label| label.contains("INDEX_NEEDLE"))
+            .ok_or("indexed hit")?;
+        let plain_at = labels
+            .iter()
+            .position(|label| label.contains("PLAIN_NEEDLE"))
+            .ok_or("plain hit")?;
+        assert!(indexed_at < plain_at);
+        shell
+            .search
+            .stage_query(crate::search_everywhere::SearchFilter::Text, "NEEDLE");
+        let (token, query) = shell.search.take_text_request().ok_or("missing text tab")?;
+        shell.queue(nozhik_fs_model::Command::SearchContent {
+            token,
+            query,
+            indexed_extensions: crate::search_everywhere::indexed_extensions(),
+        });
+        wait_until(&mut shell, |shell| {
+            !shell.search.scanning() && shell.search.labels(&shell.documents).len() >= 2
+        })?;
+        let text = shell.search.labels(&shell.documents);
+        assert!(text.iter().all(|label| label.contains(':')));
+        assert!(text.iter().any(|label| label.contains("INDEX_NEEDLE")));
+        assert!(text.iter().any(|label| label.contains("PLAIN_NEEDLE")));
+        request_files(&mut shell, "readme")?;
+        wait_until(&mut shell, |shell| labels_contain(shell, "readme.txt"))?;
+        request_files(&mut shell, "Widget")?;
+        wait_until(&mut shell, |shell| labels_contain(shell, "Widget.php"))?;
+        shell
+            .search
+            .stage_query(crate::search_everywhere::SearchFilter::All, "Widget");
+        let (token, query) = shell
+            .search
+            .take_request()
+            .ok_or("missing all-files request")?;
+        shell.queue(nozhik_fs_model::Command::Search { token, query });
+        wait_until(&mut shell, |shell| {
+            shell
+                .search
+                .labels(&shell.documents)
+                .iter()
+                .any(|label| label.contains("Widget.php") && !label.contains(':'))
+        })?;
+        Ok(())
+    }
+
+    fn request_files(shell: &mut NozhikUi, query: &str) -> Result<(), Box<dyn std::error::Error>> {
+        shell
+            .search
+            .stage_query(crate::search_everywhere::SearchFilter::Files, query);
+        let (token, query) = shell.search.take_request().ok_or("missing files tab")?;
+        shell.queue(nozhik_fs_model::Command::Search { token, query });
+        Ok(())
+    }
+
+    fn labels_contain(shell: &NozhikUi, needle: &str) -> bool {
+        shell
+            .search
+            .labels(&shell.documents)
+            .iter()
+            .any(|label| label.contains(needle))
+    }
+
+    fn wait_until(
+        shell: &mut NozhikUi,
+        mut ready: impl FnMut(&NozhikUi) -> bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            shell.receive_files();
+            if ready(shell) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err("timed out waiting for project search".into())
     }
 }
 

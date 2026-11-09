@@ -68,6 +68,11 @@ impl FileIndex {
         results.truncate(limit);
         results
     }
+
+    /// All indexed paths, in scan order. Scores are unset.
+    pub(crate) fn snapshot(&self) -> Vec<FileMatch> {
+        self.files.clone()
+    }
 }
 /// Converts native components to a display/search path, leaving I/O paths native.
 #[must_use]

@@ -219,7 +219,8 @@ impl NozhikUi {
                     .width(220.0)
                     .show(|ui| {
                         if ui.button("Go to File…").clicked() {
-                            self.search.open_filter(2);
+                            self.search
+                                .open_filter(crate::search_everywhere::SearchFilter::Files);
                             ui.close();
                         }
                         ui.separator();

@@ -78,7 +78,7 @@ impl DeploymentSettings {
             !self.profile.is_empty() && !profiles.iter().any(|p| p.name == self.profile);
         ui.label("Remote project root");
         ui.add(
-            egui::TextEdit::singleline(&mut self.root)
+            crate::form::singleline(&mut self.root)
                 .hint_text("/var/www/project")
                 .desired_width(f32::INFINITY),
         );

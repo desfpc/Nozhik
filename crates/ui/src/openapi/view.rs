@@ -202,7 +202,7 @@ fn variable_fields(ui: &mut Ui, salt: &str, variables: &[spec::ServerVar], value
             ui.label(&variable.name);
             if variable.choices.is_empty() {
                 ui.add(
-                    TextEdit::singleline(value)
+                    crate::form::singleline(value)
                         .desired_width(220.0)
                         .hint_text(&variable.default_value),
                 );
@@ -654,7 +654,7 @@ fn widget_for(
         _ => {
             let response = ui.add_enabled(
                 trying,
-                TextEdit::singleline(value)
+                crate::form::singleline(value)
                     .hint_text(&parameter.name)
                     .desired_width(280.0)
                     .font(egui::TextStyle::Monospace),
@@ -1188,6 +1188,7 @@ fn authorize_modal(ctx: &egui::Context, state: &mut FileState) {
         Parsed::Invalid(_) => Vec::new(),
     };
     egui::Modal::new(egui::Id::new("openapi-auth")).show(ctx, |ui| {
+        crate::form::begin(ui);
         ui.set_width(520.0);
         ui.horizontal(|ui| {
             ui.heading("Available authorizations");
@@ -1249,10 +1250,10 @@ fn scheme_fields(ui: &mut Ui, state: &mut FileState, scheme: &spec::Scheme) {
         spec::SchemeKind::Basic => {
             let input = state.auth.entry(scheme.name.clone()).or_default();
             ui.label("Username");
-            ui.add(TextEdit::singleline(&mut input.username).desired_width(f32::INFINITY));
+            ui.add(crate::form::singleline(&mut input.username).desired_width(f32::INFINITY));
             ui.label("Password");
             ui.add(
-                TextEdit::singleline(&mut input.password)
+                crate::form::singleline(&mut input.password)
                     .password(true)
                     .desired_width(f32::INFINITY),
             );
@@ -1308,7 +1309,7 @@ fn token_field(ui: &mut Ui, state: &mut FileState, name: &str) {
     ui.label("Value:");
     let input = state.auth.entry(name.to_string()).or_default();
     ui.add(
-        TextEdit::singleline(&mut input.token)
+        crate::form::singleline(&mut input.token)
             .password(true)
             .desired_width(f32::INFINITY),
     );

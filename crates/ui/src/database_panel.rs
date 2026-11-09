@@ -1116,8 +1116,9 @@ impl NozhikUi {
                     .max_height((ctx.screen_rect().height() - 100.0).max(100.0))
                     .show(ui, |ui| {
                         ui.add_enabled_ui(!self.database.saving, |ui| {
+                            crate::form::begin(ui);
                             ui.label("Connection name");
-                            ui.text_edit_singleline(&mut form.profile.name);
+                            ui.add(crate::form::singleline(&mut form.profile.name));
                             egui::ComboBox::from_id_salt("db_driver")
                                 .selected_text(format!("{:?}", form.profile.driver))
                                 .show_ui(ui, |ui| {
@@ -1148,7 +1149,7 @@ impl NozhikUi {
                             if form.profile.driver != DbDriverType::Sqlite {
                                 ui.horizontal(|ui| {
                                     ui.label("Host");
-                                    ui.text_edit_singleline(&mut form.profile.host);
+                                    ui.add(crate::form::singleline(&mut form.profile.host));
                                     ui.label("Port");
                                     ui.add(
                                         egui::DragValue::new(&mut form.profile.port)
@@ -1156,15 +1157,13 @@ impl NozhikUi {
                                     );
                                 });
                                 ui.label("User");
-                                ui.text_edit_singleline(&mut form.profile.user);
+                                ui.add(crate::form::singleline(&mut form.profile.user));
                                 ui.label(if form.original.is_some() {
                                     "Password (blank keeps saved password for unchanged endpoint)"
                                 } else {
                                     "Password"
                                 });
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut form.password).password(true),
-                                );
+                                ui.add(crate::form::singleline(&mut form.password).password(true));
                                 ui.checkbox(
                                     &mut form.profile.save_password,
                                     "Save password in system credential store",
@@ -1198,7 +1197,7 @@ impl NozhikUi {
                             } else {
                                 "Database"
                             });
-                            ui.text_edit_singleline(&mut form.profile.database);
+                            ui.add(crate::form::singleline(&mut form.profile.database));
                             if form.tested {
                                 ui.colored_label(crate::theme::success(), "Test succeeded");
                             }
@@ -1306,9 +1305,10 @@ impl NozhikUi {
         let mut cancel = false;
         if let Some(profile) = &self.database.login {
             let modal = egui::Modal::new(egui::Id::new("database_login")).show(ctx, |ui| {
+                crate::form::begin(ui);
                 ui.heading(format!("Connect: {}", profile.name));
                 ui.label("Session password");
-                ui.add(egui::TextEdit::singleline(&mut self.database.password).password(true));
+                ui.add(crate::form::singleline(&mut self.database.password).password(true));
                 ui.horizontal(|ui| {
                     login = ui.button("Connect").clicked();
                     cancel = ui.button("Cancel").clicked();

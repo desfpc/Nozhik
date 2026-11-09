@@ -152,7 +152,7 @@ impl UsagesPopup {
             ui.label("All Places");
             ui.checkbox(&mut self.grouped, "Group by file");
             ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
+                crate::form::singleline(&mut self.filter)
                     .hint_text("Filter file / code")
                     .desired_width(180.0),
             );

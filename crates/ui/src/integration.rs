@@ -599,6 +599,7 @@ impl NozhikUi {
         let mut accept = false;
         let mut cancel = false;
         let modal = egui::Modal::new(egui::Id::new("path_dialog")).show(ctx, |ui| {
+            crate::form::begin(ui);
             ui.heading(match action {
                 PathAction::NewProject => "New project",
                 PathAction::New => "New file",
@@ -614,7 +615,7 @@ impl NozhikUi {
             }
             let input = ui.add_enabled(
                 !self.integration.creating_project,
-                egui::TextEdit::singleline(&mut self.integration.path),
+                crate::form::singleline(&mut self.integration.path),
             );
             if self.integration.path_focus {
                 input.request_focus();
@@ -705,9 +706,9 @@ impl NozhikUi {
         let mut all = false;
         ui.horizontal(|ui| {
             ui.label("Find");
-            ui.text_edit_singleline(&mut self.integration.query);
+            ui.add(crate::form::singleline(&mut self.integration.query));
             ui.label("Replace");
-            ui.text_edit_singleline(&mut self.integration.replacement);
+            ui.add(crate::form::singleline(&mut self.integration.replacement));
             find = ui.button("Next").clicked();
             replace = ui.button("Replace").clicked();
             all = ui.button("Replace All").clicked();

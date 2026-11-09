@@ -554,14 +554,19 @@ impl VcsPanel {
     }
     pub(crate) fn panel(&mut self, ui: &mut egui::Ui) {
         let count = self.repo.as_ref().map_or(0, |r| r.changes.len());
-        let tab_width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
         ui.horizontal(|ui| {
-            for (mode, label) in [
-                (Mode::Changes, format!("Changes [{count}]")),
-                (Mode::History, "History".into()),
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let full = ui.available_width();
+            let left = (full * 0.5).floor();
+            let right = (full - left).max(0.0);
+            // Fill the row. A shorter tab leaves the panel color as a band under the labels.
+            let tab_height = ui.available_height().max(30.0);
+            for (mode, label, tab_width) in [
+                (Mode::Changes, format!("Changes [{count}]"), left),
+                (Mode::History, "History".to_owned(), right),
             ] {
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(tab_width, 30.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(tab_width, tab_height), egui::Sense::click());
                 ui.painter().rect_filled(
                     rect,
                     0,
@@ -605,7 +610,6 @@ impl VcsPanel {
                 }
             }
         });
-        ui.separator();
         let Some(_repo) = &self.repo else {
             ui.weak("No Git repository found in this project");
             return;
@@ -745,13 +749,13 @@ impl VcsPanel {
             .min_scrolled_height(height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = gap;
+                ui.spacing_mut().item_spacing.y = gap + crate::form::GAP;
                 let pane_width = ui.available_width();
                 let summary_width = text_width(ui, &self.summary).max(pane_width);
                 ui.set_width(summary_width);
                 self.commit_ai_button(ui, staged);
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.summary)
+                    crate::form::singleline(&mut self.summary)
                         .id(commit_summary_id())
                         .hint_text("Summary (required)")
                         .desired_width(summary_width)

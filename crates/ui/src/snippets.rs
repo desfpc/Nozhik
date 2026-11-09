@@ -289,7 +289,6 @@ impl Snippets {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(8.0);
-                ui.set_width((ui.available_width() - 8.0).max(0.0));
                 section_label(ui, "Favorites");
                 if nav_row(
                     ui,
@@ -697,25 +696,12 @@ impl Snippets {
     }
 
     fn show_list(&mut self, ui: &mut Ui, enabled: bool) {
-        ui.horizontal(|ui| {
-            let width = (ui.available_width() - 36.0).max(40.0);
-            ui.add_sized(
-                Vec2::new(width, 28.0),
-                TextEdit::singleline(&mut self.query)
-                    .id(search_id())
-                    .hint_text("Search...")
-                    .desired_width(width),
-            );
-            let add = ui
-                .add_enabled(
-                    enabled && self.can_edit(),
-                    egui::Button::new("+").min_size(Vec2::splat(28.0)),
-                )
-                .on_hover_text("New snippet");
-            if add.clicked() {
-                self.create();
-            }
-        });
+        let can_add = enabled && self.can_edit();
+        let add =
+            crate::form::search_add_row(ui, &mut self.query, search_id(), can_add, "New snippet");
+        if add.clicked() {
+            self.create();
+        }
         if self.query.ends_with('\n') {
             self.query.pop();
         }
@@ -1020,7 +1006,7 @@ impl Snippets {
                             });
                         }
                         ui.add_space(8.0);
-                        let output = TextEdit::singleline(&mut self.tag_draft)
+                        let output = crate::form::singleline(&mut self.tag_draft)
                             .id(tag_id())
                             .hint_text("Add a tag")
                             .desired_width(f32::INFINITY)
@@ -1203,7 +1189,10 @@ impl Snippets {
 
 /// Tag sidebar surface. The list and editor are drawn in the central panel.
 pub fn sidebar_frame() -> Frame {
-    Frame::new().fill(theme::panel()).inner_margin(0)
+    // Horizontal inset keeps section titles and rows off the column border.
+    Frame::new()
+        .fill(theme::panel())
+        .inner_margin(Margin::symmetric(8, 0))
 }
 
 /// Editor surface behind the snippet text.

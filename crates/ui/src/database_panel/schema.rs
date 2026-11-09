@@ -398,11 +398,12 @@ pub(super) fn sql_preview_height(ui: &mut egui::Ui, sql: &str, height: f32) {
         });
 }
 fn settings_form(ui: &mut egui::Ui, driver: DbDriverType, draft: &mut Settings) {
+    crate::form::begin(ui);
     ui.horizontal(|ui| {
         ui.label("Name:");
         ui.add_enabled(
             driver == DbDriverType::Postgres,
-            egui::TextEdit::singleline(&mut draft.name),
+            crate::form::singleline(&mut draft.name),
         );
     });
     match driver {
@@ -421,11 +422,11 @@ fn settings_form(ui: &mut egui::Ui, driver: DbDriverType, draft: &mut Settings) 
         DbDriverType::Postgres => {
             ui.horizontal(|ui| {
                 ui.label("Owner:");
-                ui.text_edit_singleline(&mut draft.owner);
+                ui.add(crate::form::singleline(&mut draft.owner));
             });
             ui.horizontal(|ui| {
                 ui.label("Comment:");
-                ui.text_edit_singleline(&mut draft.comment);
+                ui.add(crate::form::singleline(&mut draft.comment));
             });
         }
         DbDriverType::Sqlite => {
@@ -452,14 +453,14 @@ fn grants_form(ui: &mut egui::Ui, driver: DbDriverType, grants: &mut Vec<Grant>)
         ui.push_id(index, |ui| {
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut grant.user)
+                    crate::form::singleline(&mut grant.user)
                         .hint_text("User / role")
                         .desired_width(150.0),
                 );
                 if driver == DbDriverType::Mysql {
                     ui.label("@");
                     ui.add(
-                        egui::TextEdit::singleline(&mut grant.host)
+                        crate::form::singleline(&mut grant.host)
                             .hint_text("Host")
                             .desired_width(130.0),
                     );
@@ -497,6 +498,7 @@ fn grants_form(ui: &mut egui::Ui, driver: DbDriverType, grants: &mut Vec<Grant>)
     }
 }
 fn export_form(ui: &mut egui::Ui, options: &mut ExportOptions, tables: &[String]) {
+    crate::form::begin(ui);
     ui.label("Extractor:");
     ui.horizontal(|ui| {
         ui.selectable_value(&mut options.format, Format::Sql, "SQL Inserts");
@@ -539,7 +541,7 @@ fn export_form(ui: &mut egui::Ui, options: &mut ExportOptions, tables: &[String]
             });
         ui.horizontal(|ui| {
             ui.label("NULL value:");
-            ui.text_edit_singleline(&mut options.null);
+            ui.add(crate::form::singleline(&mut options.null));
         });
     }
 }

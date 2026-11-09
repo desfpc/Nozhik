@@ -33,19 +33,19 @@ impl VcsPanel {
         if self.git_settings.snapshot.is_some() {
             ui.add_enabled_ui(!busy, |ui| {
                 ui.label("Origin fetch URL");
-                ui.add(egui::TextEdit::singleline(&mut self.git_settings.draft.remote_url).desired_width(f32::INFINITY));
+                ui.add(crate::form::singleline(&mut self.git_settings.draft.remote_url).desired_width(f32::INFINITY));
                 ui.label("Origin push URL (optional)");
-                ui.add(egui::TextEdit::singleline(&mut self.git_settings.draft.push_url).hint_text("Use fetch URL").desired_width(f32::INFINITY));
+                ui.add(crate::form::singleline(&mut self.git_settings.draft.push_url).hint_text("Use fetch URL").desired_width(f32::INFINITY));
                 ui.separator();
                 ui.label("Commit author name");
-                ui.add(egui::TextEdit::singleline(&mut self.git_settings.draft.author_name).desired_width(f32::INFINITY));
+                ui.add(crate::form::singleline(&mut self.git_settings.draft.author_name).desired_width(f32::INFINITY));
                 ui.label("Commit author email");
-                ui.add(egui::TextEdit::singleline(&mut self.git_settings.draft.author_email).desired_width(f32::INFINITY));
+                ui.add(crate::form::singleline(&mut self.git_settings.draft.author_email).desired_width(f32::INFINITY));
                 ui.small("Author identity is used for local commits. Blank values use system Git settings.");
                 ui.separator();
                 if let Err(error) = self.git_settings.auth.show(ui) { self.git_settings.error = Some(error); }
                 ui.label("Credential helper (optional)");
-                ui.add(egui::TextEdit::singleline(&mut self.git_settings.draft.credential_helper).hint_text("Use system Git helper").desired_width(f32::INFINITY));
+                ui.add(crate::form::singleline(&mut self.git_settings.draft.credential_helper).hint_text("Use system Git helper").desired_width(f32::INFINITY));
             });
         }
         ui.horizontal_wrapped(|ui| {

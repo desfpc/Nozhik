@@ -69,7 +69,7 @@ impl NozhikUi {
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 260.0).max(100.0);
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.welcome.filter)
+                        crate::form::singleline(&mut self.welcome.filter)
                             .hint_text("Search projects")
                             .desired_width(width),
                     );

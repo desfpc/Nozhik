@@ -4016,3 +4016,59 @@ Windows-комплект не обновлялся.
 binaries — 110 MiB. Исходники, история и готовые актуальные бинарники со всеми
 legal materials сохранены; после очистки сборок не было.
 
+### Поля форм (v0.1.47, 2026-11-09)
+
+Однострочные поля идут через `ui::form::singleline`: высота совпадает с кнопкой,
+текст выровнен по вертикали. `form::begin` добавляет 2 логических пикселя между
+строками формы и не меняет списки. `interact_size` равен высоте кнопки, поэтому
+выпадающий список страниц таблицы стоит на одной линии с кнопками. Колонки
+Snippets и HTTP Requests имеют боковой отступ 8. Вкладки Git Changes и History
+стоят вплотную, без пустой полосы под ними. Обычный шрифт интерфейса берёт
+недостающие символы (`●`, `→`) из Noto Sans Symbols 2 и JetBrains Mono.
+
+Версия workspace/lock — 0.1.47, следующая — 0.1.48.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features --offline -- --test-threads=8 — 385 passed,
+0 failed, 10 прежних optional ignored. Headless-тест сверяет высоту однострочного
+поля и центр его текста с кнопкой, а выпадающий список страниц — с той же линией.
+Пропорциональный шрифт покрывает ● → ▶ ▼ · ✓. Ручной native GUI и Windows
+build/Clippy не запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+45f0f789e09e06b338058568054875ff0a821aa44ed1b6695f7c838ead0711a3 и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 8.2 GiB (25169 файлов).
+Удалены Finder .DS_Store, включая файл в binaries/macos-arm64, из-за которого
+--check видел лишний payload. Финальный размер проекта — 395 MiB,
+binaries — 110 MiB. Исходники, история и готовые актуальные бинарники со всеми
+legal materials сохранены; после очистки сборок не было.
+
+### Строка поиска (v0.1.48, 2026-11-09)
+
+Кнопка «+» в Snippets и HTTP Requests больше не выходит за колонку. Ширина поля
+Search считается по рамке, а не по тексту внутри неё, поэтому кнопка остаётся
+внутри строки. Справа остаётся тот же отступ 8, что и слева у поля.
+
+Версия workspace/lock — 0.1.48, следующая — 0.1.49.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features --offline -- --test-threads=8 — 386 passed,
+0 failed, 10 прежних optional ignored. Headless-тест держит правый край кнопки
+«+» на краю отведённой строки. Ручной native GUI и Windows build/Clippy не
+запускались. Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+12a116711c08236c9a27114999e81c97c0f96871e4be3969195293fe5d20893d и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 9.1 GiB (29170 файлов).
+Удалены Finder .DS_Store. Финальный размер проекта — 395 MiB, binaries — 110 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+

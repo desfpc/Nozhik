@@ -177,7 +177,7 @@ impl SearchEverywhere {
                 });
                 ui.separator();
                 let input = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
+                    crate::form::singleline(&mut self.query)
                         .hint_text("Type / to see commands")
                         .desired_width(f32::INFINITY),
                 );

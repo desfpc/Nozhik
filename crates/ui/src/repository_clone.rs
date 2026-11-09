@@ -181,6 +181,7 @@ impl CloneDialog {
                 .max_height((ctx.screen_rect().height() - 150.0).max(120.0))
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!busy, |ui| {
+                        crate::form::begin(ui);
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.github, true, "GitHub.com");
                             ui.selectable_value(&mut self.github, false, "URL");
@@ -195,8 +196,7 @@ impl CloneDialog {
                         ui.label("Local destination (new project directory)");
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(&mut self.destination)
-                                    .desired_width(485.0),
+                                crate::form::singleline(&mut self.destination).desired_width(485.0),
                             );
                             if ui.button("Choose…").clicked() {
                                 match crate::project_dialog::pick(
@@ -297,7 +297,7 @@ impl CloneDialog {
         ui.label("Personal access token");
         if ui
             .add(
-                egui::TextEdit::singleline(&mut *self.token)
+                crate::form::singleline(&mut *self.token)
                     .password(true)
                     .desired_width(f32::INFINITY),
             )
@@ -326,7 +326,7 @@ impl CloneDialog {
             ui.label(format!("Connected as {login}"));
         }
         ui.add(
-            egui::TextEdit::singleline(&mut self.filter)
+            crate::form::singleline(&mut self.filter)
                 .hint_text("Filter your repositories")
                 .desired_width(f32::INFINITY),
         );
@@ -359,7 +359,7 @@ impl CloneDialog {
     }
     fn url_form(&mut self, ui: &mut egui::Ui) {
         ui.label("Repository URL or GitHub owner/repository");
-        ui.add(egui::TextEdit::singleline(&mut self.url).desired_width(f32::INFINITY));
+        ui.add(crate::form::singleline(&mut self.url).desired_width(f32::INFINITY));
         if let Err(error) = self.connection.show(ui) {
             self.error = Some(error);
         }

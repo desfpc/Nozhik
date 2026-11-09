@@ -5,7 +5,7 @@
 //! splitter width stay shared so layout does not change with the palette.
 use egui::{Color32, Context, Stroke, Visuals};
 use serde::Deserialize;
-use std::{cell::RefCell, sync::OnceLock};
+use std::{cell::RefCell, sync::Arc, sync::OnceLock};
 
 /// Logical corner radius shared by controls and windows.
 pub const RADIUS: u8 = 8;
@@ -459,11 +459,40 @@ pub fn apply_id(ctx: &Context, id: &str) {
     install(id);
     ensure_fonts(ctx);
     ctx.set_visuals(visuals());
+    let button_padding = egui::vec2(9.0, f32::from(CONTROL_PAD_Y));
     ctx.style_mut(|style| {
         style.interaction.resize_grab_radius_side = SPLITTER;
-        style.spacing.button_padding = egui::vec2(9.0, 6.0);
+        style.spacing.button_padding = button_padding;
         style.spacing.item_spacing = egui::vec2(6.0, 4.0);
     });
+    // Fonts are not readable until the first pass. The hook runs after that pass
+    // starts, so `interact_size` matches a button before any widget is built.
+    // `horizontal` and `ComboBox` size their row from that value.
+    install_control_height(ctx);
+}
+
+fn install_control_height(ctx: &Context) {
+    let id = egui::Id::new("nozhik-control-height");
+    if ctx.data(|data| data.get_temp::<bool>(id).unwrap_or(false)) {
+        return;
+    }
+    ctx.on_begin_pass(
+        "nozhik-control-height",
+        Arc::new(|ctx| {
+            let control_height =
+                f32::mul_add(f32::from(CONTROL_PAD_Y), 2.0, button_row_height(ctx));
+            ctx.style_mut(|style| style.spacing.interact_size.y = control_height);
+        }),
+    );
+    ctx.data_mut(|data| data.insert_temp(id, true));
+}
+
+/// Vertical button padding, in logical pixels. Single-line fields use the same value.
+pub(crate) const CONTROL_PAD_Y: i8 = 6;
+
+fn button_row_height(ctx: &Context) -> f32 {
+    let font = egui::TextStyle::Button.resolve(&ctx.style());
+    ctx.fonts(|fonts| fonts.row_height(&font))
 }
 
 fn visuals() -> Visuals {
@@ -581,6 +610,16 @@ fn ensure_fonts(ctx: &Context) {
     fonts
         .families
         .insert(egui::FontFamily::Name("Terminal".into()), terminal);
+    // Ubuntu-Light has no black circle or arrow, so proportional labels such as
+    // "● Connected" and "Mouse → agent" were drawing missing-glyph squares.
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let stack = fonts.families.entry(family).or_default();
+        for name in ["Noto Sans Symbols 2", "JetBrains Mono"] {
+            if !stack.iter().any(|item| item == name) {
+                stack.push(name.to_owned());
+            }
+        }
+    }
     ctx.set_fonts(fonts);
     ctx.data_mut(|data| data.insert_temp(id, FontsReady));
 }
@@ -913,6 +952,24 @@ mod tests {
                     assert!(
                         fonts.has_glyph(&font, character),
                         "missing terminal glyph U+{:04X}",
+                        u32::from(character)
+                    );
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn proportional_ui_font_covers_status_and_arrow_symbols() {
+        let ctx = egui::Context::default();
+        super::apply(&ctx);
+        let _output = ctx.run(egui::RawInput::default(), |ctx| {
+            let font = egui::FontId::proportional(14.0);
+            ctx.fonts(|fonts| {
+                for character in ['●', '→', '▶', '▼', '·', '✓'] {
+                    assert!(
+                        fonts.has_glyph(&font, character),
+                        "missing proportional glyph U+{:04X} {character}",
                         u32::from(character)
                     );
                 }

@@ -16,8 +16,8 @@ pub(crate) use model::{
 use crate::theme;
 use crate::tool_icons;
 use egui::{
-    Color32, Context, Frame, Id, Key, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, TextEdit,
-    Ui, Vec2,
+    Color32, Context, Frame, Id, Key, Margin, Pos2, Rect, RichText, ScrollArea, Sense, Stroke,
+    TextEdit, Ui, Vec2,
 };
 use model::{
     FILE_NAME, Field, MAX_BODY_BYTES, MAX_REQUESTS, Request, Store, absorb_url_query,
@@ -642,26 +642,12 @@ impl HttpRequests {
     }
 
     fn show_list(&mut self, ui: &mut Ui, enabled: bool) {
-        ui.horizontal(|ui| {
-            let width = (ui.available_width() - 36.0).max(40.0);
-            ui.add_sized(
-                Vec2::new(width, 28.0),
-                TextEdit::singleline(&mut self.query)
-                    .id(search_id())
-                    .hint_text("Search...")
-                    .desired_width(width),
-            );
-            if ui
-                .add_enabled(
-                    enabled && self.can_edit(),
-                    egui::Button::new("+").min_size(Vec2::splat(28.0)),
-                )
-                .on_hover_text("New request")
-                .clicked()
-            {
-                self.create();
-            }
-        });
+        let can_add = enabled && self.can_edit();
+        if crate::form::search_add_row(ui, &mut self.query, search_id(), can_add, "New request")
+            .clicked()
+        {
+            self.create();
+        }
         ui.add_space(8.0);
         if !self.loaded {
             ui.weak("Loading requests…");
@@ -773,10 +759,11 @@ impl HttpRequests {
             .id_salt(("http_editor", request_id.clone()))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                crate::form::begin(ui);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(enabled && self.can_edit(), |ui| {
-                        let name = TextEdit::singleline(&mut self.file.requests[index].name)
+                        let name = crate::form::singleline(&mut self.file.requests[index].name)
                             .id(name_id(&request_id))
                             .hint_text("Request name")
                             .desired_width((ui.available_width() - 220.0).max(120.0));
@@ -809,7 +796,7 @@ impl HttpRequests {
                             self.file.requests[index].method = method;
                             builder_changed = true;
                         }
-                        let url = TextEdit::singleline(&mut self.file.requests[index].url)
+                        let url = crate::form::singleline(&mut self.file.requests[index].url)
                             .id(url_id(&request_id))
                             .hint_text("https://example.com/path")
                             .desired_width((ui.available_width() - 88.0).max(160.0));
@@ -960,7 +947,7 @@ impl HttpRequests {
                 }
             });
             let editable = enabled && self.can_edit();
-            let editor = TextEdit::singleline(&mut self.tag_draft)
+            let editor = crate::form::singleline(&mut self.tag_draft)
                 .id(tag_id(&request_id))
                 .hint_text("Add a tag")
                 .desired_width(180.0);
@@ -1334,7 +1321,10 @@ impl HttpRequests {
 
 /// Tag sidebar surface.
 pub(crate) fn sidebar_frame() -> Frame {
-    Frame::new().fill(theme::panel()).inner_margin(0)
+    // Horizontal inset keeps section titles and rows off the column border.
+    Frame::new()
+        .fill(theme::panel())
+        .inner_margin(Margin::symmetric(8, 0))
 }
 
 /// Builder surface.
@@ -1476,14 +1466,14 @@ fn edit_fields(ui: &mut Ui, request_id: &str, kind: &str, fields: &mut Vec<Field
             if ui.checkbox(&mut field.enabled, "").changed() {
                 changed = true;
             }
-            let name = TextEdit::singleline(&mut field.name)
+            let name = crate::form::singleline(&mut field.name)
                 .id(field_id(request_id, kind, index, "name"))
                 .hint_text("Name")
                 .desired_width(160.0);
             if ui.add(name).changed() {
                 changed = true;
             }
-            let value = TextEdit::singleline(&mut field.value)
+            let value = crate::form::singleline(&mut field.value)
                 .id(field_id(request_id, kind, index, "value"))
                 .hint_text("Value")
                 .desired_width((ui.available_width() - 36.0).max(80.0));

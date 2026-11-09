@@ -254,10 +254,7 @@ impl Models {
             ui.add(egui::DragValue::new(&mut config.ai_debounce_ms).range(50..=5000));
         });
         ui.label("Model name");
-        ui.add_enabled(
-            !self.pulling,
-            egui::TextEdit::singleline(&mut config.ai_model),
-        );
+        ui.add_enabled(!self.pulling, crate::form::singleline(&mut config.ai_model));
         if self.model != config.ai_model {
             self.model.clone_from(&config.ai_model);
             self.start(ui.ctx(), false);

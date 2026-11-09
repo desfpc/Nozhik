@@ -72,7 +72,7 @@ impl Picker {
                     }
                     ui.horizontal(|ui| {
                         ui.label("Hex");
-                        if ui.text_edit_singleline(&mut self.hex).changed()
+                        if ui.add(crate::form::singleline(&mut self.hex)).changed()
                             && let Some(rgba) = parse_hex(&self.hex)
                         {
                             self.color =

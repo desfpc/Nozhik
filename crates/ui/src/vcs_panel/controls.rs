@@ -238,7 +238,7 @@ impl VcsPanel {
                 menu.response.rect.right_center() - vec2(5.0, 0.0),
             );
             ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
+                crate::form::singleline(&mut self.filter)
                     .hint_text("Filter")
                     .desired_width(ui.available_width()),
             );
@@ -433,7 +433,7 @@ impl VcsPanel {
                             );
                         });
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.branch_filter)
+                            crate::form::singleline(&mut self.branch_filter)
                                 .hint_text("Filter")
                                 .desired_width(f32::INFINITY),
                         );
@@ -547,6 +547,7 @@ impl VcsPanel {
         let modal = egui::Modal::new(egui::Id::new("git_operation_dialog"))
             .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(24).corner_radius(6))
             .show(ctx, |ui| {
+                        crate::form::begin(ui);
                         ui.set_width(500.0_f32.min(ctx.screen_rect().width()-70.0).max(150.0));
             let title = match &dialog { Dialog::NewBranch => "Create a Branch".into(), Dialog::Switch(_) => "Switch Branch".into(), Dialog::Merge => format!("Merge into {}", self.branch()), Dialog::Conflicts => "Resolve conflicts before Merge".into(), Dialog::Abort => "Abort Merge?".into(), Dialog::None => String::new() };
             ui.horizontal(|ui| { ui.heading(title); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { self.dialog = Dialog::None; } }); });
@@ -571,7 +572,7 @@ impl VcsPanel {
     }
     fn create_branch_dialog(&mut self, ui: &mut egui::Ui) {
         ui.label("Name");
-        ui.add(egui::TextEdit::singleline(&mut self.new_branch).desired_width(f32::INFINITY));
+        ui.add(crate::form::singleline(&mut self.new_branch).desired_width(f32::INFINITY));
         ui.add_space(12.0);
         ui.label(format!(
             "Your new branch will be based on your currently checked out branch ({}).",
@@ -688,7 +689,7 @@ impl VcsPanel {
     }
     fn merge_dialog(&mut self, ui: &mut egui::Ui) {
         ui.add(
-            egui::TextEdit::singleline(&mut self.branch_filter)
+            crate::form::singleline(&mut self.branch_filter)
                 .hint_text("Filter")
                 .desired_width(f32::INFINITY),
         );

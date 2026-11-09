@@ -462,7 +462,7 @@ impl NozhikUi {
         if self.project.is_none() {
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.project_path)
+                    crate::form::singleline(&mut self.project_path)
                         .hint_text("Project folder path")
                         .desired_width(150.0),
                 );
@@ -677,6 +677,7 @@ impl NozhikUi {
         let mut accept = false;
         let mut cancel = false;
         let modal = egui::Modal::new(egui::Id::new("project_entry_dialog")).show(ctx, |ui| {
+            crate::form::begin(ui);
             ui.set_width(360.0);
             ui.heading(if dialog.directory {
                 "New Folder"
@@ -689,10 +690,7 @@ impl NozhikUi {
             } else {
                 "File name (including extension)"
             });
-            let input = ui.add_enabled(
-                !dialog.pending,
-                egui::TextEdit::singleline(&mut dialog.name),
-            );
+            let input = ui.add_enabled(!dialog.pending, crate::form::singleline(&mut dialog.name));
             if dialog.focus {
                 input.request_focus();
                 dialog.focus = false;

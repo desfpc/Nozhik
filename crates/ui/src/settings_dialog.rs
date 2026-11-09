@@ -140,6 +140,7 @@ impl SettingsDialog {
             .max_height(size.y)
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    crate::form::begin(ui);
                     if self.category == 0 {
                         Self::general(ui, config);
                     } else if self.category == 1 {

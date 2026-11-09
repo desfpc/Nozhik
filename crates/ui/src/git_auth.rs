@@ -74,25 +74,25 @@ impl AuthFields {
             AuthMethod::Token => {
                 ui.label("Access token (HTTPS)");
                 ui.add(
-                    egui::TextEdit::singleline(&mut *self.secret)
+                    crate::form::singleline(&mut *self.secret)
                         .password(true)
                         .desired_width(f32::INFINITY),
                 );
             }
             AuthMethod::Password => {
                 ui.label("Login");
-                ui.text_edit_singleline(&mut self.username);
+                ui.add(crate::form::singleline(&mut self.username));
                 ui.label("Password / token (HTTPS)");
-                ui.add(egui::TextEdit::singleline(&mut *self.secret).password(true));
+                ui.add(crate::form::singleline(&mut *self.secret).password(true));
                 ui.small("GitHub requires a personal access token instead of an account password.");
             }
             AuthMethod::SshKey => {
                 ui.label("SSH username (default: git)");
-                ui.text_edit_singleline(&mut self.username);
+                ui.add(crate::form::singleline(&mut self.username));
                 ui.label("Private key path");
                 let choose = ui
                     .horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.key);
+                        ui.add(crate::form::singleline(&mut self.key));
                         ui.button("Choose key…").clicked()
                     })
                     .inner;
@@ -103,7 +103,7 @@ impl AuthFields {
                     self.key = path.display().to_string();
                 }
                 ui.label("Key passphrase (optional)");
-                ui.add(egui::TextEdit::singleline(&mut *self.passphrase).password(true));
+                ui.add(crate::form::singleline(&mut *self.passphrase).password(true));
             }
         }
         ui.small("Tokens, passwords and key passphrases stay in memory for this project session. Blank secret fields keep existing session credentials for the same connection.");

@@ -346,12 +346,11 @@ impl VcsPanel {
         dialog: &mut ActionDialog,
         apply: &mut bool,
     ) {
+        crate::form::begin(ui);
         match &mut dialog.request.action {
             HistoryAction::Amend(_) | HistoryAction::Squash(_) => {
                 ui.label("Summary");
-                ui.add(
-                    egui::TextEdit::singleline(&mut dialog.summary).desired_width(f32::INFINITY),
-                );
+                ui.add(crate::form::singleline(&mut dialog.summary).desired_width(f32::INFINITY));
                 ui.label("Description");
                 ui.add(
                     egui::TextEdit::multiline(&mut dialog.body)
@@ -370,7 +369,7 @@ impl VcsPanel {
             }
             HistoryAction::Branch(_) | HistoryAction::Tag(_) => {
                 ui.label("Name");
-                ui.text_edit_singleline(&mut dialog.branch);
+                ui.add(crate::form::singleline(&mut dialog.branch));
             }
             HistoryAction::CherryPick { .. } => self.cherry_pick_fields(ui, dialog),
             HistoryAction::Reset(mode) => {
@@ -451,10 +450,10 @@ impl VcsPanel {
     fn cherry_pick_fields(&self, ui: &mut egui::Ui, dialog: &mut ActionDialog) {
         ui.checkbox(&mut dialog.create, "New Branch (based on current HEAD)");
         if dialog.create {
-            ui.text_edit_singleline(&mut dialog.branch);
+            ui.add(crate::form::singleline(&mut dialog.branch));
         } else {
             ui.add(
-                egui::TextEdit::singleline(&mut dialog.filter)
+                crate::form::singleline(&mut dialog.filter)
                     .hint_text("Filter branches")
                     .desired_width(f32::INFINITY),
             );

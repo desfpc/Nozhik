@@ -15,6 +15,7 @@ mod diff_view;
 mod docker_panel;
 mod editor_tabs;
 pub mod editor_view;
+mod form;
 mod http_requests;
 mod integration;
 mod language;

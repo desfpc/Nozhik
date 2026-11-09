@@ -5,7 +5,7 @@ use super::{
 fn field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()));
+        ui.add(crate::form::singleline(value).desired_width(ui.available_width()));
     });
 }
 fn choice(ui: &mut egui::Ui, label: &str, value: &mut String, values: &[&str]) {
@@ -39,6 +39,7 @@ fn extra(ui: &mut egui::Ui, value: &mut String) {
     });
 }
 pub(super) fn table(ui: &mut egui::Ui, t: &mut Definition) {
+    crate::form::begin(ui);
     ui.heading("Table properties");
     field(ui, "Name", &mut t.name);
     ui.label(format!("Schema: {}", t.schema));
@@ -92,6 +93,7 @@ pub(super) fn table(ui: &mut egui::Ui, t: &mut Definition) {
     reason = "Each table-object kind has an independent engine-aware property form"
 )]
 pub(super) fn element(ui: &mut egui::Ui, d: DbDriverType, e: &mut Element, names: &[String]) {
+    crate::form::begin(ui);
     field(ui, "Name", &mut e.name);
     let supports_comment = d == DbDriverType::Postgres
         || (d == DbDriverType::Mysql
@@ -342,7 +344,7 @@ fn parts_form(
         ui.push_id(index, |ui| {
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut p.expression)
+                    crate::form::singleline(&mut p.expression)
                         .hint_text("Column or expression")
                         .desired_width((ui.available_width() - 100.0).max(100.0)),
                 );
@@ -420,7 +422,7 @@ fn name_list(ui: &mut egui::Ui, label: &str, values: &mut Vec<String>) {
         let mut remove = None;
         for (index, name) in values.iter_mut().enumerate() {
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(name);
+                ui.add(crate::form::singleline(name));
                 if ui.button("−").clicked() {
                     remove = Some(index);
                 }
@@ -460,7 +462,7 @@ fn sequence_options(ui: &mut egui::Ui, value: &mut String) {
     for (label, _, v) in &mut fields {
         ui.horizontal(|ui| {
             ui.label(*label);
-            changed |= ui.text_edit_singleline(v).changed();
+            changed |= ui.add(crate::form::singleline(v)).changed();
         });
     }
     changed |= ui.checkbox(&mut cycle, "Cycled").changed();
@@ -486,13 +488,13 @@ fn grants_form(ui: &mut egui::Ui, d: DbDriverType, grants: &mut Vec<TableGrant>)
         ui.push_id(index, |ui| {
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut g.user)
+                    crate::form::singleline(&mut g.user)
                         .hint_text("User / role")
                         .desired_width(120.0),
                 );
                 if d == DbDriverType::Mysql {
                     ui.label("@");
-                    ui.add(egui::TextEdit::singleline(&mut g.host).desired_width(90.0));
+                    ui.add(crate::form::singleline(&mut g.host).desired_width(90.0));
                 }
                 egui::ComboBox::from_id_salt("table_privilege")
                     .selected_text(&g.privilege)

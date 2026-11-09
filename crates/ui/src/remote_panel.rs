@@ -594,6 +594,7 @@ impl NozhikUi {
             && let Some(form) = &mut self.remote.form
         {
             egui::Modal::new(egui::Id::new("ssh_profile")).show(ctx, |ui| {
+                crate::form::begin(ui);
                 ui.heading(if form.original.is_some() { "Edit SSH host" } else { "Add SSH host" });
                 if form.original.is_some() { ui.weak("Changing connection identity removes its saved password and disconnects active sessions."); }
                 for (label, value) in [
@@ -602,7 +603,7 @@ impl NozhikUi {
                     ("User", &mut form.profile.username),
                 ] {
                     ui.label(label);
-                    ui.text_edit_singleline(value);
+                    ui.add(crate::form::singleline(value));
                 }
                 ui.label("Port");
                 ui.add(egui::DragValue::new(&mut form.profile.port).range(1..=65535));
@@ -624,14 +625,14 @@ impl NozhikUi {
                 }
                 if form.auth == 1 {
                     ui.label("Private key path");
-                    ui.text_edit_singleline(&mut form.key_path);
+                    ui.add(crate::form::singleline(&mut form.key_path));
                 }
                 ui.label("Local Port Forwards");
                 let mut remove = None;
                 for (index, forward) in form.profile.forwards.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut forward.local_port).prefix("Local "));
-                        ui.text_edit_singleline(&mut forward.remote_host);
+                        ui.add(crate::form::singleline(&mut forward.remote_host));
                         ui.add(egui::DragValue::new(&mut forward.remote_port).prefix("Remote ").range(1..=65535));
                         if ui.button("Remove").clicked() { remove = Some(index); }
                     });
@@ -696,6 +697,7 @@ impl NozhikUi {
                 profile.save_password = false;
             }
             egui::Modal::new(egui::Id::new("ssh_credentials")).show(ctx, |ui| {
+                crate::form::begin(ui);
                 ui.heading(format!("SSH credentials: {}", profile.name));
                 ui.label(if matches!(profile.auth, AuthMethod::Password) {
                     "Password"
@@ -707,7 +709,7 @@ impl NozhikUi {
                     profile.username, profile.host, profile.port
                 ));
                 let password = ui.add(
-                    egui::TextEdit::singleline(&mut self.remote.secret)
+                    crate::form::singleline(&mut self.remote.secret)
                         .password(true)
                         .id(egui::Id::new("ssh_password")),
                 );

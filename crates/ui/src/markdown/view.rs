@@ -1,7 +1,11 @@
 //! Rendered Markdown. The text editor remains the source of the document.
 use crate::theme;
-use egui::{RichText, Stroke, Ui};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use egui::text::LayoutJob;
+use egui::{Align, FontId, RichText, Sense, Stroke, TextFormat, Ui};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+#[path = "table.rs"]
+mod table;
 use std::{iter::Peekable, path::Path};
 
 const MAX_PREVIEW: usize = 1024 * 1024;
@@ -30,19 +34,32 @@ enum Inline {
     Html(String),
 }
 
-struct Doc {
+struct Doc<'a> {
     gap: bool,
     space: f32,
     tables: usize,
+    /// Multiplier for fonts and the spacing around them. `1.0` is the small size.
+    scale: f32,
+    opened: &'a mut Option<String>,
 }
 
-pub fn show(ui: &mut Ui, path: &Path, source: &str, enabled: bool) {
+pub fn show(
+    ui: &mut Ui,
+    path: &Path,
+    source: &str,
+    enabled: bool,
+    scale: f32,
+    opened: &mut Option<String>,
+) {
+    let scale = finite_scale(scale);
     egui::ScrollArea::vertical()
         .id_salt(("markdown-gui", path.to_path_buf()))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add_enabled_ui(enabled, |ui| {
+                ui.spacing_mut().item_spacing *= scale;
+                ui.spacing_mut().indent *= scale;
                 if source.trim().is_empty() {
                     ui.label(RichText::new("Empty Markdown document").color(theme::muted()));
                     return;
@@ -54,60 +71,87 @@ pub fn show(ui: &mut Ui, path: &Path, source: &str, enabled: bool) {
                 let mut events = Parser::new_ext(source, markdown_options()).peekable();
                 let mut doc = Doc {
                     gap: false,
-                    space: 8.0,
+                    space: 8.0 * scale,
                     tables: 0,
+                    scale,
+                    opened,
                 };
                 render_until(ui, &mut events, None, &mut doc);
             });
         });
 }
 
+fn finite_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
 fn markdown_options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
 }
 
-fn render_until(ui: &mut Ui, events: &mut Events<'_>, stop: Option<TagEnd>, doc: &mut Doc) {
-    while let Some(event) = events.next() {
+fn render_until(ui: &mut Ui, events: &mut Events<'_>, stop: Option<TagEnd>, doc: &mut Doc<'_>) {
+    loop {
+        // A tight list item has no Paragraph tag, so its text and code are loose events.
+        if loose_inline(events.peek()) {
+            let items = take_loose_inlines(events);
+            if !items.is_empty() {
+                block_gap(ui, doc);
+                paint_inlines(ui, &items, &Face::default(), doc);
+            }
+            continue;
+        }
+        let Some(event) = events.next() else {
+            break;
+        };
         match event {
             Event::End(end) if stop == Some(end) => break,
-            Event::End(_) | Event::SoftBreak | Event::HardBreak | Event::TaskListMarker(_) => {}
             Event::Rule => {
                 block_gap(ui, doc);
-                paint_rule(ui);
+                paint_rule(ui, doc.scale);
             }
             Event::Start(tag) => render_start(ui, events, tag, doc),
-            Event::Text(text) => {
-                block_gap(ui, doc);
-                paint_inlines(ui, &[Inline::Text(text.to_string())], &Face::default());
-            }
-            Event::Code(text)
-            | Event::InlineMath(text)
-            | Event::DisplayMath(text)
-            | Event::Html(text)
-            | Event::InlineHtml(text) => {
-                block_gap(ui, doc);
-                paint_inlines(ui, &[Inline::Code(text.to_string())], &Face::default());
-            }
-            Event::FootnoteReference(name) => {
-                block_gap(ui, doc);
-                paint_inlines(ui, &[Inline::Text(format!("[{name}]"))], &Face::default());
-            }
+            _ => {}
         }
     }
 }
 
-fn render_start(ui: &mut Ui, events: &mut Events<'_>, tag: Tag<'_>, doc: &mut Doc) {
+const fn loose_inline(event: Option<&Event<'_>>) -> bool {
+    match event {
+        Some(Event::Start(tag)) => is_inline_tag(tag),
+        Some(Event::End(_) | Event::Rule) | None => false,
+        Some(_) => true,
+    }
+}
+
+const fn is_inline_tag(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Emphasis
+            | Tag::Strong
+            | Tag::Strikethrough
+            | Tag::Link { .. }
+            | Tag::Image { .. }
+            | Tag::Subscript
+            | Tag::Superscript
+    )
+}
+
+fn render_start(ui: &mut Ui, events: &mut Events<'_>, tag: Tag<'_>, doc: &mut Doc<'_>) {
     let end = tag.to_end();
     match tag {
         Tag::Paragraph => {
             block_gap(ui, doc);
             let items = take_inlines(events, end);
-            paint_inlines(ui, &items, &Face::default());
+            paint_inlines(ui, &items, &Face::default(), doc);
         }
         Tag::Heading { level, .. } => {
             block_gap(ui, doc);
             let items = take_inlines(events, end);
-            paint_heading(ui, level, &items);
+            paint_heading(ui, level, &items, doc);
         }
         Tag::BlockQuote(_) => {
             block_gap(ui, doc);
@@ -115,7 +159,7 @@ fn render_start(ui: &mut Ui, events: &mut Events<'_>, tag: Tag<'_>, doc: &mut Do
         }
         Tag::CodeBlock(kind) => {
             block_gap(ui, doc);
-            paint_code_block(ui, events, &kind);
+            paint_code_block(ui, events, &kind, doc.scale);
         }
         Tag::HtmlBlock => {
             block_gap(ui, doc);
@@ -127,12 +171,12 @@ fn render_start(ui: &mut Ui, events: &mut Events<'_>, tag: Tag<'_>, doc: &mut Do
                     _ => {}
                 }
             }
-            paint_code_frame(ui, None, &text);
+            paint_code_frame(ui, None, &text, doc.scale);
         }
         Tag::List(start) => render_list(ui, events, start, doc),
-        Tag::Table(_) => {
+        Tag::Table(align) => {
             block_gap(ui, doc);
-            paint_table(ui, events, doc);
+            paint_table(ui, events, doc, &align);
         }
         Tag::Item
         | Tag::TableHead
@@ -153,58 +197,99 @@ fn render_start(ui: &mut Ui, events: &mut Events<'_>, tag: Tag<'_>, doc: &mut Do
     }
 }
 
-fn render_list(ui: &mut Ui, events: &mut Events<'_>, start: Option<u64>, doc: &mut Doc) {
+fn render_list(ui: &mut Ui, events: &mut Events<'_>, start: Option<u64>, doc: &mut Doc<'_>) {
+    block_gap(ui, doc);
     let mut number = start.unwrap_or(1);
-    loop {
-        match events.peek() {
-            Some(Event::Start(Tag::Item)) => {
-                events.next();
-                let task = match events.peek() {
-                    Some(Event::TaskListMarker(checked)) => {
-                        let checked = *checked;
-                        events.next();
-                        Some(checked)
-                    }
-                    _ => None,
-                };
-                let marker = match task {
-                    Some(true) => "☑".to_owned(),
-                    Some(false) => "☐".to_owned(),
-                    None if start.is_some() => {
-                        let label = format!("{number}.");
-                        number += 1;
-                        label
-                    }
-                    None => "•".to_owned(),
-                };
-                ui.horizontal_top(|ui| {
-                    ui.label(RichText::new(marker).color(theme::muted()));
-                    ui.vertical(|ui| {
-                        let saved = doc.space;
-                        doc.space = 2.0;
-                        render_until(ui, events, Some(TagEnd::Item), doc);
-                        doc.space = saved;
+    let scale = doc.scale;
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 4.0 * scale;
+        loop {
+            match events.peek() {
+                Some(Event::Start(Tag::Item)) => {
+                    events.next();
+                    let task = match events.peek() {
+                        Some(Event::TaskListMarker(checked)) => {
+                            let checked = *checked;
+                            events.next();
+                            Some(checked)
+                        }
+                        _ => None,
+                    };
+                    let marker = match task {
+                        Some(true) => ListMarker::Text("☑".to_owned()),
+                        Some(false) => ListMarker::Text("☐".to_owned()),
+                        None if start.is_some() => {
+                            let label = format!("{number}.");
+                            number += 1;
+                            ListMarker::Text(label)
+                        }
+                        None => ListMarker::Bullet,
+                    };
+                    let line = line_height(ui, scale);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0 * scale;
+                        paint_list_marker(ui, &marker, line, scale);
+                        ui.vertical(|ui| {
+                            let saved_space = doc.space;
+                            doc.space = 2.0 * scale;
+                            doc.gap = false;
+                            render_until(ui, events, Some(TagEnd::Item), doc);
+                            doc.space = saved_space;
+                            doc.gap = true;
+                        });
                     });
-                });
+                }
+                Some(Event::End(TagEnd::List(_))) => {
+                    events.next();
+                    break;
+                }
+                _ => break,
             }
-            Some(Event::End(TagEnd::List(_))) => {
-                events.next();
-                break;
-            }
-            _ => break,
+        }
+    });
+}
+
+enum ListMarker {
+    Bullet,
+    Text(String),
+}
+
+/// Disc or label centered on the first line of the item.
+fn paint_list_marker(ui: &mut Ui, marker: &ListMarker, line: f32, scale: f32) {
+    match marker {
+        ListMarker::Bullet => {
+            let radius = (line * 0.28).max(3.5 * scale);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(radius * 2.0, line), Sense::hover());
+            ui.painter()
+                .circle_filled(rect.center(), radius, theme::text());
+        }
+        ListMarker::Text(label) => {
+            let color = theme::text();
+            let galley = ui.painter().layout(
+                label.clone(),
+                FontId::proportional(body_size(ui) * scale),
+                color,
+                f32::INFINITY,
+            );
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(galley.size().x, line), Sense::hover());
+            let y = (line - galley.size().y).mul_add(0.5, rect.top());
+            ui.painter()
+                .galley(egui::pos2(rect.left(), y), galley, color);
         }
     }
 }
 
-fn paint_quote(ui: &mut Ui, events: &mut Events<'_>, end: TagEnd, doc: &mut Doc) {
+fn paint_quote(ui: &mut Ui, events: &mut Events<'_>, end: TagEnd, doc: &mut Doc<'_>) {
+    let scale = doc.scale;
     ui.horizontal_top(|ui| {
-        ui.add_space(12.0);
+        ui.add_space(12.0 * scale);
         let saved = doc.space;
-        doc.space = 4.0;
+        doc.space = 4.0 * scale;
         let inner = ui.vertical(|ui| render_until(ui, events, Some(end), doc));
         doc.space = saved;
         let bar = egui::Rect::from_min_size(
-            inner.response.rect.left_top() - egui::vec2(10.0, 0.0),
+            inner.response.rect.left_top() - egui::vec2(10.0 * scale, 0.0),
             egui::vec2(3.0, inner.response.rect.height()),
         );
         ui.painter()
@@ -212,7 +297,7 @@ fn paint_quote(ui: &mut Ui, events: &mut Events<'_>, end: TagEnd, doc: &mut Doc)
     });
 }
 
-fn paint_code_block(ui: &mut Ui, events: &mut Events<'_>, kind: &CodeBlockKind<'_>) {
+fn paint_code_block(ui: &mut Ui, events: &mut Events<'_>, kind: &CodeBlockKind<'_>, scale: f32) {
     let language = match kind {
         CodeBlockKind::Fenced(label) if !label.is_empty() => Some(label.to_string()),
         _ => None,
@@ -225,22 +310,26 @@ fn paint_code_block(ui: &mut Ui, events: &mut Events<'_>, kind: &CodeBlockKind<'
             _ => {}
         }
     }
-    paint_code_frame(ui, language.as_deref(), &text);
+    paint_code_frame(ui, language.as_deref(), &text, scale);
 }
 
-fn paint_code_frame(ui: &mut Ui, language: Option<&str>, text: &str) {
+fn paint_code_frame(ui: &mut Ui, language: Option<&str>, text: &str, scale: f32) {
+    let scale = finite_scale(scale);
     egui::Frame::new()
         .fill(theme::surface())
         .corner_radius(theme::RADIUS)
-        .inner_margin(10)
+        .inner_margin(10.0 * scale)
         .show(ui, |ui| {
             if let Some(language) = language {
-                ui.label(RichText::new(language).small().color(theme::muted()));
+                let small = egui::TextStyle::Small.resolve(ui.style()).size * scale;
+                ui.label(RichText::new(language).size(small).color(theme::muted()));
             }
+            let mono = egui::TextStyle::Monospace.resolve(ui.style()).size * scale;
             ui.add(
                 egui::Label::new(
                     RichText::new(text.trim_end_matches('\n'))
                         .monospace()
+                        .size(mono)
                         .color(theme::text()),
                 )
                 .wrap(),
@@ -248,7 +337,7 @@ fn paint_code_frame(ui: &mut Ui, language: Option<&str>, text: &str) {
         });
 }
 
-fn paint_table(ui: &mut Ui, events: &mut Events<'_>, doc: &mut Doc) {
+fn paint_table(ui: &mut Ui, events: &mut Events<'_>, doc: &mut Doc<'_>, align: &[Alignment]) {
     let mut header = Vec::new();
     let mut rows = Vec::new();
     let mut row = Vec::new();
@@ -280,69 +369,31 @@ fn paint_table(ui: &mut Ui, events: &mut Events<'_>, doc: &mut Doc) {
         return;
     }
     doc.tables += 1;
-    let id = doc.tables;
-    egui::ScrollArea::horizontal()
-        .id_salt(("markdown-table", id))
-        .show(ui, |ui| {
-            egui::Grid::new(("markdown-grid", id))
-                .spacing(egui::vec2(0.0, 0.0))
-                .show(ui, |ui| {
-                    if !header.is_empty() {
-                        for cell in &header {
-                            paint_cell(ui, cell, true);
-                        }
-                        ui.end_row();
-                    }
-                    for cells in &rows {
-                        for cell in cells {
-                            paint_cell(ui, cell, false);
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+    table::paint(ui, doc.tables, &header, &rows, align, doc.scale, doc.opened);
 }
 
-fn paint_cell(ui: &mut Ui, items: &[Inline], header: bool) {
-    let fill = if header {
-        theme::surface()
-    } else {
-        theme::background()
-    };
-    egui::Frame::new()
-        .fill(fill)
-        .stroke(Stroke::new(1.0_f32, theme::border()))
-        .inner_margin(8)
-        .show(ui, |ui| {
-            ui.set_min_width(72.0);
-            let face = Face {
-                strong: header,
-                ..Face::default()
-            };
-            paint_inlines(ui, items, &face);
-        });
-}
-
-fn paint_heading(ui: &mut Ui, level: HeadingLevel, items: &[Inline]) {
+fn paint_heading(ui: &mut Ui, level: HeadingLevel, items: &[Inline], doc: &mut Doc<'_>) {
     let size = match level {
         HeadingLevel::H1 => 26.0,
         HeadingLevel::H2 => 22.0,
         HeadingLevel::H3 => 18.0,
         HeadingLevel::H4 => 16.0,
         HeadingLevel::H5 | HeadingLevel::H6 => 15.0,
-    };
+    } * doc.scale;
     let face = Face {
         strong: true,
         size: Some(size),
         ..Face::default()
     };
-    paint_inlines(ui, items, &face);
-    ui.add_space(2.0);
+    paint_inlines(ui, items, &face, doc);
+    ui.add_space(2.0 * doc.scale);
 }
 
-fn paint_rule(ui: &mut Ui) {
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+fn paint_rule(ui: &mut Ui, scale: f32) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 8.0 * scale),
+        egui::Sense::hover(),
+    );
     ui.painter().hline(
         rect.x_range(),
         rect.center().y,
@@ -350,7 +401,7 @@ fn paint_rule(ui: &mut Ui) {
     );
 }
 
-fn block_gap(ui: &mut Ui, doc: &mut Doc) {
+fn block_gap(ui: &mut Ui, doc: &mut Doc<'_>) {
     if doc.gap {
         ui.add_space(doc.space);
     }
@@ -360,40 +411,65 @@ fn block_gap(ui: &mut Ui, doc: &mut Doc) {
 fn take_inlines(events: &mut Events<'_>, end: TagEnd) -> Vec<Inline> {
     let mut items = Vec::new();
     while let Some(event) = events.next() {
-        match event {
-            Event::End(found) if found == end => break,
-            Event::Text(text) => items.push(Inline::Text(text.to_string())),
-            Event::Code(text) | Event::InlineMath(text) | Event::DisplayMath(text) => {
-                items.push(Inline::Code(text.to_string()));
-            }
-            Event::SoftBreak => items.push(Inline::Break { hard: false }),
-            Event::HardBreak => items.push(Inline::Break { hard: true }),
-            Event::Start(Tag::Emphasis) => {
-                items.push(Inline::Emphasis(take_inlines(events, TagEnd::Emphasis)));
-            }
-            Event::Start(Tag::Strong) => {
-                items.push(Inline::Strong(take_inlines(events, TagEnd::Strong)));
-            }
-            Event::Start(Tag::Strikethrough) => {
-                items.push(Inline::Strike(take_inlines(events, TagEnd::Strikethrough)));
-            }
-            Event::Start(Tag::Link { dest_url, .. }) => items.push(Inline::Link {
-                url: dest_url.to_string(),
-                children: take_inlines(events, TagEnd::Link),
-            }),
-            Event::Start(Tag::Image { .. }) => items.push(Inline::Image {
-                children: take_inlines(events, TagEnd::Image),
-            }),
-            Event::Start(tag) => skip_balanced(events, tag.to_end()),
-            Event::TaskListMarker(checked) => items.push(Inline::Task(checked)),
-            Event::Html(html) | Event::InlineHtml(html) => {
-                items.push(Inline::Html(html.to_string()));
-            }
-            Event::FootnoteReference(name) => items.push(Inline::Text(format!("[{name}]"))),
-            Event::End(_) | Event::Rule => break,
+        if let Event::End(found) = &event
+            && *found == end
+        {
+            break;
+        }
+        if !push_inline(events, event, &mut items) {
+            break;
         }
     }
     items
+}
+
+/// Inline events that belong to one sentence, up to the next block.
+fn take_loose_inlines(events: &mut Events<'_>) -> Vec<Inline> {
+    let mut items = Vec::new();
+    while loose_inline(events.peek()) {
+        let Some(event) = events.next() else {
+            break;
+        };
+        if !push_inline(events, event, &mut items) {
+            break;
+        }
+    }
+    items
+}
+
+fn push_inline(events: &mut Events<'_>, event: Event<'_>, items: &mut Vec<Inline>) -> bool {
+    match event {
+        Event::Text(text) => items.push(Inline::Text(text.to_string())),
+        Event::Code(text) | Event::InlineMath(text) | Event::DisplayMath(text) => {
+            items.push(Inline::Code(text.to_string()));
+        }
+        Event::SoftBreak => items.push(Inline::Break { hard: false }),
+        Event::HardBreak => items.push(Inline::Break { hard: true }),
+        Event::Start(Tag::Emphasis) => {
+            items.push(Inline::Emphasis(take_inlines(events, TagEnd::Emphasis)));
+        }
+        Event::Start(Tag::Strong) => {
+            items.push(Inline::Strong(take_inlines(events, TagEnd::Strong)));
+        }
+        Event::Start(Tag::Strikethrough) => {
+            items.push(Inline::Strike(take_inlines(events, TagEnd::Strikethrough)));
+        }
+        Event::Start(Tag::Link { dest_url, .. }) => items.push(Inline::Link {
+            url: dest_url.to_string(),
+            children: take_inlines(events, TagEnd::Link),
+        }),
+        Event::Start(Tag::Image { .. }) => items.push(Inline::Image {
+            children: take_inlines(events, TagEnd::Image),
+        }),
+        Event::Start(tag) => skip_balanced(events, tag.to_end()),
+        Event::TaskListMarker(checked) => items.push(Inline::Task(checked)),
+        Event::Html(html) | Event::InlineHtml(html) => {
+            items.push(Inline::Html(html.to_string()));
+        }
+        Event::FootnoteReference(name) => items.push(Inline::Text(format!("[{name}]"))),
+        Event::End(_) | Event::Rule => return false,
+    }
+    true
 }
 
 fn skip_balanced(events: &mut Events<'_>, end: TagEnd) {
@@ -412,122 +488,385 @@ fn skip_balanced(events: &mut Events<'_>, end: TagEnd) {
     }
 }
 
-fn paint_inlines(ui: &mut Ui, items: &[Inline], face: &Face) {
-    let mut line = Vec::new();
-    for item in items {
-        if matches!(item, Inline::Break { hard: true }) {
-            paint_line(ui, &line, face);
-            line.clear();
-        } else {
-            line.push(item);
-        }
+struct LinkHit {
+    start: usize,
+    end: usize,
+    url: String,
+}
+
+struct Paragraph {
+    job: LayoutJob,
+    chars: usize,
+    links: Vec<LinkHit>,
+}
+
+/// One paragraph is one galley. Inline code is a run in that galley, so a
+/// backtick does not break the line before or after the span.
+fn paint_inlines(ui: &mut Ui, items: &[Inline], face: &Face, doc: &mut Doc<'_>) {
+    let mut paragraph = Paragraph {
+        job: LayoutJob::default(),
+        chars: 0,
+        links: Vec::new(),
+    };
+    let width = ui.available_width();
+    paragraph.job.wrap.max_width = if width.is_finite() {
+        width.max(0.0)
+    } else {
+        f32::INFINITY
+    };
+    paragraph.job.break_on_newline = true;
+    paragraph.job.halign = Align::LEFT;
+    paragraph.append(ui, items, face, doc.scale);
+    if paragraph.job.text.is_empty() {
+        return;
     }
-    if !line.is_empty() {
-        paint_line(ui, &line, face);
+    let galley = ui.fonts(|fonts| fonts.layout_job(paragraph.job));
+    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click_and_drag());
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        rect.min,
+        galley.clone(),
+        theme::text(),
+        Stroke::NONE,
+    );
+    if let Some(pointer) = response.hover_pos()
+        && let Some(url) = link_at(&galley, &paragraph.links, pointer - rect.min)
+        && link_is_active(url)
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if response.clicked() {
+            *doc.opened = Some(url.to_owned());
+        }
     }
 }
 
-fn paint_line(ui: &mut Ui, items: &[&Inline], face: &Face) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.spacing_mut().item_spacing.y = 2.0;
+impl Paragraph {
+    fn append(&mut self, ui: &Ui, items: &[Inline], face: &Face, scale: f32) {
         for item in items {
-            paint_item(ui, item, face);
-        }
-    });
-}
-
-fn paint_item(ui: &mut Ui, item: &Inline, face: &Face) {
-    match item {
-        Inline::Text(text) => paint_text(ui, text, face),
-        Inline::Code(text) | Inline::Html(text) => paint_code_span(ui, text, face),
-        Inline::Break { .. } => paint_text(ui, " ", face),
-        Inline::Task(checked) => paint_text(ui, if *checked { "☑ " } else { "☐ " }, face),
-        Inline::Emphasis(children) => {
-            let mut next = face.clone();
-            next.emphasis = true;
-            paint_inlines(ui, children, &next);
-        }
-        Inline::Strong(children) => {
-            let mut next = face.clone();
-            next.strong = true;
-            paint_inlines(ui, children, &next);
-        }
-        Inline::Strike(children) => {
-            let mut next = face.clone();
-            next.strike = true;
-            paint_inlines(ui, children, &next);
-        }
-        Inline::Link { url, children } => {
-            let mut next = face.clone();
-            next.link = Some(url.clone());
-            paint_inlines(ui, children, &next);
-        }
-        Inline::Image { children } => {
-            let mut next = face.clone();
-            next.emphasis = true;
-            if children.is_empty() {
-                paint_text(ui, "image", &next);
-            } else {
-                paint_inlines(ui, children, &next);
+            match item {
+                Inline::Text(text) => self.push(ui, text, face, false, scale),
+                Inline::Code(text) | Inline::Html(text) => self.push(ui, text, face, true, scale),
+                Inline::Break { hard: true } => self.push(ui, "\n", face, false, scale),
+                Inline::Break { hard: false } => self.push(ui, " ", face, false, scale),
+                Inline::Task(checked) => {
+                    self.push(ui, if *checked { "☑ " } else { "☐ " }, face, false, scale);
+                }
+                Inline::Emphasis(children) => {
+                    let mut next = face.clone();
+                    next.emphasis = true;
+                    self.append(ui, children, &next, scale);
+                }
+                Inline::Strong(children) => {
+                    let mut next = face.clone();
+                    next.strong = true;
+                    self.append(ui, children, &next, scale);
+                }
+                Inline::Strike(children) => {
+                    let mut next = face.clone();
+                    next.strike = true;
+                    self.append(ui, children, &next, scale);
+                }
+                Inline::Link { url, children } => {
+                    let start = self.chars;
+                    let mut next = face.clone();
+                    next.link = Some(url.clone());
+                    self.append(ui, children, &next, scale);
+                    if self.chars > start {
+                        self.links.push(LinkHit {
+                            start,
+                            end: self.chars,
+                            url: url.clone(),
+                        });
+                    }
+                }
+                Inline::Image { children } => {
+                    let mut next = face.clone();
+                    next.emphasis = true;
+                    if children.is_empty() {
+                        self.push(ui, "image", &next, false, scale);
+                    } else {
+                        self.append(ui, children, &next, scale);
+                    }
+                }
             }
         }
     }
+
+    fn push(&mut self, ui: &Ui, text: &str, face: &Face, code: bool, scale: f32) {
+        if text.is_empty() {
+            return;
+        }
+        self.chars += text.chars().count();
+        self.job
+            .append(text, 0.0, text_format(ui, face, code, scale));
+    }
 }
 
-fn paint_text(ui: &mut Ui, value: &str, face: &Face) {
-    if value.is_empty() {
-        return;
-    }
-    let mut text = RichText::new(value).size(face.size.unwrap_or_else(|| body_size(ui)));
-    text = if face.strong {
-        text.family(theme::bold_family())
-            .color(theme::text_strong())
+fn text_format(ui: &Ui, face: &Face, code: bool, scale: f32) -> TextFormat {
+    let size = face.size.unwrap_or_else(|| body_size(ui) * scale);
+    let color = if code {
+        theme::syntax_color("markup.raw")
+    } else if face.link.is_some() {
+        theme::link()
+    } else if face.strong {
+        theme::text_strong()
     } else {
-        text.color(theme::text())
+        theme::text()
     };
-    if face.emphasis {
-        text = text.italics();
+    let font_id = if code {
+        FontId::monospace((size - scale).max(11.0 * scale))
+    } else if face.strong {
+        FontId::new(size, theme::bold_family())
+    } else {
+        FontId::proportional(size)
+    };
+    TextFormat {
+        font_id,
+        color,
+        italics: face.emphasis,
+        background: if code {
+            theme::chip()
+        } else {
+            egui::Color32::TRANSPARENT
+        },
+        underline: if code || face.link.is_none() {
+            Stroke::NONE
+        } else {
+            Stroke::new(1.0_f32, theme::link())
+        },
+        strikethrough: if face.strike {
+            Stroke::new(1.0_f32, color)
+        } else {
+            Stroke::NONE
+        },
+        valign: Align::Center,
+        ..TextFormat::default()
     }
-    if face.strike {
-        text = text.strikethrough();
-    }
-    if let Some(url) = &face.link {
-        text = text.color(theme::link()).underline();
-        let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.clicked() && safe_url(url) {
-            crate::editor_view::open_documentation(url.clone());
-        }
-        return;
-    }
-    ui.label(text);
 }
 
-fn paint_code_span(ui: &mut Ui, value: &str, face: &Face) {
-    let mut text = RichText::new(value)
-        .monospace()
-        .size((face.size.unwrap_or_else(|| body_size(ui)) - 1.0).max(11.0))
-        .color(theme::syntax_color("markup.raw"));
-    if face.strike {
-        text = text.strikethrough();
-    }
-    egui::Frame::new()
-        .fill(theme::chip())
-        .corner_radius(4)
-        .inner_margin(egui::Margin::symmetric(4, 1))
-        .show(ui, |ui| {
-            ui.label(text);
-        });
+fn link_at<'a>(galley: &egui::Galley, links: &'a [LinkHit], pos: egui::Vec2) -> Option<&'a str> {
+    let index = galley.cursor_from_pos(pos).index;
+    links
+        .iter()
+        .find(|link| (link.start..link.end).contains(&index))
+        .map(|link| link.url.as_str())
+}
+
+fn line_height(ui: &Ui, scale: f32) -> f32 {
+    let font = FontId::proportional(body_size(ui) * scale);
+    ui.fonts(|fonts| fonts.row_height(&font))
 }
 
 fn body_size(ui: &Ui) -> f32 {
     egui::TextStyle::Body.resolve(ui.style()).size
 }
 
-fn safe_url(url: &str) -> bool {
+/// A link the preview can follow: a web address, or a path to a file.
+fn link_is_active(url: &str) -> bool {
     let url = url.trim();
-    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")
+    if url.is_empty() || url.starts_with('#') {
+        return false;
+    }
+    if let Some((scheme, rest)) = split_scheme(url) {
+        return scheme_is(scheme, "http")
+            || scheme_is(scheme, "https")
+            || scheme_is(scheme, "mailto")
+            || (scheme_is(scheme, "file") && file_url_path(rest).is_some());
+    }
+    !percent_decode(strip_fragment(url)).is_empty()
+}
+
+/// Where a Markdown link goes. `None` means the preview leaves it alone.
+#[must_use]
+pub(super) fn link_target(document: &Path, url: &str) -> Option<LinkTarget> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('#') {
+        return None;
+    }
+    if let Some((scheme, rest)) = split_scheme(url) {
+        if scheme_is(scheme, "http") || scheme_is(scheme, "https") || scheme_is(scheme, "mailto") {
+            return Some(LinkTarget::Browser(url.to_owned()));
+        }
+        if scheme_is(scheme, "file") {
+            let path = file_url_path(rest)?;
+            return Some(LinkTarget::File(normalize_path(Path::new(&path))));
+        }
+        return None;
+    }
+    resolve_file(document, url).map(LinkTarget::File)
+}
+
+/// Browser URL or a path opened in the editor.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum LinkTarget {
+    Browser(String),
+    File(std::path::PathBuf),
+}
+
+const fn scheme_is(scheme: &str, expected: &str) -> bool {
+    scheme.eq_ignore_ascii_case(expected)
+}
+
+/// `scheme:rest` when `scheme` is not a single Windows drive letter.
+fn split_scheme(url: &str) -> Option<(&str, &str)> {
+    let colon = url.find(':')?;
+    let scheme = &url[..colon];
+    if scheme.is_empty()
+        || scheme.len() == 1
+        || !scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-'))
+    {
+        return None;
+    }
+    Some((scheme, &url[colon + 1..]))
+}
+
+fn file_url_path(rest: &str) -> Option<String> {
+    let text = if let Some(after_slashes) = rest.strip_prefix("//") {
+        if let Some(absolute) = after_slashes.strip_prefix('/') {
+            format!("/{absolute}")
+        } else {
+            let (_, path) = after_slashes.split_once('/')?;
+            format!("/{path}")
+        }
+    } else if rest.starts_with('/') {
+        rest.to_owned()
+    } else {
+        return None;
+    };
+    let path = percent_decode(strip_fragment(&text));
+    if path.is_empty() { None } else { Some(path) }
+}
+
+fn resolve_file(document: &Path, raw: &str) -> Option<std::path::PathBuf> {
+    let text = percent_decode(strip_fragment(raw));
+    if text.is_empty() {
+        return None;
+    }
+    let relative = std::path::PathBuf::from(&text);
+    let joined = if relative.is_absolute() {
+        relative
+    } else {
+        document.parent()?.join(relative)
+    };
+    Some(normalize_path(&joined))
+}
+
+fn strip_fragment(url: &str) -> &str {
+    url.split_once('#').map_or(url, |(path, _)| path)
+}
+
+fn normalize_path(path: &Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(high) = bytes.get(index + 1).copied().and_then(hex_value)
+            && let Some(low) = bytes.get(index + 2).copied().and_then(hex_value)
+        {
+            out.push(high * 16 + low);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkTarget, link_target};
+    use std::path::{Path, PathBuf};
+
+    fn file(document: &str, url: &str) -> Result<PathBuf, String> {
+        match link_target(Path::new(document), url) {
+            Some(LinkTarget::File(path)) => Ok(path),
+            Some(LinkTarget::Browser(url)) => Err(format!("browser {url}")),
+            None => Err(format!("ignored {url}")),
+        }
+    }
+
+    #[test]
+    fn relative_links_resolve_next_to_the_markdown_file() -> Result<(), String> {
+        let document = "/repo/README.md";
+        assert_eq!(
+            file(document, "./documentation/howto/prod-deploy.md")?,
+            PathBuf::from("/repo/documentation/howto/prod-deploy.md")
+        );
+        assert_eq!(
+            file(document, "./documentation/howto/mobile-setup.md")?,
+            PathBuf::from("/repo/documentation/howto/mobile-setup.md")
+        );
+        assert_eq!(
+            file("/repo/docs/guide.md", "../README.md")?,
+            PathBuf::from("/repo/README.md")
+        );
+        assert_eq!(
+            file(document, "/var/notes/absolute.md")?,
+            PathBuf::from("/var/notes/absolute.md")
+        );
+        assert_eq!(
+            file(document, "./my%20file.md#section")?,
+            PathBuf::from("/repo/my file.md")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn web_links_stay_in_the_browser_and_fragments_do_not_open() -> Result<(), String> {
+        let document = Path::new("/repo/README.md");
+        assert_eq!(
+            link_target(document, "https://example.com/docs#guide"),
+            Some(LinkTarget::Browser(
+                "https://example.com/docs#guide".to_owned()
+            ))
+        );
+        assert_eq!(
+            link_target(document, "HTTP://example.com"),
+            Some(LinkTarget::Browser("HTTP://example.com".to_owned()))
+        );
+        assert_eq!(
+            link_target(document, "mailto:dev@example.com"),
+            Some(LinkTarget::Browser("mailto:dev@example.com".to_owned()))
+        );
+        assert_eq!(
+            file("/repo/README.md", "file:///var/tmp/a%20b.md#x")?,
+            PathBuf::from("/var/tmp/a b.md")
+        );
+        assert_eq!(
+            file("/repo/README.md", "file://localhost/var/tmp/note.md")?,
+            PathBuf::from("/var/tmp/note.md")
+        );
+        assert_eq!(link_target(document, "#heading"), None);
+        assert_eq!(link_target(document, "javascript:alert(1)"), None);
+        assert_eq!(link_target(document, "   "), None);
+        Ok(())
+    }
 }

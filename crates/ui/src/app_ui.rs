@@ -1084,7 +1084,7 @@ impl NozhikUi {
         let panel = self
             .terminal
             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
-        let mut started = 0_usize;
+        let mut started = Vec::new();
         let mut failures = Vec::new();
         for launch in launches {
             match panel.create_tool_console(
@@ -1095,19 +1095,19 @@ impl NozhikUi {
                 &launch.container_name,
                 launch.title,
             ) {
-                Ok(()) => started += 1,
+                Ok(()) => started.push(launch.title),
                 Err(error) => failures.push((launch.title, error.to_string())),
             }
         }
         for (title, error) in failures {
             self.note_status("tests", title, crate::problems::Severity::Error, error);
         }
-        if started > 0 {
+        if !started.is_empty() {
             self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
-            self.status = if started == 1 {
-                "PHPUnit is running in the container console".into()
+            self.status = if let [title] = started.as_slice() {
+                format!("{title} is running in the container console")
             } else {
-                format!("{started} test consoles started")
+                format!("{} test consoles started", started.len())
             };
         }
     }

@@ -75,14 +75,15 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
-- language_support: tree-sitter/php/css/javascript/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
+- language_support: tree-sitter/php/css/javascript/go/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI и без pulldown-cmark. Markdown подсвечивается отдельным лексером в этом крейте;
   parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
+  Go разбирается локально тем же индексом, без `gopls`.
 - docker: tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix-only nix signals; no UI/runtime dependency.
   File traversal, AST extraction and Docker CLI I/O belong to its project worker.
-  PHP linter JSON runs use `process::capture` on a dedicated thread. The Compose
+  PHP linter and `golangci-lint` JSON runs use `process::capture` on a dedicated thread. The Compose
   worker stays free. `nozhik-config` stores `LinterTool`; `nozhik-docker` parses
-  reports and builds `docker exec` arguments. PHPUnit consoles are a separate
+  reports and builds `docker exec` arguments. PHPUnit and `go test` consoles are a separate
   `docker exec -it` argv in `nozhik-docker`; the UI opens that terminal and does
   not parse the output. `nozhik-config` stores `TestTool` beside `LinterTool`.
   The UI does not call the Docker CLI.

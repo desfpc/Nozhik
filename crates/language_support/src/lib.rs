@@ -5,6 +5,11 @@ pub mod css_completion;
 pub mod css_symbols;
 pub mod doc_provider;
 pub mod formatting;
+pub mod go;
+mod go_completion;
+mod go_format;
+mod go_stdlib;
+mod go_symbols;
 pub mod highlighter;
 pub mod javascript;
 mod js_completion;
@@ -47,11 +52,12 @@ pub enum Error {
 /// Language subsystem result.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// CSS, JavaScript, YAML, JSON and Markdown stay on the local syntax thread.
+/// CSS, JavaScript, Go, YAML, JSON and Markdown stay on the local syntax thread.
 #[must_use]
 pub fn local_syntax(uri: &lsp_types::Url) -> bool {
     css::is_css(uri)
         || javascript::is_javascript(uri)
+        || go::is_go(uri)
         || yaml::is_yaml(uri)
         || json::is_json(uri)
         || markdown::is_markdown(uri)
@@ -277,6 +283,8 @@ impl LanguageService {
                             Err(Error::Protocol("No Markdown source formatter".into()))
                         } else if javascript::is_javascript(&uri) {
                             Err(Error::Protocol("No JavaScript formatter".into()))
+                        } else if go::is_go(&uri) {
+                            go::format(&source, &style, range.as_ref())
                         } else {
                             css::format(&source, &style, range.as_ref())
                         };

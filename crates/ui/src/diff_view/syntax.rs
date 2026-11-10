@@ -122,14 +122,14 @@ fn highlight(file: &FileDiff) -> nozhik_language_support::Result<Lines> {
         }
         let mut highlighter = match nozhik_config::languages::language_for_path(&file.path) {
             Some(nozhik_config::languages::LanguageId::JavaScript) => Highlighter::javascript()?,
+            Some(nozhik_config::languages::LanguageId::Go) => Highlighter::go()?,
             Some(
                 nozhik_config::languages::LanguageId::Php
                 | nozhik_config::languages::LanguageId::Css
                 | nozhik_config::languages::LanguageId::Html
                 | nozhik_config::languages::LanguageId::Yaml
                 | nozhik_config::languages::LanguageId::Json
-                | nozhik_config::languages::LanguageId::Markdown
-                | nozhik_config::languages::LanguageId::Go,
+                | nozhik_config::languages::LanguageId::Markdown,
             )
             | None => Highlighter::php()?,
         };

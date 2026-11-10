@@ -11,8 +11,8 @@
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-language-support | PHP/CSS/JavaScript/YAML incremental syntax, local formatting, PHP/CSS/JavaScript project indexes, PHP stdio LSP | tree-sitter/php/css/javascript/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
-| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP linter JSON reports, PHPUnit console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
+| nozhik-language-support | PHP/CSS/JavaScript/Go/YAML incremental syntax, local formatting, PHP/CSS/JavaScript/Go project indexes, PHP stdio LSP | tree-sitter/php/css/javascript/go/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
@@ -2119,20 +2119,27 @@ mount. Вкладка линтера в `! Problems` группирует стр
 ## PHPUnit в консоли Docker (v0.1.50)
 
 Кнопка запуска на верхней панели открывает отдельную консоль на каждый
-настроенный тест включённого языка. Сейчас это только `PHPUnit`: вкладка
-`[Docker: контейнер · PHPUnit]` выполняет `docker exec -it` с сохранёнными
-бинарём, рабочим каталогом и аргументами. IDE не разбирает вывод.
+настроенный тест включённого языка. Для PHP это `PHPUnit`, вкладка
+`[Docker: контейнер · PHPUnit]`. Для Go это `go test`, вкладка
+`[Docker: контейнер · Go test]`. Обе выполняют `docker exec -it` с сохранёнными
+бинарём, рабочим каталогом и аргументами. IDE не разбирает вывод. Одна
+успешная консоль пишет в статус имя раннера; несколько — число консолей.
 
 `Config.tests` хранит язык, вид, контейнер, бинарь, каталог и аргументы.
-Пустые настройки остаются пустым списком. Settings → Linters и Settings → Tests
-начинаются с переключателя языков, включённых в Settings → Languages. У PHP
-показаны текущие линтеры и форма PHPUnit. У остальных включённых языков обе
-страницы пустые, пока для них нет раннера.
+Допустимые пары — `php`/`phpunit` и `go`/`gotest`. Пустые настройки остаются
+пустым списком. Settings → Linters и Settings → Tests начинаются с
+переключателя языков, включённых в Settings → Languages. У PHP показаны
+текущие линтеры и форма PHPUnit. У Go — `golangci-lint` и форма Go test.
+У остальных включённых языков обе страницы пустые, пока для них нет раннера.
+Кнопка с жучком по-прежнему запускает все записанные линтеры, а не только
+линтеры языка открытого файла.
 
 Команда `phpunit` или `vendor/bin/phpunit` в терминале контейнера запоминается,
-если PHPUnit ещё не записан. Уже сохранённая команда не меняется. `--version`
-и `--help` регистрируют бинарь без аргументов. Язык, выключенный в Languages,
-не запускается кнопкой.
+если PHPUnit ещё не записан. Команда `go test` запоминается, если Go test ещё
+не записан. Уже сохранённая пара язык/вид не меняется. `--version` и `--help`
+у PHPUnit регистрируют бинарь без аргументов. `go test -h` сохраняет аргумент
+`test`, чтобы повторный запуск не вызвал голый `go`. Язык, выключенный в
+Languages, не запускается кнопкой.
 
 ## Подсказки переопределения PHP и окно usages (v0.1.51)
 
@@ -2296,3 +2303,61 @@ Enter смотрит только на префикс текущей строк�
 Каталог языков мигрирует до версии 3. Версия меньше 3 с непустым списком
 получает JavaScript один раз. Пустой список не меняется. У новых настроек
 версия сразу 3. Правила версий 0 и 1 для JSON и Markdown сохраняются.
+
+## Go в редакторе (v0.1.62)
+
+`.go` доступен в реестре языков. Подсветка и синтаксические диагностики живут
+на локальном потоке синтаксиса: файл не уходит в PHP LSP и не запускает
+`gopls`. Diff целого файла использует грамматику tree-sitter-go. Вложенный Go
+внутри других языков не подключается.
+
+Индексатор поднимает отдельный worker. Кэш — `index_go_v1.json` (поле версии
+внутри JSON остаётся 6, имя файла отличает схему). Старый `index_php.json` этот
+worker не удаляет. Снимок индекса несёт `LanguageId::Go`. Очередь схлопывает
+снимки только внутри одного языка.
+
+Один файл читает `go.mod` предков и берёт строку `module`. Путь импорта —
+модуль плюс относительный каталог. Без модуля остаётся путь каталога. Пакет
+`foo_test` получает префикс `{путь}#{имя}`, чтобы не столкнуться с основным
+пакетом. Экспортированные имена такого пакета дополнительно видны как
+`{путь}::{Имя}`. Функция — `{префикс}::{Имя}`, метод и поле —
+`{префикс}::{Тип}::{Имя}`, тип — `{префикс}::{Тип}`. Встроенные типы —
+`builtin::{имя}`. Псевдоним импорта — переменная на весь файл; точка-импорт
+добавляет экспортированные имена пакета в неквалифицированный список.
+Пустой идентификатор `_` не считается ссылкой. Локальные имена квалифицируются
+`{файл}:{байт}:{имя}`. Разбор одного файла не открывает соседние исходники.
+Встроенное поле структуры попадает в `base_types`, и методы этого типа
+поднимаются по lineage. Имя с большой буквы публичное.
+
+Подсказки считаются на потоке интерфейса по строке и готовому индексу, без
+повторного разбора. После `.` у пакета показываются его функции, типы и
+константы; у значения — методы и поля, включая унаследованные. Числовой
+литерал `1.5` не считается доступом к члену. Каталог стандартной библиотеки
+практический: `fmt`, `errors`, `strings`, `strconv`, `os`, `io`, `context`,
+`net/http`, `encoding/json`, `time`, `sync`, `bytes`, `log`, `slices`, `maps`,
+`path`, `path/filepath`, `regexp`, `bufio`, `testing`, `sort`, `math`. Это не
+весь стандарт и не `gopls`. Принятие функции вставляет скобки и ставит каретку
+внутрь, если вызов ещё не начат. Наведение берёт индекс, затем член текущей
+строки, затем каталог. Переход к определению открывает только объявление в
+индексе. Справка `GoDocs` ведёт на `https://pkg.go.dev`.
+
+Профиль `go_gofmt.json` подключён к `.go`. Enter смотрит на префикс текущей
+строки, как в PHP, CSS и JSON; шаг — таб. Reformat Code — локальная расстановка
+пробелов по листьям дерева. Токены, комментарии и литералы остаются
+байт-в-байт. Частичное выделение отклоняется: форматирование меняет весь файл.
+Дерево с ошибкой и профиль не языка Go тоже отклоняются. Если исходник содержит
+CRLF, результат сохраняет CRLF. Это не официальный двоичный `gofmt`.
+
+`golangci-lint` — отдельный вид линтера. Запуск внутри контейнера добавляет
+`run`, если его нет, и принудительно просит JSON: для v2 это
+`--output.json.path=stdout` и `--output.text.path=/dev/null`, а если аргументы
+пользователя уже содержат `--out-format`, остаётся v1 `--out-format=json`.
+Пустой список `Issues` — успех. `Report.Error` без списка — ошибка. Пути из
+отчёта переписываются на хост так же, как у PHP. Команда `golangci-lint` в
+терминале контейнера запоминается, если этот вид ещё не записан; ведущий `run`
+и флаги формата в настройки не попадают. `version` и `help` сохраняют пустые
+аргументы, а кнопка потом запускает обычную проверку.
+
+Каталог языков мигрирует до версии 4. Версия меньше 4 с непустым списком
+получает Go один раз. Пустой список не меняется. У новых настроек версия сразу
+4. Правила предыдущих версий для JSON, Markdown и JavaScript сохраняются.

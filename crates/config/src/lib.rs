@@ -37,7 +37,7 @@ pub struct Config {
     pub php_language_level: String,
     /// Enabled language services/indexers. Empty means plain-text editing only.
     pub enabled_languages: std::collections::BTreeSet<languages::LanguageId>,
-    /// Language catalog migration marker. Zero predates JSON, one predates Markdown, two predates JavaScript.
+    /// Language catalog migration marker. Zero predates JSON, one predates Markdown, two predates JavaScript, three predates Go.
     #[serde(default)]
     pub language_catalog_version: u8,
     /// Enable local Ollama ghost completions.
@@ -51,7 +51,7 @@ pub struct Config {
     pub sftp_deployment: Option<deployment::SftpDeployment>,
     /// Per-extension profile and syntax palette selections.
     pub file_types: std::collections::BTreeMap<String, code_style::FileTypeSettings>,
-    /// PHP linters run inside Docker. Empty until the user configures or runs one.
+    /// Linters run inside Docker. Empty until the user configures or runs one.
     pub linters: Vec<linters::LinterTool>,
     /// Test commands run inside Docker consoles. Empty until the user configures or runs one.
     pub tests: Vec<test_tools::TestTool>,
@@ -66,7 +66,7 @@ impl Default for Config {
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
             enabled_languages: languages::default_enabled(),
-            language_catalog_version: 3,
+            language_catalog_version: 4,
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 1000,
@@ -236,6 +236,12 @@ impl ConfigManager {
             }
             config.language_catalog_version = 3;
         }
+        if config.language_catalog_version < 4 {
+            if !config.enabled_languages.is_empty() {
+                config.enabled_languages.insert(languages::LanguageId::Go);
+            }
+            config.language_catalog_version = 4;
+        }
         config.validate()?;
         Ok(config)
     }
@@ -394,7 +400,12 @@ mod tests {
                     .enabled_languages
                     .contains(&languages::LanguageId::JavaScript)
             );
-            assert_eq!(config.language_catalog_version, 3);
+            assert!(
+                config
+                    .enabled_languages
+                    .contains(&languages::LanguageId::Go)
+            );
+            assert_eq!(config.language_catalog_version, 4);
             assert_eq!(
                 fs::read_to_string(&path)?,
                 source,
@@ -440,12 +451,17 @@ mod tests {
                 .contains(&languages::LanguageId::JavaScript)
         );
         assert!(
+            migrated
+                .enabled_languages
+                .contains(&languages::LanguageId::Go)
+        );
+        assert!(
             !migrated
                 .enabled_languages
                 .contains(&languages::LanguageId::Json),
             "a version 1 opt-out of JSON stays opted out"
         );
-        assert_eq!(migrated.language_catalog_version, 3);
+        assert_eq!(migrated.language_catalog_version, 4);
         Ok(())
     }
     #[test]

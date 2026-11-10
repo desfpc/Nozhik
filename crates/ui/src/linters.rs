@@ -1,11 +1,11 @@
-//! Project PHP linter runs, settings and problem tabs.
+//! Project linter runs, settings and problem tabs.
 //!
 //! A discovered command is stored only when that linter kind is not already
 //! configured. The run uses its own thread: a linter can take minutes and exits
 //! nonzero when it finds issues, so it must not occupy the Compose worker.
 
 use nozhik_buffer::{Cursor, TextBuffer};
-use nozhik_config::{Config, linters::LinterTool};
+use nozhik_config::{Config, languages::LanguageId, linters::LinterTool};
 use nozhik_docker::linter::{
     DiagnosticItem, LinterJob, LinterKind, Severity, detect, format_context, infer_workdir,
 };
@@ -18,7 +18,16 @@ use std::{
     },
 };
 
-const KINDS: [&str; 4] = ["phpstan", "phpcs", "psalm", "phpmd"];
+const PHP_KINDS: [&str; 4] = ["phpstan", "phpcs", "psalm", "phpmd"];
+const GO_KINDS: [&str; 1] = ["golangci-lint"];
+
+const fn kinds_for(language: LanguageId) -> &'static [&'static str] {
+    match language {
+        LanguageId::Php => &PHP_KINDS,
+        LanguageId::Go => &GO_KINDS,
+        _ => &[],
+    }
+}
 
 /// One Compose container the linter can target.
 #[derive(Clone, Debug)]
@@ -436,13 +445,26 @@ pub fn show_settings(
     ui: &mut egui::Ui,
     config: &mut Config,
     containers: &[(String, String)],
+    language: LanguageId,
     draft: &mut LinterTool,
 ) {
-    ui.label("PHP linters run inside a Docker container when you press the bug button.");
+    let kinds = kinds_for(language);
+    if kinds.is_empty() {
+        ui.label("No linters are available for this language.");
+        return;
+    }
+    ui.label(if language == LanguageId::Go {
+        "golangci-lint runs inside a Docker container when you press the bug button."
+    } else {
+        "PHP linters run inside a Docker container when you press the bug button."
+    });
     let mut remove = None;
     for index in 0..config.linters.len() {
-        ui.separator();
         let kind = config.linters[index].kind.clone();
+        if !kinds.contains(&kind.as_str()) {
+            continue;
+        }
+        ui.separator();
         ui.strong(kind_label(&kind));
         {
             let tool = &mut config.linters[index];
@@ -479,16 +501,17 @@ pub fn show_settings(
     if let Some(index) = remove {
         config.linters.remove(index);
     }
-    show_new_linter(ui, config, containers, draft);
+    show_new_linter(ui, config, containers, kinds, draft);
 }
 
 fn show_new_linter(
     ui: &mut egui::Ui,
     config: &mut Config,
     containers: &[(String, String)],
+    kinds: &'static [&'static str],
     draft: &mut LinterTool,
 ) {
-    let available = unused(config);
+    let available = unused(config, kinds);
     if available.is_empty() {
         return;
     }
@@ -548,7 +571,7 @@ fn show_new_linter(
         tools.push(draft.clone());
         if nozhik_config::linters::validate(&tools).is_ok() {
             config.linters = tools;
-            if let Some(kind) = unused(config).first() {
+            if let Some(kind) = unused(config, kinds).first() {
                 *draft = blank_draft(kind);
             }
         }
@@ -674,9 +697,10 @@ fn resolve_container(token: &str, containers: &[KnownContainer]) -> KnownContain
     }
 }
 
-fn unused(config: &Config) -> Vec<&'static str> {
-    KINDS
-        .into_iter()
+fn unused(config: &Config, kinds: &'static [&'static str]) -> Vec<&'static str> {
+    kinds
+        .iter()
+        .copied()
         .filter(|kind| config.linters.iter().all(|tool| tool.kind != *kind))
         .collect()
 }
@@ -686,10 +710,10 @@ fn kind_label(kind: &str) -> &'static str {
 }
 
 fn args_hint(kind: &str) -> &'static str {
-    if kind == "phpmd" {
-        "classes,controllers ruleset.xml"
-    } else {
-        "Optional paths and flags"
+    match kind {
+        "phpmd" => "classes,controllers ruleset.xml",
+        "golangci-lint" => "./...",
+        _ => "Optional paths and flags",
     }
 }
 

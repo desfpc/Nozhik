@@ -163,6 +163,10 @@ impl CodeStyles {
                 .or_default()
                 .insert("javascript_default.json".into(), javascript.clone());
         }
+        catalog.0.entry("go".into()).or_default().insert(
+            "go_gofmt.json".into(),
+            CodeStyle::parse(include_str!("../code_styles/go/go_gofmt.json"))?,
+        );
         let markdown = CodeStyle::parse(include_str!(
             "../code_styles/markdown/markdown_default.json"
         ))?;
@@ -229,6 +233,7 @@ pub fn default_profile(extension: &str) -> Option<&'static str> {
         "css" => Some("css_default.json"),
         "yaml" | "yml" => Some("yaml_default.json"),
         "js" | "jsx" | "mjs" | "cjs" => Some("javascript_default.json"),
+        "go" => Some("go_gofmt.json"),
         "md" | "markdown" => Some("markdown_default.json"),
         _ => None,
     }

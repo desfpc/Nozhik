@@ -1,4 +1,4 @@
-//! `PHPUnit` settings and the consoles opened by the play button.
+//! `PHPUnit` and Go test settings, and the consoles opened by the play button.
 //!
 //! Output stays in the container terminal. The IDE does not parse it.
 
@@ -22,16 +22,20 @@ pub struct Launch {
     pub args: Vec<OsString>,
 }
 
-/// `PHPUnit` consoles for languages that are enabled in this project.
+/// Test consoles for languages that are enabled in this project.
 pub fn launches(config: &Config) -> Vec<Launch> {
-    if !nozhik_config::languages::enabled(&config.enabled_languages, LanguageId::Php) {
-        return Vec::new();
-    }
     config
         .tests
         .iter()
-        .filter(|tool| tool.language == "php" && tool.kind == "phpunit")
         .filter_map(|tool| {
+            let (language, title) = match (tool.language.as_str(), tool.kind.as_str()) {
+                ("php", "phpunit") => (LanguageId::Php, "PHPUnit"),
+                ("go", "gotest") => (LanguageId::Go, "Go test"),
+                _ => return None,
+            };
+            if !nozhik_config::languages::enabled(&config.enabled_languages, language) {
+                return None;
+            }
             let command = ConsoleCommand {
                 container: tool.container_id.clone(),
                 binary: tool.binary_path.clone(),
@@ -47,7 +51,7 @@ pub fn launches(config: &Config) -> Vec<Launch> {
             Some(Launch {
                 container_id: tool.container_id.clone(),
                 container_name,
-                title: "PHPUnit",
+                title,
                 args,
             })
         })
@@ -60,7 +64,7 @@ pub fn ready(config: &Config) -> bool {
     !launches(config).is_empty()
 }
 
-/// Remembers `PHPUnit` when it is not configured yet.
+/// Remembers a test command when that runner is not configured yet.
 pub fn remember(
     config: &mut Config,
     root: &Path,
@@ -71,10 +75,12 @@ pub fn remember(
     let Some(found) = detect(line) else {
         return false;
     };
+    let language = found.runner.language();
+    let kind = found.runner.kind();
     if config
         .tests
         .iter()
-        .any(|tool| tool.language == "php" && tool.kind == "phpunit")
+        .any(|tool| tool.language == language && tool.kind == kind)
     {
         return false;
     }
@@ -87,8 +93,8 @@ pub fn remember(
         .clone()
         .unwrap_or_else(|| infer_workdir(root, &container.mounts));
     let tool = TestTool {
-        language: "php".into(),
-        kind: "phpunit".into(),
+        language: language.into(),
+        kind: kind.into(),
         container_id: container.id,
         container_name: container.name,
         binary_path: found.binary,
@@ -120,28 +126,83 @@ pub fn show_settings(
     ui: &mut egui::Ui,
     config: &mut Config,
     containers: &[(String, String)],
+    language: LanguageId,
     draft: &mut TestTool,
 ) {
-    ui.label("PHPUnit runs in the container console when you press the play button.");
+    let Some(form) = form_for(language) else {
+        ui.label("No test runners are available for this language.");
+        return;
+    };
+    ui.label(form.intro);
     if let Some(index) = config
         .tests
         .iter()
-        .position(|tool| tool.language == "php" && tool.kind == "phpunit")
+        .position(|tool| tool.language == form.language && tool.kind == form.kind)
     {
-        show_phpunit(ui, config, containers, index);
+        show_runner(ui, config, containers, &form, index);
         return;
     }
-    show_new_phpunit(ui, config, containers, draft);
+    show_new_runner(ui, config, containers, &form, draft);
 }
 
-fn show_phpunit(
+struct RunnerForm {
+    language: &'static str,
+    kind: &'static str,
+    title: &'static str,
+    intro: &'static str,
+    binary_hint: &'static str,
+    args_hint: &'static str,
+    args_default: &'static str,
+    salt: &'static str,
+}
+
+const fn form_for(language: LanguageId) -> Option<RunnerForm> {
+    match language {
+        LanguageId::Php => Some(RunnerForm {
+            language: "php",
+            kind: "phpunit",
+            title: "PHPUnit",
+            intro: "PHPUnit runs in the container console when you press the play button.",
+            binary_hint: "vendor/bin/phpunit",
+            args_hint: "--filter PaymentTest",
+            args_default: "",
+            salt: "phpunit",
+        }),
+        LanguageId::Go => Some(RunnerForm {
+            language: "go",
+            kind: "gotest",
+            title: "Go test",
+            intro: "Go tests run in the container console when you press the play button.",
+            binary_hint: "go",
+            args_hint: "test ./...",
+            args_default: "test ./...",
+            salt: "gotest",
+        }),
+        _ => None,
+    }
+}
+
+fn blank_for(form: &RunnerForm) -> TestTool {
+    TestTool {
+        language: form.language.into(),
+        kind: form.kind.into(),
+        container_id: String::new(),
+        container_name: String::new(),
+        binary_path: form.binary_hint.into(),
+        workdir: String::new(),
+        args: form.args_default.into(),
+    }
+}
+
+fn show_runner(
     ui: &mut egui::Ui,
     config: &mut Config,
     containers: &[(String, String)],
+    form: &RunnerForm,
     index: usize,
 ) {
     ui.separator();
-    ui.strong("PHPUnit");
+    ui.strong(form.title);
     {
         let Some(tool) = config.tests.get_mut(index) else {
             return;
@@ -151,14 +212,14 @@ fn show_phpunit(
             &mut tool.container_id,
             &mut tool.container_name,
             containers,
-            ("phpunit_container", index),
+            (form.salt, index),
         );
     }
     ui.label("Binary");
     if let Some(tool) = config.tests.get_mut(index) {
         ui.add(
             crate::form::singleline(&mut tool.binary_path)
-                .hint_text("vendor/bin/phpunit")
+                .hint_text(form.binary_hint)
                 .desired_width(ui.available_width()),
         );
     }
@@ -174,7 +235,7 @@ fn show_phpunit(
     if let Some(tool) = config.tests.get_mut(index) {
         ui.add(
             crate::form::singleline(&mut tool.args)
-                .hint_text("--filter PaymentTest")
+                .hint_text(form.args_hint)
                 .desired_width(ui.available_width()),
         );
     }
@@ -183,28 +244,29 @@ fn show_phpunit(
     }
 }
 
-fn show_new_phpunit(
+fn show_new_runner(
     ui: &mut egui::Ui,
     config: &mut Config,
     containers: &[(String, String)],
+    form: &RunnerForm,
     draft: &mut TestTool,
 ) {
-    if draft.kind != "phpunit" {
-        *draft = blank_draft();
+    if draft.kind != form.kind {
+        *draft = blank_for(form);
     }
     ui.separator();
-    ui.strong("PHPUnit");
+    ui.strong(form.title);
     container_picker(
         ui,
         &mut draft.container_id,
         &mut draft.container_name,
         containers,
-        "phpunit_draft_container",
+        format!("{}_draft_container", form.salt),
     );
     ui.label("Binary");
     ui.add(
         crate::form::singleline(&mut draft.binary_path)
-            .hint_text("vendor/bin/phpunit")
+            .hint_text(form.binary_hint)
             .desired_width(ui.available_width()),
     );
     ui.label("Container workdir");
@@ -216,20 +278,20 @@ fn show_new_phpunit(
     ui.label("Arguments");
     ui.add(
         crate::form::singleline(&mut draft.args)
-            .hint_text("--filter PaymentTest")
+            .hint_text(form.args_hint)
             .desired_width(ui.available_width()),
     );
     let ready = !draft.container_id.trim().is_empty() && !draft.binary_path.trim().is_empty();
     if ui
         .add_enabled(ready, egui::Button::new("Add"))
-        .on_hover_text("Save PHPUnit for the project")
+        .on_hover_text(format!("Save {} for the project", form.title))
         .clicked()
     {
         let mut tools = config.tests.clone();
         tools.push(draft.clone());
         if nozhik_config::test_tools::validate(&tools).is_ok() {
             config.tests = tools;
-            *draft = blank_draft();
+            *draft = blank_for(form);
         }
     }
 }
@@ -280,6 +342,34 @@ mod tests {
         assert!(!ready(&config));
         assert!(launches(&config).is_empty());
         assert_eq!(blank_draft().binary_path, "vendor/bin/phpunit");
+        config.enabled_languages.insert(LanguageId::Php);
+        config.enabled_languages.insert(LanguageId::Go);
+        assert!(remember(
+            &mut config,
+            root,
+            "go test ./... -count=1",
+            Some(("abc", "php-fpm-nozhovecom")),
+            &containers,
+        ));
+        assert_eq!(config.tests.len(), 2);
+        assert_eq!(
+            config
+                .tests
+                .iter()
+                .find(|tool| tool.kind == "gotest")
+                .map(|tool| tool.args.as_str()),
+            Some("test ./... -count=1")
+        );
+        assert!(!remember(
+            &mut config,
+            root,
+            "go test -h",
+            Some(("abc", "php-fpm-nozhovecom")),
+            &containers,
+        ));
+        assert_eq!(launches(&config).len(), 2);
+        config.enabled_languages.remove(&LanguageId::Go);
+        assert_eq!(launches(&config).len(), 1);
         Ok(())
     }
 }

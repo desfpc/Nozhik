@@ -22,7 +22,7 @@ pub enum LanguageId {
     Json,
     /// Markdown source highlighting. The rendered view lives in the UI.
     Markdown,
-    /// Go (reserved).
+    /// Go source, index, formatting and completion.
     #[serde(alias = "Go")]
     Go,
 }
@@ -87,7 +87,7 @@ pub const LANGUAGES: &[LanguageSpec] = &[
         id: LanguageId::Go,
         label: "Go",
         extensions: &["go"],
-        available: false,
+        available: true,
     },
 ];
 /// Defaults include all languages implemented in this build, preserving old settings.
@@ -144,6 +144,8 @@ mod tests {
             "view.jsx",
             "module.mjs",
             "bundle.cjs",
+            "a.go",
+            "a.GO",
         ] {
             assert!(enabled_for_path(&defaults, Path::new(path)));
         }
@@ -153,7 +155,6 @@ mod tests {
             "a.tsx",
             "a.mts",
             "a.cts",
-            "a.go",
             "a.png",
             "a.php.bak",
             "no_extension",
@@ -162,7 +163,7 @@ mod tests {
         }
         assert!(!enabled_for_path(&BTreeSet::new(), Path::new("a.php")));
         assert!(
-            !enabled_for_path(&BTreeSet::from([LanguageId::Go]), Path::new("a.go")),
+            !enabled_for_path(&BTreeSet::from([LanguageId::Html]), Path::new("a.html")),
             "reserved languages cannot be falsely activated"
         );
         assert_eq!(

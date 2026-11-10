@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TestTool {
-    /// Language id, currently `php`.
+    /// Language id: `php` or `go`.
     #[serde(default = "default_language")]
     pub language: String,
-    /// Runner id, currently `phpunit`.
+    /// Runner id: `phpunit` or `gotest`.
     pub kind: String,
     /// Container id. Docker also accepts a name when the id is not known yet.
     pub container_id: String,
@@ -34,15 +34,18 @@ fn default_language() -> String {
 pub fn validate(tools: &[TestTool]) -> Result<(), crate::ConfigError> {
     let mut seen = Vec::new();
     for tool in tools {
-        if tool.language != "php" || tool.kind != "phpunit" {
+        if !matches!(
+            (tool.language.as_str(), tool.kind.as_str()),
+            ("php", "phpunit") | ("go", "gotest")
+        ) {
             return Err(crate::ConfigError::Invalid(
-                "the only test runner is phpunit for php",
+                "test runners are phpunit for php and gotest for go",
             ));
         }
         let key = (tool.language.as_str(), tool.kind.as_str());
         if seen.contains(&key) {
             return Err(crate::ConfigError::Invalid(
-                "PHPUnit can be configured once",
+                "each test runner can be configured once",
             ));
         }
         seen.push(key);
@@ -113,6 +116,26 @@ mod tests {
             args: String::new(),
         });
         assert!(other.validate().is_err());
+        other.tests.clear();
+        other.tests.push(TestTool {
+            language: "go".into(),
+            kind: "gotest".into(),
+            container_id: "abc".into(),
+            container_name: String::new(),
+            binary_path: "go".into(),
+            workdir: "/src".into(),
+            args: "test ./...".into(),
+        });
+        other.tests.push(TestTool {
+            language: "php".into(),
+            kind: "phpunit".into(),
+            container_id: "abc".into(),
+            container_name: String::new(),
+            binary_path: "vendor/bin/phpunit".into(),
+            workdir: String::new(),
+            args: String::new(),
+        });
+        assert!(other.validate().is_ok());
         Ok(())
     }
 }

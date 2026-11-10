@@ -78,17 +78,22 @@ impl ProjectIndexer {
                 output.send(event);
                 wake();
             };
-            let mut workers: Vec<_> = [LanguageId::Php, LanguageId::Css, LanguageId::JavaScript]
-                .into_iter()
-                .filter(|id| nozhik_config::languages::enabled(&enabled_languages, *id))
-                .map(|id| {
-                    let mut worker = Worker::new(root.clone());
-                    worker.disk = Arc::new(SymbolIndex::new(id));
-                    worker.live = worker.disk.clone();
-                    worker.enabled_languages.clone_from(&enabled_languages);
-                    worker
-                })
-                .collect();
+            let mut workers: Vec<_> = [
+                LanguageId::Php,
+                LanguageId::Css,
+                LanguageId::JavaScript,
+                LanguageId::Go,
+            ]
+            .into_iter()
+            .filter(|id| nozhik_config::languages::enabled(&enabled_languages, *id))
+            .map(|id| {
+                let mut worker = Worker::new(root.clone());
+                worker.disk = Arc::new(SymbolIndex::new(id));
+                worker.live = worker.disk.clone();
+                worker.enabled_languages.clone_from(&enabled_languages);
+                worker
+            })
+            .collect();
             if workers.is_empty() {
                 notify(IndexEvent::Finished);
                 return;
@@ -240,12 +245,12 @@ impl Worker {
         match self.disk.language {
             LanguageId::Css => "index_css_v6.json",
             LanguageId::JavaScript => "index_js_v8.json",
+            LanguageId::Go => "index_go_v1.json",
             LanguageId::Php
             | LanguageId::Html
             | LanguageId::Yaml
             | LanguageId::Json
-            | LanguageId::Markdown
-            | LanguageId::Go => "index_php_v6.json",
+            | LanguageId::Markdown => "index_php_v6.json",
         }
     }
     fn extract(&self, path: &Path, source: &str) -> crate::Result<FileSymbols> {
@@ -259,12 +264,12 @@ impl Worker {
                 Ok(facts)
             }
             LanguageId::JavaScript => crate::js_symbols::parse(path, source),
+            LanguageId::Go => crate::go_symbols::parse(path, source),
             LanguageId::Php
             | LanguageId::Html
             | LanguageId::Yaml
             | LanguageId::Json
-            | LanguageId::Markdown
-            | LanguageId::Go => crate::php_symbols::parse(path, source),
+            | LanguageId::Markdown => crate::php_symbols::parse(path, source),
         }
     }
     fn cache_dir(&self) -> PathBuf {

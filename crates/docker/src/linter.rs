@@ -1,4 +1,4 @@
-//! PHP linter discovery, Docker exec arguments, JSON reports and host paths.
+//! PHP and Go linter discovery, Docker exec arguments, JSON reports and host paths.
 //!
 //! A linter exits nonzero when it finds issues. That status is a report, not a
 //! failure to launch. Invalid JSON and configuration failures become errors.
@@ -26,7 +26,7 @@ pub enum Severity {
 /// One issue mapped onto the host project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagnosticItem {
-    /// Display name: `PHPStan`, `PHPCS`, `Psalm` or `PHPMD`.
+    /// Display name: `PHPStan`, `PHPCS`, `Psalm`, `PHPMD` or `golangci-lint`.
     pub linter: String,
     /// Absolute path on the host.
     pub file_path: PathBuf,
@@ -42,7 +42,7 @@ pub struct DiagnosticItem {
     pub rule: Option<String>,
 }
 
-/// Supported PHP linter.
+/// Supported linter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LinterKind {
     /// `PHPStan`.
@@ -53,6 +53,8 @@ pub enum LinterKind {
     Psalm,
     /// PHP Mess Detector (`phpmd`).
     PhpMd,
+    /// `golangci-lint`.
+    Golangci,
 }
 
 impl LinterKind {
@@ -64,6 +66,7 @@ impl LinterKind {
             Self::PhpCs => "phpcs",
             Self::Psalm => "psalm",
             Self::PhpMd => "phpmd",
+            Self::Golangci => "golangci-lint",
         }
     }
 
@@ -75,6 +78,7 @@ impl LinterKind {
             Self::PhpCs => "PHPCS",
             Self::Psalm => "Psalm",
             Self::PhpMd => "PHPMD",
+            Self::Golangci => "golangci-lint",
         }
     }
 
@@ -86,6 +90,7 @@ impl LinterKind {
             "phpcs" => Some(Self::PhpCs),
             "psalm" => Some(Self::Psalm),
             "phpmd" => Some(Self::PhpMd),
+            "golangci-lint" => Some(Self::Golangci),
             _ => None,
         }
     }
@@ -98,6 +103,7 @@ impl LinterKind {
             Self::PhpCs => "vendor/bin/phpcs",
             Self::Psalm => "vendor/bin/psalm",
             Self::PhpMd => "vendor/bin/phpmd",
+            Self::Golangci => "golangci-lint",
         }
     }
 }
@@ -375,6 +381,7 @@ fn command_args(kind: LinterKind, binary: &str, args: &str) -> crate::Result<Vec
         LinterKind::PhpCs => phpcs_command(&tokens),
         LinterKind::Psalm => psalm_command(&tokens),
         LinterKind::PhpMd => phpmd_command(tokens)?,
+        LinterKind::Golangci => golangci_command(&tokens),
     });
     Ok(command)
 }
@@ -433,7 +440,34 @@ fn phpmd_command(mut tokens: Vec<String>) -> crate::Result<Vec<String>> {
     Ok(tokens)
 }
 
+fn golangci_command(args: &[String]) -> Vec<String> {
+    let mut tokens = strip_options(
+        args,
+        &["--out-format", "--output.json.path", "--output.text.path"],
+        &[],
+    );
+    if tokens.first().map(String::as_str) != Some("run")
+        && !tokens.first().is_some_and(|token| is_meta(token))
+    {
+        tokens.insert(0, "run".into());
+    }
+    // v1 prints JSON with --out-format. v2 uses separate output paths.
+    if args
+        .iter()
+        .any(|arg| arg == "--out-format" || arg.starts_with("--out-format="))
+    {
+        tokens.push("--out-format=json".into());
+    } else {
+        tokens.push("--output.json.path=stdout".into());
+        tokens.push("--output.text.path=/dev/null".into());
+    }
+    tokens
+}
+
 fn remembered_args(kind: LinterKind, args: &[String]) -> Vec<String> {
+    if kind == LinterKind::Golangci {
+        return remembered_golangci(args);
+    }
     if args.first().is_some_and(|token| is_meta(token)) {
         return Vec::new();
     }
@@ -444,9 +478,24 @@ fn remembered_args(kind: LinterKind, args: &[String]) -> Vec<String> {
         LinterKind::PhpStan => (&["--error-format"], &["--no-progress"]),
         LinterKind::PhpCs => (&["--report"], &["-q", "--quiet"]),
         LinterKind::Psalm => (&["--output-format"], &["--no-progress"]),
-        LinterKind::PhpMd => (&[], &[]),
+        LinterKind::PhpMd | LinterKind::Golangci => (&[], &[]),
     };
     strip_options(args, valued, bare)
+}
+
+fn remembered_golangci(args: &[String]) -> Vec<String> {
+    let mut tokens = args.to_vec();
+    if tokens.first().map(String::as_str) == Some("run") {
+        tokens.remove(0);
+    }
+    if tokens.first().is_some_and(|token| is_meta(token)) {
+        return Vec::new();
+    }
+    strip_options(
+        &tokens,
+        &["--out-format", "--output.json.path", "--output.text.path"],
+        &[],
+    )
 }
 
 fn remembered_phpmd(args: &[String]) -> Vec<String> {
@@ -530,6 +579,7 @@ fn parse(
         LinterKind::PhpCs => parse_phpcs(&value, &map),
         LinterKind::Psalm => parse_psalm(&value, &map),
         LinterKind::PhpMd => parse_phpmd(&value, &map),
+        LinterKind::Golangci => parse_golangci(&value, &map),
     }
 }
 
@@ -669,6 +719,64 @@ fn parse_phpmd(value: &Value, map: &MapCtx<'_>) -> crate::Result<Vec<DiagnosticI
         return Err(crate::Error::Message("PHPMD JSON has no files".into()));
     }
     Ok(items)
+}
+
+fn parse_golangci(value: &Value, map: &MapCtx<'_>) -> crate::Result<Vec<DiagnosticItem>> {
+    let issues = value
+        .get("Issues")
+        .or_else(|| value.get("issues"))
+        .and_then(Value::as_array);
+    let Some(issues) = issues else {
+        let report = value
+            .get("Report")
+            .or_else(|| value.get("report"))
+            .and_then(|report| text(report, &["Error", "error"]))
+            .filter(|message| !message.is_empty());
+        return Err(crate::Error::Message(
+            report
+                .unwrap_or("golangci-lint JSON has no Issues")
+                .to_owned(),
+        ));
+    };
+    let mut items = Vec::new();
+    for issue in issues {
+        let pos = issue.get("Pos").or_else(|| issue.get("pos"));
+        let filename = pos
+            .and_then(|pos| text(pos, &["Filename", "filename"]))
+            .or_else(|| text(issue, &["Filename", "filename"]))
+            .unwrap_or("");
+        if filename.is_empty() {
+            continue;
+        }
+        let line = pos
+            .and_then(|pos| usize_field(pos, &["Line", "line"]))
+            .or_else(|| usize_field(issue, &["Line", "line"]))
+            .filter(|line| *line > 0)
+            .unwrap_or(1);
+        let column = pos
+            .and_then(|pos| usize_field(pos, &["Column", "column"]))
+            .or_else(|| usize_field(issue, &["Column", "column"]))
+            .filter(|column| *column > 0);
+        let message = text(issue, &["Text", "text", "message"]).unwrap_or("golangci-lint issue");
+        items.push(DiagnosticItem {
+            linter: LinterKind::Golangci.label().to_owned(),
+            file_path: host_path(filename, map.root, map.workdir, map.mounts),
+            line,
+            column,
+            message: message.to_owned(),
+            severity: golangci_severity(text(issue, &["Severity", "severity"]).unwrap_or("")),
+            rule: text(issue, &["FromLinter", "fromLinter", "FromLinter"]).map(str::to_owned),
+        });
+    }
+    Ok(items)
+}
+
+fn golangci_severity(text: &str) -> Severity {
+    match text.to_ascii_lowercase().as_str() {
+        "error" => Severity::Error,
+        "info" | "information" => Severity::Info,
+        _ => Severity::Warning,
+    }
 }
 
 fn push_messages(
@@ -814,6 +922,7 @@ fn kind_of_token(token: &str) -> Option<LinterKind> {
         "phpcs" => Some(LinterKind::PhpCs),
         "psalm" => Some(LinterKind::Psalm),
         "phpmd" => Some(LinterKind::PhpMd),
+        "golangci-lint" => Some(LinterKind::Golangci),
         _ => None,
     }
 }
@@ -1215,6 +1324,45 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn golangci_lint_json_maps_container_paths() -> Result<(), String> {
+        let detected = detect("root@box:/src# golangci-lint run ./... --output.json.path=stdout")
+            .ok_or("detect")?;
+        assert_eq!(detected.kind, LinterKind::Golangci);
+        assert_eq!(detected.binary, "golangci-lint");
+        assert_eq!(detected.args, "./...");
+        assert_eq!(detected.workdir.as_deref(), Some("/src"));
+        assert!(detect("golangci-lint --version").is_some_and(|found| found.args.is_empty()));
+        assert!(detect("go test ./...").is_none());
+        let args =
+            docker_args(&job(LinterKind::Golangci, "./...")).map_err(|error| error.to_string())?;
+        assert!(args.iter().any(|arg| arg == "run"));
+        assert!(args.iter().any(|arg| arg == "--output.json.path=stdout"));
+        assert!(args.iter().any(|arg| arg == "--output.text.path=/dev/null"));
+        let v1 = docker_args(&job(LinterKind::Golangci, "--out-format json ./..."))
+            .map_err(|error| error.to_string())?;
+        assert!(v1.iter().any(|arg| arg == "--out-format=json"));
+        assert!(!v1.iter().any(|arg| arg.contains("output.json.path")));
+        let report = r#"{"Issues":[{"FromLinter":"govet","Text":"unused","Severity":"","Pos":{"Filename":"/var/www/html/main.go","Line":4,"Column":2}}]}"#;
+        let items = interpret(&job(LinterKind::Golangci, "./..."), 1, report, "")
+            .map_err(|error| error.to_string())?;
+        let item = items.first().ok_or("issue")?;
+        assert_eq!(item.file_path, Path::new("/work/nozhove/main.go"));
+        assert_eq!(item.line, 4);
+        assert_eq!(item.column, Some(2));
+        assert_eq!(item.rule.as_deref(), Some("govet"));
+        assert_eq!(item.severity, Severity::Warning);
+        let empty = r#"{"Issues":[]}"#;
+        assert_eq!(
+            interpret(&job(LinterKind::Golangci, ""), 0, empty, "")
+                .map_err(|error| error.to_string())?,
+            Vec::<DiagnosticItem>::new()
+        );
+        let broken = r#"{"Report":{"Error":"config failed"}}"#;
+        assert!(interpret(&job(LinterKind::Golangci, ""), 3, broken, "").is_err());
         Ok(())
     }
 }

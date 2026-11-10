@@ -35,6 +35,17 @@ impl LanguageTriggerConfig {
             auto_popup_triggers: vec!['$'],
         }
     }
+
+    /// Built-in Go preset. A dot selects a package member or a method.
+    #[must_use]
+    pub fn go() -> Self {
+        Self {
+            language_id: "go".into(),
+            member_access_triggers: vec![".".into()],
+            static_access_triggers: Vec::new(),
+            auto_popup_triggers: Vec::new(),
+        }
+    }
     /// Whether newly inserted text warrants a completion query.
     #[must_use]
     pub fn activates(&self, before: &str) -> bool {

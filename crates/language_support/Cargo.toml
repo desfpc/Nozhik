@@ -10,6 +10,7 @@ tree-sitter.workspace = true
 tree-sitter-php.workspace = true
 tree-sitter-css.workspace = true
 tree-sitter-javascript.workspace = true
+tree-sitter-go.workspace = true
 tree-sitter-yaml.workspace = true
 csscolorparser.workspace = true
 lsp-types.workspace = true

@@ -369,9 +369,13 @@ impl crate::NozhikUi {
                 self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
             }
             let javascript = nozhik_language_support::javascript::is_javascript(&uri);
+            let go_file = nozhik_language_support::go::is_go(&uri);
             if javascript {
                 view.triggers =
                     nozhik_language_support::triggers::LanguageTriggerConfig::javascript();
+                view.stubs = None;
+            } else if go_file {
+                view.triggers = nozhik_language_support::triggers::LanguageTriggerConfig::go();
                 view.stubs = None;
             } else if nozhik_language_support::local_syntax(&uri) {
                 view.stubs = None;
@@ -379,7 +383,7 @@ impl crate::NozhikUi {
                 view.stubs.clone_from(&self.settings_dialog.php_stubs);
             }
             if let Some(byte) = view.local_completion_pending
-                && (view.project_index.is_some() || javascript)
+                && (view.project_index.is_some() || javascript || go_file)
                 && byte == document.buffer.cursors().as_slice()[0].head.byte_offset
             {
                 view.completions =
@@ -391,6 +395,12 @@ impl crate::NozhikUi {
                     language_id: "javascript".into(),
                     label: "JavaScript".into(),
                     provider: nozhik_language_support::javascript::documentation(),
+                })
+            } else if go_file {
+                Some(DocumentationSource {
+                    language_id: "go".into(),
+                    label: "Go".into(),
+                    provider: nozhik_language_support::go::documentation(),
                 })
             } else {
                 view.stubs.clone().map(DocumentationSource::from)
@@ -413,27 +423,34 @@ impl crate::NozhikUi {
                 );
             }
             if nozhik_language_support::local_syntax(&uri) {
-                if javascript && ready {
+                if (javascript || go_file) && ready {
                     if let Some((kind, byte)) = view.request.take() {
                         let source = document.buffer.rope().to_string();
                         if byte <= source.len() && source.is_char_boundary(byte) {
                             if kind == RequestKind::Hover {
-                                view.hover = nozhik_language_support::javascript::hover(
-                                    view.project_index.as_deref(),
-                                    &document.path,
-                                    &source,
-                                    byte,
-                                )
-                                .map(|hover| {
-                                    match hover.contents {
-                                        HoverContents::Markup(value) => value.value,
-                                        HoverContents::Scalar(value) => marked(value),
-                                        HoverContents::Array(values) => values
-                                            .into_iter()
-                                            .map(marked)
-                                            .collect::<Vec<_>>()
-                                            .join("\n\n"),
-                                    }
+                                let hover = if go_file {
+                                    nozhik_language_support::go::hover(
+                                        view.project_index.as_deref(),
+                                        &document.path,
+                                        &source,
+                                        byte,
+                                    )
+                                } else {
+                                    nozhik_language_support::javascript::hover(
+                                        view.project_index.as_deref(),
+                                        &document.path,
+                                        &source,
+                                        byte,
+                                    )
+                                };
+                                view.hover = hover.map(|hover| match hover.contents {
+                                    HoverContents::Markup(value) => value.value,
+                                    HoverContents::Scalar(value) => marked(value),
+                                    HoverContents::Array(values) => values
+                                        .into_iter()
+                                        .map(marked)
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n"),
                                 });
                             } else if kind == RequestKind::Definition
                                 && let Some(index) = &view.project_index
@@ -444,7 +461,7 @@ impl crate::NozhikUi {
                             }
                         }
                     }
-                } else if !javascript {
+                } else if !javascript && !go_file {
                     view.request = None;
                 }
                 continue;
@@ -814,6 +831,41 @@ impl EditorLanguage {
         })
     }
 
+    fn script_completions(
+        &self,
+        index: Option<&nozhik_language_support::symbol_index::SymbolIndex>,
+        source: &str,
+        byte: usize,
+        absolute_byte: usize,
+    ) -> Option<Vec<CompletionItem>> {
+        self.go_completions(index, source, byte, absolute_byte)
+            .or_else(|| self.javascript_completions(index, source, byte, absolute_byte))
+    }
+
+    fn go_completions(
+        &self,
+        index: Option<&nozhik_language_support::symbol_index::SymbolIndex>,
+        source: &str,
+        byte: usize,
+        absolute_byte: usize,
+    ) -> Option<Vec<CompletionItem>> {
+        let go_file = self.triggers.language_id == "go"
+            || index.is_some_and(|symbols| {
+                symbols.language == nozhik_config::languages::LanguageId::Go
+            });
+        go_file.then(|| {
+            nozhik_language_support::go::complete(
+                index,
+                self.project_path
+                    .as_deref()
+                    .unwrap_or_else(|| std::path::Path::new("main.go")),
+                source,
+                byte,
+                absolute_byte,
+            )
+        })
+    }
+
     pub(crate) fn local_completions(&self, source: &str, byte: usize) -> Vec<CompletionItem> {
         self.local_fragment_completions(source, byte, byte)
     }
@@ -835,9 +887,19 @@ impl EditorLanguage {
                 let (old_range, new_range) = changed_range(old, new);
                 map_byte(absolute_byte, &new_range, &old_range)
             });
-        if let Some(items) = self.javascript_completions(index, source, byte, absolute_byte) {
+        if let Some(items) = self.script_completions(index, source, byte, absolute_byte) {
             return items;
         }
+        self.php_fragment_completions(index, source, byte, absolute_byte)
+    }
+
+    fn php_fragment_completions(
+        &self,
+        index: Option<&nozhik_language_support::symbol_index::SymbolIndex>,
+        source: &str,
+        byte: usize,
+        absolute_byte: usize,
+    ) -> Vec<CompletionItem> {
         let class_prefix = source
             .contains("function")
             .then(|| {

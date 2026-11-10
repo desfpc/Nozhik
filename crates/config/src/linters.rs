@@ -1,12 +1,12 @@
-//! Project PHP linters. Each kind is stored once.
+//! Project linters. Each kind is stored once.
 
 use serde::{Deserialize, Serialize};
 
-/// One PHP linter the project runs inside a Docker container.
+/// One linter the project runs inside a Docker container.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinterTool {
-    /// `phpstan`, `phpcs`, `psalm` or `phpmd`.
+    /// `phpstan`, `phpcs`, `psalm`, `phpmd` or `golangci-lint`.
     pub kind: String,
     /// Container id. Docker also accepts a name when the id is not known yet.
     pub container_id: String,
@@ -27,14 +27,17 @@ pub struct LinterTool {
 pub fn validate(tools: &[LinterTool]) -> Result<(), crate::ConfigError> {
     let mut seen = Vec::new();
     for tool in tools {
-        if !matches!(tool.kind.as_str(), "phpstan" | "phpcs" | "psalm" | "phpmd") {
+        if !matches!(
+            tool.kind.as_str(),
+            "phpstan" | "phpcs" | "psalm" | "phpmd" | "golangci-lint"
+        ) {
             return Err(crate::ConfigError::Invalid(
-                "linter kind must be phpstan, phpcs, psalm, or phpmd",
+                "linter kind must be phpstan, phpcs, psalm, phpmd, or golangci-lint",
             ));
         }
         if seen.contains(&tool.kind.as_str()) {
             return Err(crate::ConfigError::Invalid(
-                "each PHP linter can be configured once",
+                "each linter can be configured once",
             ));
         }
         seen.push(tool.kind.as_str());

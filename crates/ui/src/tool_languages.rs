@@ -51,7 +51,7 @@ mod tests {
         let ids = enabled(&config);
         assert!(ids.contains(&LanguageId::Php));
         assert!(ids.contains(&LanguageId::Css));
-        assert!(!ids.contains(&LanguageId::Go));
+        assert!(ids.contains(&LanguageId::Go));
         let php_only = Config {
             enabled_languages: std::iter::once(LanguageId::Php).collect(),
             ..Config::default()

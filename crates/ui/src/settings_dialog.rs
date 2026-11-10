@@ -145,11 +145,23 @@ impl SettingsDialog {
             return;
         }
         let language = self.tool_language;
-        if language == LanguageId::Php {
+        if matches!(language, LanguageId::Php | LanguageId::Go) {
             if tests {
-                crate::test_runs::show_settings(ui, config, containers, &mut self.test_draft);
+                crate::test_runs::show_settings(
+                    ui,
+                    config,
+                    containers,
+                    language,
+                    &mut self.test_draft,
+                );
             } else {
-                crate::linters::show_settings(ui, config, containers, &mut self.linter_draft);
+                crate::linters::show_settings(
+                    ui,
+                    config,
+                    containers,
+                    language,
+                    &mut self.linter_draft,
+                );
             }
             return;
         }

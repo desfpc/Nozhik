@@ -1337,7 +1337,9 @@ impl TextEditorView {
                 let local_caret = item
                     .data
                     .as_ref()
-                    .filter(|data| php_caret || data["nozhik_js"] == true)
+                    .filter(|data| {
+                        php_caret || data["nozhik_js"] == true || data["nozhik_go"] == true
+                    })
                     .and_then(|data| data["caret"].as_u64())
                     .and_then(|offset| usize::try_from(offset).ok())
                     .and_then(|offset| {

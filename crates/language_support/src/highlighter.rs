@@ -1,4 +1,4 @@
-//! Incremental PHP/CSS/YAML trees and query capture ranges (UTF-8 bytes).
+//! Incremental PHP/CSS/JavaScript/YAML trees and query capture ranges (UTF-8 bytes).
 use std::ops::Range;
 use tree_sitter::{InputEdit, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -24,9 +24,37 @@ impl Highlighter {
             Self::yaml()
         } else if crate::css::is_css(uri) {
             Self::css()
+        } else if crate::javascript::is_javascript(uri) {
+            Self::javascript()
         } else {
             Self::php()
         }
+    }
+
+    /// Loads the bundled JavaScript grammar, including JSX captures when they compile.
+    ///
+    /// # Errors
+    /// Returns incompatible grammar or query errors.
+    pub fn javascript() -> crate::Result<Self> {
+        let language = tree_sitter_javascript::LANGUAGE.into();
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .map_err(|error| crate::Error::Protocol(error.to_string()))?;
+        let combined = format!(
+            "{}\n{}",
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+        );
+        let query = Query::new(&language, &combined)
+            .or_else(|_| Query::new(&language, tree_sitter_javascript::HIGHLIGHT_QUERY));
+        let query = query.map_err(|error| crate::Error::Protocol(error.to_string()))?;
+        Ok(Self {
+            parser,
+            query,
+            tree: None,
+            source: String::new(),
+        })
     }
 
     /// Loads the bundled PHP grammar and highlights.scm.

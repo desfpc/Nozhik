@@ -78,7 +78,7 @@ impl ProjectIndexer {
                 output.send(event);
                 wake();
             };
-            let mut workers: Vec<_> = [LanguageId::Php, LanguageId::Css]
+            let mut workers: Vec<_> = [LanguageId::Php, LanguageId::Css, LanguageId::JavaScript]
                 .into_iter()
                 .filter(|id| nozhik_config::languages::enabled(&enabled_languages, *id))
                 .map(|id| {
@@ -237,22 +237,34 @@ impl Worker {
             .is_ok_and(|relative| !relative.components().any(|c| excluded(c.as_os_str())))
     }
     fn cache_name(&self) -> &'static str {
-        if self.disk.language == LanguageId::Css {
-            "index_css_v6.json"
-        } else {
-            "index_php_v6.json"
+        match self.disk.language {
+            LanguageId::Css => "index_css_v6.json",
+            LanguageId::JavaScript => "index_js_v8.json",
+            LanguageId::Php
+            | LanguageId::Html
+            | LanguageId::Yaml
+            | LanguageId::Json
+            | LanguageId::Markdown
+            | LanguageId::Go => "index_php_v6.json",
         }
     }
     fn extract(&self, path: &Path, source: &str) -> crate::Result<FileSymbols> {
-        if self.disk.language == LanguageId::Css {
-            let mut facts = FileSymbols {
-                css_classes: crate::css::classes(source)?,
-                ..FileSymbols::default()
-            };
-            crate::css_symbols::selectors(path, source, &mut facts);
-            Ok(facts)
-        } else {
-            crate::php_symbols::parse(path, source)
+        match self.disk.language {
+            LanguageId::Css => {
+                let mut facts = FileSymbols {
+                    css_classes: crate::css::classes(source)?,
+                    ..FileSymbols::default()
+                };
+                crate::css_symbols::selectors(path, source, &mut facts);
+                Ok(facts)
+            }
+            LanguageId::JavaScript => crate::js_symbols::parse(path, source),
+            LanguageId::Php
+            | LanguageId::Html
+            | LanguageId::Yaml
+            | LanguageId::Json
+            | LanguageId::Markdown
+            | LanguageId::Go => crate::php_symbols::parse(path, source),
         }
     }
     fn cache_dir(&self) -> PathBuf {
@@ -297,15 +309,23 @@ impl Worker {
         file.persist(self.cache_dir().join(self.cache_name()))
             .map_err(|e| e.error)?;
         // The legacy cache can contain gigabytes of repeated previews. Never deserialize it.
-        let legacy = if self.disk.language == LanguageId::Css {
-            "index_css.json"
-        } else {
-            "index_php.json"
+        // JavaScript has no legacy file and must not delete the PHP cache.
+        let legacy = match self.disk.language {
+            LanguageId::Css => Some("index_css.json"),
+            LanguageId::Php => Some("index_php.json"),
+            LanguageId::JavaScript
+            | LanguageId::Html
+            | LanguageId::Yaml
+            | LanguageId::Json
+            | LanguageId::Markdown
+            | LanguageId::Go => None,
         };
-        match std::fs::remove_file(self.cache_dir().join(legacy)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if let Some(legacy) = legacy {
+            match std::fs::remove_file(self.cache_dir().join(legacy)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
@@ -1043,6 +1063,34 @@ mod tests {
         assert!(
             restored.live.declaration("\\a_php").is_some(),
             "derived lookup restored without parsing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn javascript_cache_is_separate_from_php() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        std::fs::write(dir.path().join("car.js"), "class Car { drive() {} }\n")?;
+        std::fs::write(dir.path().join("a.php"), "<?php class Sample {}")?;
+        let legacy = dir.path().join(".nozhik/cache/index_php.json");
+        std::fs::create_dir_all(legacy.parent().ok_or("cache parent")?)?;
+        std::fs::write(&legacy, "keep")?;
+        let mut worker = Worker::new(dir.path().into());
+        worker.disk = Arc::new(SymbolIndex::new(LanguageId::JavaScript));
+        worker.live = worker.disk.clone();
+        let stop = AtomicBool::new(false);
+        worker.reconcile(&stop, &|_| {})?;
+        assert!(worker.cache_dir().join("index_js_v8.json").is_file());
+        assert!(
+            legacy.is_file(),
+            "JavaScript persistence must keep the PHP legacy cache"
+        );
+        assert!(!worker.cache_dir().join("index_php_v6.json").exists());
+        assert!(
+            worker
+                .live
+                .declarations()
+                .any(|declaration| declaration.name == "Car")
         );
         Ok(())
     }

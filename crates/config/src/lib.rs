@@ -37,7 +37,7 @@ pub struct Config {
     pub php_language_level: String,
     /// Enabled language services/indexers. Empty means plain-text editing only.
     pub enabled_languages: std::collections::BTreeSet<languages::LanguageId>,
-    /// Language catalog migration marker. Zero predates JSON; one predates Markdown.
+    /// Language catalog migration marker. Zero predates JSON, one predates Markdown, two predates JavaScript.
     #[serde(default)]
     pub language_catalog_version: u8,
     /// Enable local Ollama ghost completions.
@@ -66,7 +66,7 @@ impl Default for Config {
             editor_font: "monospace".into(),
             php_language_level: "8.5".into(),
             enabled_languages: languages::default_enabled(),
-            language_catalog_version: 2,
+            language_catalog_version: 3,
             ai_enabled: true,
             ai_model: "qwen2.5-coder:1.5b-base".into(),
             ai_debounce_ms: 1000,
@@ -228,6 +228,14 @@ impl ConfigManager {
             }
             config.language_catalog_version = 2;
         }
+        if config.language_catalog_version < 3 {
+            if !config.enabled_languages.is_empty() {
+                config
+                    .enabled_languages
+                    .insert(languages::LanguageId::JavaScript);
+            }
+            config.language_catalog_version = 3;
+        }
         config.validate()?;
         Ok(config)
     }
@@ -381,7 +389,12 @@ mod tests {
                     .enabled_languages
                     .contains(&languages::LanguageId::Markdown)
             );
-            assert_eq!(config.language_catalog_version, 2);
+            assert!(
+                config
+                    .enabled_languages
+                    .contains(&languages::LanguageId::JavaScript)
+            );
+            assert_eq!(config.language_catalog_version, 3);
             assert_eq!(
                 fs::read_to_string(&path)?,
                 source,
@@ -422,12 +435,17 @@ mod tests {
                 .contains(&languages::LanguageId::Markdown)
         );
         assert!(
+            migrated
+                .enabled_languages
+                .contains(&languages::LanguageId::JavaScript)
+        );
+        assert!(
             !migrated
                 .enabled_languages
                 .contains(&languages::LanguageId::Json),
             "a version 1 opt-out of JSON stays opted out"
         );
-        assert_eq!(migrated.language_catalog_version, 2);
+        assert_eq!(migrated.language_catalog_version, 3);
         Ok(())
     }
     #[test]

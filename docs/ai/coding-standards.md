@@ -75,7 +75,7 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
-- language_support: tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
+- language_support: tree-sitter/php/css/javascript/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror.
   Без UI и без pulldown-cmark. Markdown подсвечивается отдельным лексером в этом крейте;
   parser и LSP Child принадлежат фоновым workers, координаты LSP UTF-16.
 - docker: tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix-only nix signals; no UI/runtime dependency.

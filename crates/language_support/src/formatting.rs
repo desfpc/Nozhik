@@ -435,12 +435,34 @@ fn indentation(columns: usize, style: &CodeStyle) -> String {
     }
 }
 
+/// Keeps a tab-only prefix as tabs. A space prefix follows the profile.
+fn indent_text(before: &str, columns: usize, style: &CodeStyle) -> String {
+    let mut tabs = false;
+    let mut spaces = false;
+    for character in before.chars().take_while(|c| matches!(c, ' ' | '\t')) {
+        match character {
+            '\t' => tabs = true,
+            ' ' => spaces = true,
+            _ => {}
+        }
+    }
+    if tabs && !spaces {
+        let size = usize::from(style.indent.size).max(1);
+        return format!(
+            "{}{}",
+            "\t".repeat(columns / size),
+            " ".repeat(columns % size)
+        );
+    }
+    indentation(columns, style)
+}
+
 // A bounded lexical indentation pass for clipboard fragments. It does not parse
 // documents on the UI thread. Quoted delimiters/comments never create nesting;
 // multiline literals and heredocs retain their original relative whitespace.
 enum FragmentIndent {
     Relative,
-    Structural { levels: Vec<usize>, depth: usize },
+    Structural { levels: Vec<usize> },
     Verbatim,
 }
 fn fragment_indents(text: &str) -> FragmentIndent {
@@ -493,34 +515,82 @@ fn fragment_indents(text: &str) -> FragmentIndent {
     if quote.is_some() || comment {
         FragmentIndent::Verbatim
     } else if structural {
-        FragmentIndent::Structural { levels, depth }
+        FragmentIndent::Structural { levels }
     } else {
         FragmentIndent::Relative
     }
 }
 
+/// Extra Enter levels from one line. `{` and `[` each add a level. Unmatched
+/// `(` adds one level only when the line opens no block, matching PHP `if`.
+/// `None` keeps Enter literal: heredoc, an open string, or a block comment.
+fn enter_extra_levels(text: &str) -> Option<usize> {
+    if text.contains("<<<") {
+        return None;
+    }
+    let mut blocks = 0usize;
+    let mut parentheses = 0usize;
+    let mut quote = None;
+    let mut comment = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                comment = false;
+            }
+        } else if let Some(delimiter) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == delimiter {
+                quote = None;
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            comment = true;
+        } else if c == '#' || c == '/' && chars.peek() == Some(&'/') {
+            break;
+        } else if matches!(c, '\'' | '"' | '`') {
+            quote = Some(c);
+        } else {
+            match c {
+                '{' | '[' => blocks += 1,
+                '}' | ']' => blocks = blocks.saturating_sub(1),
+                '(' => parentheses += 1,
+                ')' => parentheses = parentheses.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    if quote.is_some() || comment {
+        return None;
+    }
+    Some(blocks + usize::from(blocks == 0 && parentheses > 0))
+}
+
 /// Computes the text inserted by Enter from the current line prefix only.
 ///
-/// Open brackets add indentation; quoted/commented brackets are ignored. Without
-/// a profile, Enter remains a literal newline. `newline` is LF or CRLF.
+/// A closing line keeps its indent. Each unclosed `{` or `[` adds one profile
+/// level. Unclosed `(` adds one level only when the line opens no block, so
+/// `(function () {` indents once, like PHP `if (...) {`. Quoted and commented
+/// brackets are ignored. Without a profile, or inside a heredoc, open string,
+/// or block comment, Enter remains a literal newline. `newline` is LF or CRLF.
+/// A tab-only prefix stays tabs. YAML and Markdown copy the indent and do not
+/// add a level.
 #[must_use]
 pub fn newline_text(before: &str, newline: &str, style: Option<&CodeStyle>) -> String {
     let Some(style) = style else {
         return newline.into();
     };
-    if style.language == "yaml" {
-        return format!(
-            "{newline}{}",
-            " ".repeat(indent_width(before, style.indent.size))
-        );
+    if matches!(style.language.as_str(), "yaml" | "markdown") {
+        let columns = indent_width(before, style.indent.size);
+        return format!("{newline}{}", indent_text(before, columns, style));
     }
-    let depth = match fragment_indents(before) {
-        FragmentIndent::Structural { depth, .. } => depth,
-        FragmentIndent::Relative => 0,
-        FragmentIndent::Verbatim => return newline.into(),
+    let Some(extra) = enter_extra_levels(before) else {
+        return newline.into();
     };
-    let columns = indent_width(before, style.indent.size) + depth * usize::from(style.indent.size);
-    format!("{newline}{}", indentation(columns, style))
+    let columns = indent_width(before, style.indent.size) + extra * usize::from(style.indent.size);
+    format!("{newline}{}", indent_text(before, columns, style))
 }
 
 /// Rebase clipboard indentation to the target line, preserving existing prefix
@@ -567,7 +637,7 @@ pub fn smart_paste(text: &str, source: &str, byte: usize, style: Option<&CodeSty
         .unwrap_or(0);
     let levels = if style.language == "php" {
         match fragment_indents(text) {
-            FragmentIndent::Structural { levels, .. } => Some(levels),
+            FragmentIndent::Structural { levels } => Some(levels),
             FragmentIndent::Relative => None,
             FragmentIndent::Verbatim => return text.into(),
         }
@@ -599,7 +669,7 @@ pub fn paste_edit(
     text: &str,
     style: Option<&CodeStyle>,
 ) -> (Range<usize>, String) {
-    if style.is_some_and(|s| matches!(s.language.as_str(), "yaml" | "json")) {
+    if style.is_some_and(|s| matches!(s.language.as_str(), "yaml" | "json" | "markdown")) {
         return (range, text.into());
     }
     if text.is_empty()
@@ -629,6 +699,72 @@ pub fn paste_edit(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn javascript_enter_keeps_nesting_and_tabs() -> Result<(), Box<dyn std::error::Error>> {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let empty = std::collections::BTreeMap::new();
+        let javascript = styles.selected("js", &empty).ok_or("javascript")?;
+        assert_eq!(
+            super::newline_text("        });", "\n", Some(javascript)),
+            "\n        "
+        );
+        assert_eq!(
+            super::newline_text("\t\t});", "\n", Some(javascript)),
+            "\n\t\t"
+        );
+        assert_eq!(
+            super::newline_text("\t\tif (ready) {", "\n", Some(javascript)),
+            "\n\t\t\t"
+        );
+        assert_eq!(
+            super::newline_text("(function () {", "\n", Some(javascript)),
+            "\n    "
+        );
+        assert_eq!(
+            super::newline_text(
+                "        links.forEach(function (link) {",
+                "\n",
+                Some(javascript)
+            ),
+            "\n            "
+        );
+        let markdown = styles.selected("md", &empty).ok_or("markdown")?;
+        assert_eq!(
+            super::newline_text("  - item", "\n", Some(markdown)),
+            "\n  "
+        );
+        assert!(styles.selected("mjs", &empty).is_some());
+        assert!(styles.selected("cjs", &empty).is_some());
+        let php = styles.selected("php", &empty).ok_or("php")?;
+        let css = styles.selected("css", &empty).ok_or("css")?;
+        let json = styles.selected("json", &empty).ok_or("json")?;
+        assert_eq!(
+            super::newline_text("    if (!$condition) {", "\n", Some(php)),
+            "\n        "
+        );
+        assert_eq!(
+            super::newline_text("    array_map(function ($item) {", "\n", Some(php)),
+            "\n        "
+        );
+        assert_eq!(
+            super::newline_text("    foo(", "\n", Some(php)),
+            "\n        "
+        );
+        assert_eq!(
+            super::newline_text("@media (min-width: 600px) {", "\n", Some(css)),
+            "\n    "
+        );
+        assert_eq!(
+            super::newline_text("    .card {", "\n", Some(css)),
+            "\n        "
+        );
+        assert_eq!(super::newline_text("{\"a\": {", "\n", Some(json)), "\n    ");
+        assert_eq!(
+            super::newline_text("  \"items\": [", "\n", Some(json)),
+            "\n    "
+        );
+        Ok(())
+    }
     #[test]
     fn partial_server_formatting_still_indents_nested_print()
     -> Result<(), Box<dyn std::error::Error>> {

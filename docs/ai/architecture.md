@@ -11,7 +11,7 @@
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
 | nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-language-support | PHP/CSS/YAML incremental syntax, local formatting, PHP/CSS project indexes, PHP stdio LSP | tree-sitter/php/css/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-language-support | PHP/CSS/JavaScript/YAML incremental syntax, local formatting, PHP/CSS/JavaScript project indexes, PHP stdio LSP | tree-sitter/php/css/javascript/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP linter JSON reports, PHPUnit console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
@@ -2229,6 +2229,70 @@ GUI не правит буфер. `pulldown-cmark` живёт только в UI
 JSON сохраняется. Пустой список остаётся пустым. Поле без `language_catalog_version`
 по-прежнему читается как 0 и проходит миграцию. У новых настроек версия сразу 2.
 
-Отдельного стиля кода Markdown нет, поэтому Reformat Code для этих файлов не
-запускается. Если команда форматирования всё же приходит, worker отвечает
-`No Markdown source formatter` и не вызывает форматтер CSS.
+У Markdown есть профиль отступа: Enter копирует отступ текущей строки и не
+добавляет уровень из-за фигурных скобок. Вставка остаётся дословной. Reformat
+Code для Markdown отвечает `No Markdown source formatter` и не вызывает форматтер
+CSS. То же сообщение отдаёт worker, если запрос форматирования всё же приходит.
+
+## JavaScript в редакторе (v0.1.61)
+
+`.js`, `.jsx`, `.mjs` и `.cjs` доступны в реестре языков. Расширения TypeScript
+из этой регистрации убраны. Подсветка и синтаксические диагностики живут на
+локальном потоке синтаксиса: файл не уходит в PHP LSP. Запрос форматирования
+отвечает `No JavaScript formatter` и не вызывает форматтер CSS. Diff целого
+файла использует ту же грамматику. Вложенный JavaScript внутри PHP и HTML не
+подключается.
+
+Индексатор поднимает отдельный worker. Кэш — `index_js_v8.json`. Старый
+`index_php.json` этот worker не удаляет. Снимок индекса — `IndexEvent::Snapshot`
+со своим `LanguageId`. Очередь схлопывает снимки только внутри одного языка,
+поэтому PHP и JavaScript доходят до интерфейса оба. Интерфейс хранит символные
+индексы по языку. Search Everywhere читает классы из всех этих индексов.
+
+Имена классов и методов квалифицируются путём файла. Разбор одного файла не
+открывает соседние. Относительный импорт сохраняет кандидатов
+`{файл}::{имя}` и `{файл}::default`. Пакетный импорт остаётся нетипизированным
+локальным именем. Члены после `.` и `?.` выбираются строковым разбором текущей
+строки и уже готовым индексом; UI не вызывает tree-sitter. Каталог стандартной
+библиотеки — ECMAScript, `console` и объекты страницы: `document`, `window`,
+`globalThis`, `Node`, `Element`, `HTMLElement`, `NodeList`, сеть (`URL`,
+`FormData`, `Response`, `fetch`), события, наблюдатели, IndexedDB, `Intl` и
+холст 2D. Это не вся спецификация DOM, не WebGL, WebRTC, Web Audio и не
+отдельный интерфейс каждого HTML-тега. `querySelector`, `getElementById` и
+`createElement` возвращают `HTMLElement`; `querySelectorAll` возвращает
+`NodeList`. Первый параметр `forEach`/`map`/`filter` и левая часть `for...of`
+получают тип элемента (`HTMLElement`, `File` или `String` у `DOMTokenList`).
+Слушатель `addEventListener` получает событие по имени (`click` — `MouseEvent`,
+неизвестное имя — `Event`). `await fetch(...)` и колбэк `fetch(...).then`
+получают `Response`; `await response.text()` получает `String`. Переменная с
+самим `Promise` не хранит тип исполнения. Ключи `data-*` и длинный хвост имён
+CSS остаются динамическими. Список подсказки держит 100 строк: методы и поля
+страницы идут раньше длинного списка атрибутов формы и медиа. Числовой литерал
+`1.` и `1.5` не считается доступом к члену. Приватные `#имя` видны только
+внутри своего класса.
+
+Литерал объекта получает отдельный тип `{путь}::object:{байт}`. Его ключи —
+идентификаторы, строковые ключи, короткие свойства и методы — становятся
+членами этого типа, поэтому `payload.` показывает `owner_id` раньше
+`toString`. Значение ключа сохраняет выведенный тип: `parseInt` даёт
+`Number`, вложенный литерал — свои ключи, присваивание той же переменной
+копирует тип. Вычисляемые ключи и spread не добавляют имён. Пустой объект
+остаётся `Object`. Такие ключи не приглушаются как неиспользуемые свойства
+класса.
+
+Следующий кадр после точки пересчитывает подсказку по всему буферу. Приёмником
+считается выражение непосредственно перед `.` или `?.`, а не предыдущие
+операторы файла. Поэтому `document.`, `console.`, `Math.`, `new URL(...)` и
+`payload.` внутри функции оставляют окно открытым.
+
+Профиль `javascript_default.json` подключён к `.js`, `.jsx`, `.mjs` и `.cjs`.
+Enter смотрит только на префикс текущей строки, как в PHP, CSS и JSON.
+Закрывающая строка сохраняет свой отступ. Каждая незакрытая `{` или `[`
+добавляет один уровень профиля. Незакрытые `(` добавляют один уровень только
+если блока в строке нет, поэтому `(function () {` не уходит на два шага.
+Префикс из одних табов остаётся табами. Каретка встаёт в конец вставленного
+отступа. Reformat Code по-прежнему отвечает `No JavaScript formatter`.
+
+Каталог языков мигрирует до версии 3. Версия меньше 3 с непустым списком
+получает JavaScript один раз. Пустой список не меняется. У новых настроек
+версия сразу 3. Правила версий 0 и 1 для JSON и Markdown сохраняются.

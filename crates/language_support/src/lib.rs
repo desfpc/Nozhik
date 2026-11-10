@@ -1,4 +1,4 @@
-//! Background PHP/CSS/YAML/JSON/Markdown syntax, local formatting and PHP LSP services. UI owns authoritative document text.
+//! Background PHP/CSS/JavaScript/YAML/JSON/Markdown syntax, local formatting and PHP LSP services. UI owns authoritative document text.
 pub mod completion;
 pub mod css;
 pub mod css_completion;
@@ -6,6 +6,10 @@ pub mod css_symbols;
 pub mod doc_provider;
 pub mod formatting;
 pub mod highlighter;
+pub mod javascript;
+mod js_completion;
+mod js_stdlib;
+mod js_symbols;
 pub mod json;
 pub mod lsp;
 pub mod markdown;
@@ -43,10 +47,14 @@ pub enum Error {
 /// Language subsystem result.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// CSS, YAML, JSON and Markdown stay on the local syntax thread.
+/// CSS, JavaScript, YAML, JSON and Markdown stay on the local syntax thread.
 #[must_use]
 pub fn local_syntax(uri: &lsp_types::Url) -> bool {
-    css::is_css(uri) || yaml::is_yaml(uri) || json::is_json(uri) || markdown::is_markdown(uri)
+    css::is_css(uri)
+        || javascript::is_javascript(uri)
+        || yaml::is_yaml(uri)
+        || json::is_json(uri)
+        || markdown::is_markdown(uri)
 }
 
 /// Converts a valid UTF-8 byte boundary to LSP UTF-16 coordinates.
@@ -267,6 +275,8 @@ impl LanguageService {
                             yaml::format(&source, &style, range.as_ref())
                         } else if markdown::is_markdown(&uri) {
                             Err(Error::Protocol("No Markdown source formatter".into()))
+                        } else if javascript::is_javascript(&uri) {
+                            Err(Error::Protocol("No JavaScript formatter".into()))
                         } else {
                             css::format(&source, &style, range.as_ref())
                         };

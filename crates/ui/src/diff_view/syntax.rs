@@ -1,4 +1,4 @@
-//! Immutable old/new PHP snapshots are parsed off the UI thread, without LSP.
+//! Immutable old/new PHP and JavaScript snapshots are parsed off the UI thread, without LSP.
 use crate::theme;
 use egui::{FontId, text::LayoutJob};
 use nozhik_language_support::highlighter::{HighlightSpan, Highlighter};
@@ -73,8 +73,13 @@ impl Syntax {
             || self.palette == "plain"
             || file.binary
             || file.truncated
-            || nozhik_config::languages::language_for_path(&file.path)
-                != Some(nozhik_config::languages::LanguageId::Php)
+            || !matches!(
+                nozhik_config::languages::language_for_path(&file.path),
+                Some(
+                    nozhik_config::languages::LanguageId::Php
+                        | nozhik_config::languages::LanguageId::JavaScript
+                )
+            )
         {
             return;
         }
@@ -115,7 +120,20 @@ fn highlight(file: &FileDiff) -> nozhik_language_support::Result<Lines> {
                 source.push_str(&line.text);
             }
         }
-        let spans = Highlighter::php()?.highlight(&source)?;
+        let mut highlighter = match nozhik_config::languages::language_for_path(&file.path) {
+            Some(nozhik_config::languages::LanguageId::JavaScript) => Highlighter::javascript()?,
+            Some(
+                nozhik_config::languages::LanguageId::Php
+                | nozhik_config::languages::LanguageId::Css
+                | nozhik_config::languages::LanguageId::Html
+                | nozhik_config::languages::LanguageId::Yaml
+                | nozhik_config::languages::LanguageId::Json
+                | nozhik_config::languages::LanguageId::Markdown
+                | nozhik_config::languages::LanguageId::Go,
+            )
+            | None => Highlighter::php()?,
+        };
+        let spans = highlighter.highlight(&source)?;
         for (start, h, l) in offsets {
             if old && file.hunks[h].lines[l].kind != DiffLineKind::Deletion {
                 continue;

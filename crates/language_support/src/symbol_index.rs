@@ -92,7 +92,22 @@ impl SymbolDeclaration {
             && (matches!(self.kind, SymbolKind::Method | SymbolKind::Property)
                 || (self.kind == SymbolKind::Constant && self.visibility == Visibility::Private))
             && !self.name.starts_with("__")
+            && self
+                .owner
+                .as_deref()
+                .is_none_or(|owner| !object_literal_owner(owner))
     }
+}
+
+/// Own keys of a JavaScript object literal use the owner `{path}::object:{byte}`.
+/// They are data on that value, not unused class members.
+fn object_literal_owner(owner: &str) -> bool {
+    owner.rsplit_once("::").is_some_and(|(_, tail)| {
+        let Some(digits) = tail.strip_prefix("object:") else {
+            return false;
+        };
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 /// One deduplicated use; preview is captured off the UI thread.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]

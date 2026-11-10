@@ -1330,15 +1330,19 @@ impl TextEditorView {
                 && let Some(edits) =
                     nozhik_language_support::completion::edits(item, &source, caret)
             {
+                let php_caret = item
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data["nozhik_php"] == true);
                 let local_caret = item
                     .data
                     .as_ref()
-                    .filter(|data| data["nozhik_php"] == true)
+                    .filter(|data| php_caret || data["nozhik_js"] == true)
                     .and_then(|data| data["caret"].as_u64())
                     .and_then(|offset| usize::try_from(offset).ok())
                     .and_then(|offset| {
                         edits.first().map(|(range, text)| {
-                            range.start + offset + usize::from(text.starts_with('\\'))
+                            range.start + offset + usize::from(php_caret && text.starts_with('\\'))
                         })
                     });
                 buffer.apply_transaction(EditTransaction {
@@ -2277,6 +2281,39 @@ mod tests {
     }
 
     #[test]
+    fn javascript_enter_after_closing_call_keeps_indent() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let styles = nozhik_config::code_style::CodeStyles::builtin()?;
+        let style = styles
+            .selected("js", &std::collections::BTreeMap::new())
+            .ok_or("style")?;
+        let source = "        links.forEach(function (link) {\n            link.addEventListener('click', handleClick);\n        });";
+        let mut buffer = TextBuffer::load_from_str(BufferId(58), source);
+        let head = buffer.position_at(source.len())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        TextEditorView::newline(&mut buffer, Some(style))?;
+        assert_eq!(buffer.rope().to_string(), format!("{source}\n        "));
+        assert_eq!(buffer.cursors().as_slice()[0].head.column, 8);
+        let opening = "        links.forEach(function (link) {";
+        let mut buffer = TextBuffer::load_from_str(BufferId(60), opening);
+        let head = buffer.position_at(opening.len())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        TextEditorView::newline(&mut buffer, Some(style))?;
+        assert_eq!(
+            buffer.rope().to_string(),
+            format!("{opening}\n            ")
+        );
+        assert_eq!(buffer.cursors().as_slice()[0].head.column, 12);
+        let tabs = "\t\t});";
+        let mut buffer = TextBuffer::load_from_str(BufferId(59), tabs);
+        let head = buffer.position_at(tabs.len())?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        TextEditorView::newline(&mut buffer, Some(style))?;
+        assert_eq!(buffer.rope().to_string(), "\t\t});\n\t\t");
+        Ok(())
+    }
+
+    #[test]
     fn fast_click_in_one_frame_places_caret_in_empty_indented_line()
     -> Result<(), Box<dyn std::error::Error>> {
         let ctx = egui::Context::default();
@@ -3125,6 +3162,225 @@ mod tests {
             },
         );
         assert!(state.usages_byte.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_javascript_completion_hides_static_and_private()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nozhik_language_support::project_indexer::{IndexEvent, ProjectIndexer};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("car.js");
+        let source = "class Car { drive() {} static build() {} #hidden() {} }\nconst car = new Car();\ncar/*caret*/;\n";
+        std::fs::write(&path, source)?;
+        let indexer = ProjectIndexer::start(dir.path().into(), || {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let index = loop {
+            let ready = indexer.drain().find_map(|event| match event {
+                IndexEvent::Snapshot(index, _)
+                    if index.language == nozhik_config::languages::LanguageId::JavaScript
+                        && index
+                            .declarations()
+                            .any(|declaration| declaration.name == "Car") =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            });
+            if let Some(index) = ready {
+                break index;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut buffer = TextBuffer::load_from_str(BufferId(931), source);
+        let byte = source.find("/*caret*/").ok_or("caret marker")?;
+        let head = buffer.position_at(byte)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut state = crate::language::EditorLanguage {
+            project_index: Some(index),
+            project_path: Some(path),
+            triggers: nozhik_language_support::triggers::LanguageTriggerConfig::javascript(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text(".".into())],
+            1.0,
+        )?;
+        assert!(state.completions.iter().any(|item| item.label == "drive"));
+        assert!(
+            !state
+                .completions
+                .iter()
+                .any(|item| item.label == "build" || item.label == "#hidden")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_javascript_object_literal_lists_own_keys() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use nozhik_language_support::project_indexer::{IndexEvent, ProjectIndexer};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("payload.js");
+        let source = "const payload = {\n    owner_id: 1,\n    contact_type: \"a\",\n    source: \"b\",\n};\npayload/*caret*/;\n";
+        std::fs::write(&path, source)?;
+        let indexer = ProjectIndexer::start(dir.path().into(), || {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let index = loop {
+            let ready = indexer.drain().find_map(|event| match event {
+                IndexEvent::Snapshot(index, _)
+                    if index.language == nozhik_config::languages::LanguageId::JavaScript
+                        && index
+                            .declarations()
+                            .any(|declaration| declaration.name == "owner_id") =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            });
+            if let Some(index) = ready {
+                break index;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut buffer = TextBuffer::load_from_str(BufferId(932), source);
+        let byte = source.find("/*caret*/").ok_or("caret marker")?;
+        let head = buffer.position_at(byte)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut state = crate::language::EditorLanguage {
+            project_index: Some(index),
+            project_path: Some(path),
+            triggers: nozhik_language_support::triggers::LanguageTriggerConfig::javascript(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text(".".into())],
+            1.0,
+        )?;
+        for name in ["owner_id", "contact_type", "source"] {
+            assert!(
+                state.completions.iter().any(|item| item.label == name),
+                "{:?}",
+                state
+                    .completions
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // The next frame resolves the whole buffer, the same way language_tick does.
+        let caret = buffer.cursors().as_slice()[0].head.byte_offset;
+        state.completions = state.local_completions(&buffer.rope().to_string(), caret);
+        for name in ["owner_id", "contact_type", "source"] {
+            assert!(
+                state.completions.iter().any(|item| item.label == name),
+                "{:?}",
+                state
+                    .completions
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn javascript_document_dot_inside_function_keeps_members()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "function init() {\n    document;\n    console;\n}\n";
+        let mut buffer = TextBuffer::load_from_str(BufferId(933), source);
+        let byte = source.find("document").ok_or("document")? + "document".len();
+        let head = buffer.position_at(byte)?;
+        buffer.set_cursors(vec![Cursor { anchor: head, head }])?;
+        let mut state = crate::language::EditorLanguage {
+            triggers: nozhik_language_support::triggers::LanguageTriggerConfig::javascript(),
+            project_path: Some(std::path::PathBuf::from("page.js")),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut editor = TextEditorView::default();
+        completion_frame(&ctx, &mut editor, &mut buffer, &mut state, vec![], 0.0)?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text(".".into())],
+            1.0,
+        )?;
+        assert!(
+            state
+                .completions
+                .iter()
+                .any(|item| item.label == "querySelectorAll"),
+            "{:?}",
+            state
+                .completions
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>()
+        );
+        let caret = buffer.cursors().as_slice()[0].head.byte_offset;
+        state.completions = state.local_completions(&buffer.rope().to_string(), caret);
+        assert!(
+            state
+                .completions
+                .iter()
+                .any(|item| item.label == "querySelectorAll"),
+            "{:?}",
+            state
+                .completions
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>()
+        );
+        let console_at =
+            buffer.rope().to_string().find("console").ok_or("console")? + "console".len();
+        let console_head = buffer.position_at(console_at)?;
+        buffer.set_cursors(vec![Cursor {
+            anchor: console_head,
+            head: console_head,
+        }])?;
+        completion_frame(
+            &ctx,
+            &mut editor,
+            &mut buffer,
+            &mut state,
+            vec![Event::Text(".".into())],
+            2.0,
+        )?;
+        let caret = buffer.cursors().as_slice()[0].head.byte_offset;
+        state.completions = state.local_completions(&buffer.rope().to_string(), caret);
+        assert!(
+            state.completions.iter().any(|item| item.label == "log"),
+            "{:?}",
+            state
+                .completions
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>()
+        );
         Ok(())
     }
 

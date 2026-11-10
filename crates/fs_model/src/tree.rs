@@ -34,7 +34,7 @@ impl FileKind {
         {
             "rs" => Self::Rust,
             "php" => Self::Php,
-            "js" | "jsx" | "ts" | "tsx" => Self::Script,
+            "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" => Self::Script,
             "toml" | "json" => Self::Config,
             "md" | "markdown" => Self::Markdown,
             _ => Self::Generic,

@@ -124,7 +124,7 @@ impl Default for FileTypeSettings {
 #[derive(Clone, Debug, Default)]
 pub struct CodeStyles(pub BTreeMap<String, BTreeMap<String, CodeStyle>>);
 impl CodeStyles {
-    /// Includes the shipped PHP, CSS and YAML profiles, without touching the user filesystem.
+    /// Includes the shipped language profiles, without touching the user filesystem.
     /// # Errors
     /// Returns a malformed embedded profile error.
     pub fn builtin() -> Result<Self, ConfigError> {
@@ -152,6 +152,26 @@ impl CodeStyles {
                 .entry(extension.into())
                 .or_default()
                 .insert("yaml_default.json".into(), yaml.clone());
+        }
+        let javascript = CodeStyle::parse(include_str!(
+            "../code_styles/javascript/javascript_default.json"
+        ))?;
+        for extension in ["js", "jsx", "mjs", "cjs"] {
+            catalog
+                .0
+                .entry(extension.into())
+                .or_default()
+                .insert("javascript_default.json".into(), javascript.clone());
+        }
+        let markdown = CodeStyle::parse(include_str!(
+            "../code_styles/markdown/markdown_default.json"
+        ))?;
+        for extension in ["md", "markdown"] {
+            catalog
+                .0
+                .entry(extension.into())
+                .or_default()
+                .insert("markdown_default.json".into(), markdown.clone());
         }
         Ok(catalog)
     }
@@ -208,6 +228,8 @@ pub fn default_profile(extension: &str) -> Option<&'static str> {
         "json" => Some("json_default.json"),
         "css" => Some("css_default.json"),
         "yaml" | "yml" => Some("yaml_default.json"),
+        "js" | "jsx" | "mjs" | "cjs" => Some("javascript_default.json"),
+        "md" | "markdown" => Some("markdown_default.json"),
         _ => None,
     }
 }
@@ -284,6 +306,17 @@ mod tests {
         assert_eq!(
             styles.selected("php", &settings).map(|s| s.indent.size),
             Some(4)
+        );
+        assert_eq!(default_profile("js"), Some("javascript_default.json"));
+        assert_eq!(
+            styles.selected("jsx", &settings).map(|s| s.indent.size),
+            Some(4)
+        );
+        assert_eq!(
+            styles
+                .selected("markdown", &settings)
+                .map(|s| s.language.as_str()),
+            Some("markdown")
         );
         settings.insert("php".into(), FileTypeSettings::default());
         assert!(styles.selected("php", &settings).is_none());

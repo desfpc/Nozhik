@@ -62,4 +62,4 @@ CI binaries.yml сохраняет сборки обеих платформ то
 Версия ведётся в `[workspace.package].version` корневого `Cargo.toml`.
 Каждая следующая доработка/коммит увеличивает patch-версию один раз и обновляет
 `Cargo.lock`; интерфейс и app bundle используют эту же версию.
-Текущая версия — 0.1.56 (Markdown links and GUI font scale), следующая — 0.1.57.
+Текущая версия — 0.1.61 (JavaScript member popup), следующая — 0.1.62.

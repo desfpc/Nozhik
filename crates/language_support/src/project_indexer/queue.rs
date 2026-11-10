@@ -88,15 +88,36 @@ pub(super) struct Events(Mutex<Vec<IndexEvent>>);
 impl Events {
     pub(super) fn send(&self, event: IndexEvent) {
         let mut events = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        events.retain(|old| {
-            std::mem::discriminant(old) != std::mem::discriminant(&event)
-                && !(matches!(old, IndexEvent::Progress(..) | IndexEvent::Finished)
-                    && matches!(event, IndexEvent::Progress(..) | IndexEvent::Finished))
-        });
+        events.retain(|old| !same_slot(old, &event));
         events.push(event);
     }
     pub(super) fn drain(&self) -> std::vec::IntoIter<IndexEvent> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_iter()
+    }
+}
+
+/// Progress and finished share one slot. Symbol snapshots share a slot only inside one language.
+fn same_slot(old: &IndexEvent, event: &IndexEvent) -> bool {
+    match (old, event) {
+        (IndexEvent::Snapshot(left, _), IndexEvent::Snapshot(right, _)) => {
+            left.language == right.language
+        }
+        (IndexEvent::CssSnapshot(_, _), IndexEvent::CssSnapshot(_, _))
+        | (IndexEvent::Classes(_, _), IndexEvent::Classes(_, _))
+        | (IndexEvent::Error(_), IndexEvent::Error(_))
+        | (
+            IndexEvent::Progress(_, _) | IndexEvent::Finished,
+            IndexEvent::Progress(_, _) | IndexEvent::Finished,
+        ) => true,
+        (
+            IndexEvent::Snapshot(_, _)
+            | IndexEvent::CssSnapshot(_, _)
+            | IndexEvent::Classes(_, _)
+            | IndexEvent::Progress(_, _)
+            | IndexEvent::Finished
+            | IndexEvent::Error(_),
+            _,
+        ) => false,
     }
 }
 
@@ -177,5 +198,33 @@ mod tests {
             "obsolete snapshot must be freed before the UI drains"
         );
         assert_eq!(queue.drain().count(), 1);
+    }
+
+    #[test]
+    fn php_and_javascript_snapshots_both_remain() {
+        let queue = Events::default();
+        queue.send(IndexEvent::Snapshot(
+            std::sync::Arc::new(crate::symbol_index::SymbolIndex::new(
+                super::super::LanguageId::Php,
+            )),
+            std::collections::HashMap::new(),
+        ));
+        queue.send(IndexEvent::Snapshot(
+            std::sync::Arc::new(crate::symbol_index::SymbolIndex::new(
+                super::super::LanguageId::JavaScript,
+            )),
+            std::collections::HashMap::new(),
+        ));
+        let events: Vec<_> = queue.drain().collect();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            IndexEvent::Snapshot(index, _) if index.language == super::super::LanguageId::Php
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            IndexEvent::Snapshot(index, _)
+                if index.language == super::super::LanguageId::JavaScript
+        )));
     }
 }

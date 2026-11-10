@@ -4291,3 +4291,176 @@ Finder .DS_Store не было. Финальный размер проекта �
 Исходники, история и готовые актуальные бинарники со всеми legal materials
 сохранены; после очистки сборок не было.
 
+### Редактор JavaScript (v0.1.57, 2026-11-10)
+
+Файлы `.js`, `.jsx`, `.mjs` и `.cjs` получают подсветку tree-sitter-javascript,
+синтаксические ошибки, индекс классов и методов и подсказку стандартных
+объектов ECMAScript и `console`. TypeScript не распознаётся. Линтера, запуска
+тестов и форматтера JavaScript нет: команда форматирования отвечает
+`No JavaScript formatter`. Файл остаётся на локальном потоке синтаксиса и не
+синхронизируется с PHP LSP.
+
+Индекс пишется в `index_js_v6.json` и не удаляет старый PHP-кэш. Снимки PHP и
+JavaScript одновременно остаются в очереди. Каталог языков версии 3 один раз
+добавляет JavaScript в непустой сохранённый список. Пустой список не меняется.
+
+Версия workspace/lock — 0.1.57, следующая — 0.1.58.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 438 passed,
+0 failed, 10 прежних optional ignored. Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+613390dd42dfd0781d72747e5550bb1124ec02cd3f7ec3d01c57e789cecc022f и контрольные
+суммы файлов. Упаковщик выполнил codesign --verify --deep --strict.
+Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 9.3 GiB (29418 файлов).
+Удалены Finder .DS_Store. Финальный размер проекта — 403 MiB, binaries — 113 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+
+### Отступ Enter и DOM-подсказки JavaScript (v0.1.58, 2026-11-10)
+
+Enter в PHP, CSS, JSON и JavaScript ставит каретку по одному правилу вложенности.
+Каждая незакрытая `{` или `[` добавляет один уровень профиля. Незакрытые `(`
+добавляют один уровень только если в строке нет блока, поэтому
+`links.forEach(function (link) {` и `(function () {` сдвигают курсор на один
+шаг, как `if (...) {` в PHP. Закрывающая строка оставляет свой отступ.
+Профиль `javascript_default.json` подключён к `.js`, `.jsx`, `.mjs` и `.cjs`:
+шаг — 4 пробела, строка из табов остаётся на табах. Markdown получил профиль,
+который копирует отступ строки и не добавляет уровень из-за скобок.
+Reformat Code для JavaScript и Markdown по-прежнему сообщает, что форматтера нет.
+
+`document.`, `window.` и связанные стандартные объекты предлагают публичные
+члены. `document.querySelectorAll` типизируется как `NodeList`. Параметр
+`forEach` и переменная `for...of` получают тип элемента, поэтому у `link` есть
+`addEventListener`. Каталог не покрывает всю спецификацию DOM.
+
+Версия workspace/lock — 0.1.58, следующая — 0.1.59.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 442 passed,
+0 failed, 10 прежних optional ignored. Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+8e25cabced8591a4edcc882ec16d6869ae9d65bbd7fffcb19645a1c5ec87d887 и контрольные
+суммы файлов. Упаковщик выполнил codesign. Windows-комплект не обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 9.2 GiB (27861 файл).
+Удалены Finder .DS_Store вне `.git`. Финальный размер проекта — 403 MiB,
+binaries — 113 MiB. Исходники, история и готовые актуальные бинарники со всеми
+legal materials сохранены; после очистки сборок не было.
+
+### Каталог JavaScript для страницы (v0.1.59, 2026-11-10)
+
+`document` и `querySelectorAll` уже были в каталоге. Не хватало типов, которые
+нужны в обычном скрипте страницы. `querySelector`, `getElementById` и
+`createElement` теперь дают `HTMLElement`: у элемента есть `style`, `dataset`,
+`value`, `href`, `src` и остальные поля, которые вводят у ссылок, полей и
+холста. Элемент коллекции `NodeList` и `HTMLCollection` тоже `HTMLElement`.
+Слушатель `addEventListener('click')` получает `MouseEvent`, `keydown` —
+`KeyboardEvent`, неизвестное имя — `Event`. `await fetch(...)` и
+`fetch(...).then` дают `Response`, `await response.text()` — `String`.
+
+В каталог добавлены сеть и адрес (`URL`, `URLSearchParams`, `FormData`,
+`Headers`, `Request`, `Response`, `AbortController`), файлы, `TextEncoder`,
+`DOMParser`, `XMLHttpRequest`, `WebSocket`, наблюдатели, `History`, `Crypto`,
+`Performance`, выделение, буфер обмена, IndexedDB, форматеры `Intl`, холст 2D,
+`Image`/`Audio`, `Range` и события указателя, колеса, перетаскивания и
+сообщений. `globalThis` и `self` ведут себя как `window`. Частые свойства
+`element.style` перечислены. Ключи `data-*` и остальные имена CSS остаются
+динамическими. WebGL, WebRTC, Web Audio и отдельный интерфейс каждого тега не
+входят. Список подсказки по-прежнему показывает 100 строк: методы и поля
+страницы идут раньше длинного списка атрибутов.
+
+Кэш индекса сменился на `index_js_v7.json`, потому что выведенные типы
+изменились. Форматтера, линтера, запуска тестов и TypeScript по-прежнему нет.
+
+Версия workspace/lock — 0.1.59, следующая — 0.1.60.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 446 passed,
+0 failed, 10 прежних optional ignored. Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+143d5e5fcf14a548498ee9c2afddff0f0c4edcce3b1d6e77ca4129486d99c311 и контрольные
+суммы файлов. Упаковщик заменил существующую подпись. Windows-комплект не
+обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 9.3 GiB (30031 файл).
+Finder .DS_Store вне `.git` не было. Финальный размер проекта — 403 MiB,
+binaries — 114 MiB. Исходники, история и готовые актуальные бинарники со всеми
+legal materials сохранены; после очистки сборок не было.
+
+### Ключи объекта JavaScript (v0.1.60, 2026-11-10)
+
+Литерал `{ owner_id, contact_type, source }` больше не остаётся безымянным
+`Object` без собственных полей. Индекс запоминает ключи, которые можно
+прочитать через точку: идентификаторы, строковые ключи, короткие свойства и
+методы. `payload.` открывает эти ключи, а следом методы `Object.prototype`
+(`toString`, `hasOwnProperty`). `parseInt(...)` даёт ключу тип `Number`,
+вложенный литерал сохраняет свои ключи, копия переменной получает тот же тип.
+Вычисляемые ключи, spread и динамические `data-*` по-прежнему не перечисляются.
+Пустой `{}` остаётся `Object` и показывает методы прототипа. Ключи литерала не
+приглушаются как неиспользуемые свойства класса.
+
+Кэш индекса — `index_js_v8.json`. Форматтера, линтера, запуска тестов и
+TypeScript по-прежнему нет.
+
+Версия workspace/lock — 0.1.60, следующая — 0.1.61.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 449 passed,
+0 failed, 10 прежних optional ignored. Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+f3876e76b4b016b008b427af1f6825e78c70481e0db506d5f25164ab71af7424 и контрольные
+суммы файлов. Упаковщик заменил существующую подпись. Windows-комплект не
+обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 10.8 GiB (32402 файла).
+Случайные Finder .DS_Store вне `.git` удалены; повторный --check подтвердил
+актуальность macOS ARM64. Финальный размер проекта — 403 MiB, binaries — 114 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+
+### Окно подсказки JavaScript после точки (v0.1.61, 2026-11-10)
+
+Точка в JavaScript больше не теряет окно на следующем кадре. Редактор
+пересчитывает список по всему файлу, но приёмником считается выражение
+непосредственно перед `.` или `?.`. `document.`, `console.`, `Math.` и
+`new URL(...)` внутри функции показывают свои методы. `payload.` показывает
+собственные ключи и методы `Object.prototype`. Более ранний код функции не
+подменяет имя объекта.
+
+Кэш индекса остаётся `index_js_v8.json`. Форматтера, линтера, запуска тестов и
+TypeScript по-прежнему нет.
+
+Версия workspace/lock — 0.1.61, следующая — 0.1.62.
+
+Проверки: native fmt; Clippy workspace/all-targets/all-features с -D warnings;
+cargo test --workspace --all-features -- --test-threads=8 — 452 passed,
+0 failed, 10 прежних optional ignored. Windows build/Clippy не запускались.
+Commit и push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable и app archive; --check подтвердил source fingerprint
+a7982e8e7e77e9580eb9eb6cdf8bf3c540527c7cd5d6c3177c69dd857a6756a3 и контрольные
+суммы файлов. Упаковщик заменил существующую подпись. Windows-комплект не
+обновлялся.
+
+После проверки готовых бинарников cargo clean удалил 13.6 GiB (39562 файла).
+Случайный Finder .DS_Store вне `.git` удалён; повторный --check подтвердил
+актуальность macOS ARM64. Финальный размер проекта — 403 MiB, binaries — 114 MiB.
+Исходники, история и готовые актуальные бинарники со всеми legal materials
+сохранены; после очистки сборок не было.
+

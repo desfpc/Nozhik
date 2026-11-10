@@ -7,7 +7,7 @@ use std::ops::Range;
 pub fn prefix(source: &str, caret: usize) -> Range<usize> {
     let mut start = caret;
     for (i, c) in source[..caret].char_indices().rev() {
-        if !(c.is_alphanumeric() || matches!(c, '_' | '$' | '\\')) {
+        if !(c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | '#')) {
             break;
         }
         start = i;
@@ -19,7 +19,7 @@ pub fn prefix(source: &str, caret: usize) -> Range<usize> {
 pub fn query(source: &str, caret: usize) -> &str {
     let mut start = caret;
     for (i, c) in source[..caret].char_indices().rev() {
-        if !(c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | ':')) {
+        if !(c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | ':' | '#')) {
             break;
         }
         start = i;

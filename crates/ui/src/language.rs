@@ -72,8 +72,11 @@ pub struct EditorLanguage {
 #[derive(Default)]
 pub struct LanguageUi {
     pub(crate) indexer: Option<nozhik_language_support::project_indexer::ProjectIndexer>,
-    index: Option<std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>>,
-    indexed_revisions: HashMap<PathBuf, u64>,
+    indexes: HashMap<
+        nozhik_config::languages::LanguageId,
+        std::sync::Arc<nozhik_language_support::symbol_index::SymbolIndex>,
+    >,
+    revisions: HashMap<nozhik_config::languages::LanguageId, HashMap<PathBuf, u64>>,
     class_index: Option<std::sync::Arc<nozhik_language_support::css_symbols::ClassIndex>>,
     class_revisions: HashMap<PathBuf, u64>,
     overlay_sent: HashMap<PathBuf, u64>,
@@ -92,6 +95,16 @@ pub struct LanguageUi {
     pub(crate) local_navigation: Option<(PathBuf, u32, u32)>,
     pub navigation: Option<(PathBuf, lsp_types::Position)>,
 }
+fn formatter_refusal(path: &std::path::Path) -> Option<&'static str> {
+    match nozhik_config::languages::language_for_path(path) {
+        Some(nozhik_config::languages::LanguageId::JavaScript) => Some("No JavaScript formatter"),
+        Some(nozhik_config::languages::LanguageId::Markdown) => {
+            Some("No Markdown source formatter")
+        }
+        _ => None,
+    }
+}
+
 impl crate::NozhikUi {
     pub(crate) fn reformat_code(&mut self, ctx: &egui::Context) {
         self.language_tick(ctx);
@@ -142,6 +155,15 @@ impl crate::NozhikUi {
             );
             return;
         };
+        if let Some(detail) = formatter_refusal(&document.path) {
+            self.note_status(
+                "format",
+                "Reformat Code",
+                crate::problems::Severity::Warning,
+                detail,
+            );
+            return;
+        }
         let Ok(uri) = Url::from_file_path(&document.path) else {
             return;
         };
@@ -307,8 +329,17 @@ impl crate::NozhikUi {
                 }
                 view.css_completion_pending = None;
             }
-            view.project_index = self.language.index.clone().filter(|_| {
-                self.language.indexed_revisions.get(&document.path) == Some(&snapshot.revision)
+            let file_language = nozhik_config::languages::language_for_path(&document.path);
+            view.project_index = file_language.and_then(|id| {
+                let current = self
+                    .language
+                    .revisions
+                    .get(&id)
+                    .and_then(|revisions| revisions.get(&document.path))
+                    == Some(&snapshot.revision);
+                current
+                    .then(|| self.language.indexes.get(&id).cloned())
+                    .flatten()
             });
             view.capture_index();
             if self
@@ -337,20 +368,33 @@ impl crate::NozhikUi {
             {
                 self.language.usages = Some(crate::usages_popup::UsagesPopup::new(index, symbol));
             }
-            if nozhik_language_support::local_syntax(&uri) {
+            let javascript = nozhik_language_support::javascript::is_javascript(&uri);
+            if javascript {
+                view.triggers =
+                    nozhik_language_support::triggers::LanguageTriggerConfig::javascript();
+                view.stubs = None;
+            } else if nozhik_language_support::local_syntax(&uri) {
                 view.stubs = None;
             } else {
                 view.stubs.clone_from(&self.settings_dialog.php_stubs);
             }
             if let Some(byte) = view.local_completion_pending
-                && view.project_index.is_some()
+                && (view.project_index.is_some() || javascript)
                 && byte == document.buffer.cursors().as_slice()[0].head.byte_offset
             {
                 view.completions =
                     view.local_completions(&document.buffer.rope().to_string(), byte);
                 view.local_completion_pending = None;
             }
-            view.documentation = view.stubs.clone().map(DocumentationSource::from);
+            view.documentation = if javascript {
+                Some(DocumentationSource {
+                    language_id: "javascript".into(),
+                    label: "JavaScript".into(),
+                    provider: nozhik_language_support::javascript::documentation(),
+                })
+            } else {
+                view.stubs.clone().map(DocumentationSource::from)
+            };
             if self.language.sent.get(&uri) != Some(&snapshot.revision)
                 && service.send(Command::Sync {
                     uri: uri.clone(),
@@ -369,7 +413,40 @@ impl crate::NozhikUi {
                 );
             }
             if nozhik_language_support::local_syntax(&uri) {
-                view.request = None;
+                if javascript && ready {
+                    if let Some((kind, byte)) = view.request.take() {
+                        let source = document.buffer.rope().to_string();
+                        if byte <= source.len() && source.is_char_boundary(byte) {
+                            if kind == RequestKind::Hover {
+                                view.hover = nozhik_language_support::javascript::hover(
+                                    view.project_index.as_deref(),
+                                    &document.path,
+                                    &source,
+                                    byte,
+                                )
+                                .map(|hover| {
+                                    match hover.contents {
+                                        HoverContents::Markup(value) => value.value,
+                                        HoverContents::Scalar(value) => marked(value),
+                                        HoverContents::Array(values) => values
+                                            .into_iter()
+                                            .map(marked)
+                                            .collect::<Vec<_>>()
+                                            .join("\n\n"),
+                                    }
+                                });
+                            } else if kind == RequestKind::Definition
+                                && let Some(index) = &view.project_index
+                                && let Some(symbol) = index.at(&document.path, byte)
+                            {
+                                self.language.local_navigation =
+                                    Some((symbol.path.clone(), symbol.line, symbol.column));
+                            }
+                        }
+                    }
+                } else if !javascript {
+                    view.request = None;
+                }
                 continue;
             }
             if ready && let Some((kind, byte)) = view.request.take() {
@@ -713,6 +790,30 @@ fn marked(value: lsp_types::MarkedString) -> String {
 }
 
 impl EditorLanguage {
+    fn javascript_completions(
+        &self,
+        index: Option<&nozhik_language_support::symbol_index::SymbolIndex>,
+        source: &str,
+        byte: usize,
+        absolute_byte: usize,
+    ) -> Option<Vec<CompletionItem>> {
+        let javascript = self.triggers.language_id == "javascript"
+            || index.is_some_and(|symbols| {
+                symbols.language == nozhik_config::languages::LanguageId::JavaScript
+            });
+        javascript.then(|| {
+            nozhik_language_support::javascript::complete(
+                index,
+                self.project_path
+                    .as_deref()
+                    .unwrap_or_else(|| std::path::Path::new("script.js")),
+                source,
+                byte,
+                absolute_byte,
+            )
+        })
+    }
+
     pub(crate) fn local_completions(&self, source: &str, byte: usize) -> Vec<CompletionItem> {
         self.local_fragment_completions(source, byte, byte)
     }
@@ -724,8 +825,8 @@ impl EditorLanguage {
     ) -> Vec<CompletionItem> {
         let index = self
             .project_index
-            .as_ref()
-            .or(self.completion_index.as_ref());
+            .as_deref()
+            .or(self.completion_index.as_deref());
         let absolute_byte = self
             .completion_text
             .as_ref()
@@ -734,6 +835,9 @@ impl EditorLanguage {
                 let (old_range, new_range) = changed_range(old, new);
                 map_byte(absolute_byte, &new_range, &old_range)
             });
+        if let Some(items) = self.javascript_completions(index, source, byte, absolute_byte) {
+            return items;
+        }
         let class_prefix = source
             .contains("function")
             .then(|| {
@@ -830,8 +934,9 @@ impl crate::NozhikUi {
             for event in indexer.drain() {
                 match event {
                     IndexEvent::Snapshot(index, revisions) => {
-                        self.language.index = Some(index);
-                        self.language.indexed_revisions = revisions;
+                        let language = index.language;
+                        self.language.indexes.insert(language, index);
+                        self.language.revisions.insert(language, revisions);
                         self.language.search_generation =
                             self.language.search_generation.wrapping_add(1);
                     }
@@ -869,7 +974,7 @@ impl crate::NozhikUi {
             return;
         }
         let classes = crate::search_everywhere::class_matches(
-            self.language.index.as_deref(),
+            self.language.indexes.values().map(std::sync::Arc::as_ref),
             self.language.class_index.as_deref(),
         );
         let generation = self.language.search_generation;
@@ -905,7 +1010,8 @@ impl crate::NozhikUi {
                                 nozhik_language_support::project_indexer::IndexCommand::Invalidate,
                             )
                         }) {
-                            self.language.index = None;
+                            self.language.indexes.clear();
+                            self.language.revisions.clear();
                             self.language.class_index = None;
                             self.language.class_revisions.clear();
                             self.language.search_generation =
@@ -1651,8 +1757,8 @@ mod tests {
                 shell.language_tick(&ctx);
                 if shell
                     .language
-                    .index
-                    .as_ref()
+                    .indexes
+                    .get(&nozhik_config::languages::LanguageId::Php)
                     .is_some_and(|i| i.declaration("\\sample").is_some())
                     && shell.language.indexing.is_none()
                 {
@@ -1965,6 +2071,144 @@ mod tests {
         buffer.undo()?;
         assert_eq!(buffer.rope().to_string(), source);
         assert!(!buffer.is_dirty());
+        Ok(())
+    }
+
+    fn open_javascript(
+        source: &str,
+    ) -> Result<(tempfile::TempDir, crate::NozhikUi), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("page.js");
+        std::fs::write(&path, source)?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings =
+            nozhik_config::ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = crate::NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        shell.documents.push(crate::Document {
+            path,
+            binary: false,
+            name: "page.js".into(),
+            open: true,
+            buffer: nozhik_buffer::TextBuffer::load_from_str(nozhik_core::BufferId(941), source),
+        });
+        shell.active = Some(0);
+        Ok((dir, shell))
+    }
+
+    fn dot_labels(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        marker: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let path = shell.documents[0].path.clone();
+        let text = shell.documents[0].buffer.rope().to_string();
+        let byte = text.rfind(marker).ok_or("marker")? + marker.len();
+        let head = shell.documents[0].buffer.position_at(byte)?;
+        shell.documents[0]
+            .buffer
+            .set_cursors(vec![nozhik_buffer::Cursor { anchor: head, head }])?;
+        shell.editor.focus_buffer = Some(shell.documents[0].buffer.snapshot().buffer_id);
+        let frame = |shell: &mut crate::NozhikUi, events: Vec<egui::Event>| -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| shell.editor_area(ctx),
+            )
+        };
+        let _focus = frame(shell, Vec::new());
+        let _typed = frame(shell, vec![egui::Event::Text(".".into())]);
+        shell.language_tick(ctx);
+        let painted = frame(shell, Vec::new());
+        let view = shell.language.views.get(&path).ok_or("javascript view")?;
+        let labels: Vec<_> = view
+            .completions
+            .iter()
+            .map(|item| item.label.clone())
+            .collect();
+        let painted_label = labels.iter().any(|label| {
+            painted.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with(label))
+            })
+        });
+        if !painted_label {
+            let typed = shell.documents[0].buffer.rope().to_string();
+            return Err(format!("popup was not painted: {labels:?}\n{typed}").into());
+        }
+        Ok(labels)
+    }
+
+    #[test]
+    fn javascript_dot_popup_stays_for_standard_and_own_objects()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "function init() {\n    const payload = {\n        owner_id: 1,\n        contact_type: \"a\",\n        source: \"b\",\n    };\n    document;\n    payload;\n}\n";
+        let (_dir, mut shell) = open_javascript(source)?;
+        let path = shell.documents[0].path.clone();
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            shell.language_tick(&ctx);
+            let ready = shell.language.views.get(&path).is_some_and(|view| {
+                view.triggers.language_id == "javascript"
+                    && view.triggers.activates("document.")
+                    && view.project_index.as_ref().is_some_and(|index| {
+                        index
+                            .declarations()
+                            .any(|declaration| declaration.name == "owner_id")
+                    })
+            });
+            if ready {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("javascript index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let document = dot_labels(&mut shell, &ctx, "document")?;
+        assert!(
+            document.iter().any(|label| label == "querySelectorAll"),
+            "{document:?}"
+        );
+        let (_payload_dir, mut payload_shell) = open_javascript(source)?;
+        let payload_path = payload_shell.documents[0].path.clone();
+        let payload_ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            payload_shell.language_tick(&payload_ctx);
+            let ready = payload_shell
+                .language
+                .views
+                .get(&payload_path)
+                .is_some_and(|view| {
+                    view.project_index.as_ref().is_some_and(|index| {
+                        index
+                            .declarations()
+                            .any(|declaration| declaration.name == "owner_id")
+                    })
+                });
+            if ready {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("payload index timeout".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let payload = dot_labels(&mut payload_shell, &payload_ctx, "payload")?;
+        assert!(
+            payload.iter().any(|label| label == "owner_id"),
+            "{payload:?}"
+        );
+        assert!(
+            payload.iter().any(|label| label == "toString"),
+            "{payload:?}"
+        );
         Ok(())
     }
 }

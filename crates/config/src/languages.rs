@@ -9,7 +9,7 @@ pub enum LanguageId {
     /// PHP, including PHP templates.
     #[serde(alias = "Php")]
     Php,
-    /// JavaScript and TypeScript (reserved until their language service is available).
+    /// JavaScript source, including JSX. TypeScript stays unrecognized.
     #[serde(rename = "javascript", alias = "JavaScript", alias = "java_script")]
     JavaScript,
     /// Cascading Style Sheets.
@@ -61,9 +61,9 @@ pub const LANGUAGES: &[LanguageSpec] = &[
     },
     LanguageSpec {
         id: LanguageId::JavaScript,
-        label: "JavaScript / TypeScript",
-        extensions: &["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"],
-        available: false,
+        label: "JavaScript",
+        extensions: &["js", "jsx", "mjs", "cjs"],
+        available: true,
     },
     LanguageSpec {
         id: LanguageId::Html,
@@ -139,12 +139,20 @@ mod tests {
             "a.yml",
             "README.md",
             "notes.MARKDOWN",
+            "a.js",
+            "a.JS",
+            "view.jsx",
+            "module.mjs",
+            "bundle.cjs",
         ] {
             assert!(enabled_for_path(&defaults, Path::new(path)));
         }
         for path in [
             "a.html",
-            "a.js",
+            "a.ts",
+            "a.tsx",
+            "a.mts",
+            "a.cts",
             "a.go",
             "a.png",
             "a.php.bak",

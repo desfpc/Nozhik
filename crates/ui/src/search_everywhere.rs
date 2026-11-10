@@ -569,14 +569,14 @@ pub(crate) fn results_list_height(screen_height: f32) -> f32 {
     }
 }
 
-/// Class rows from the PHP symbol index and CSS selector declarations.
+/// Class rows from every language symbol index and CSS selector declarations.
 #[must_use]
-pub(crate) fn class_matches(
-    symbols: Option<&nozhik_language_support::symbol_index::SymbolIndex>,
+pub(crate) fn class_matches<'index>(
+    symbols: impl IntoIterator<Item = &'index nozhik_language_support::symbol_index::SymbolIndex>,
     classes: Option<&nozhik_language_support::css_symbols::ClassIndex>,
 ) -> Vec<ClassMatch> {
     let mut rows = Vec::new();
-    if let Some(symbols) = symbols {
+    for symbols in symbols {
         for declaration in symbols.declarations() {
             if declaration.kind != nozhik_language_support::symbol_index::SymbolKind::Class {
                 continue;

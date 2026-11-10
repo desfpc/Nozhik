@@ -24,6 +24,17 @@ impl LanguageTriggerConfig {
             auto_popup_triggers: vec!['$', '\\', '>'],
         }
     }
+
+    /// Built-in JavaScript preset. `.` and `?.` are member access; `?.` is matched first.
+    #[must_use]
+    pub fn javascript() -> Self {
+        Self {
+            language_id: "javascript".into(),
+            member_access_triggers: vec!["?.".into(), ".".into()],
+            static_access_triggers: Vec::new(),
+            auto_popup_triggers: vec!['$'],
+        }
+    }
     /// Whether newly inserted text warrants a completion query.
     #[must_use]
     pub fn activates(&self, before: &str) -> bool {
@@ -39,7 +50,7 @@ impl LanguageTriggerConfig {
     #[must_use]
     pub fn access<'a>(&self, before: &'a str) -> Option<(&'a str, &'a str, bool)> {
         let start = before
-            .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+            .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$' && c != '#')
             .map_or(0, |i| i + 1);
         let prefix = before.get(start..)?;
         let receiver = before.get(..start)?.trim_end();

@@ -95,7 +95,7 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   подтверждением либо legacy pin), секреты вне serde-профилей. Сохранение пароля
   только явным opt-in в OS credential store, без plaintext fallback; native API
   через spawn_blocking. Тесты используют injected/mock store без реального Keychain.
-- database: sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls, chrono/uuid/JSON/decimal),
+- database: redis (async Tokio, scripts, no default features), sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls, chrono/uuid/JSON/decimal),
   remote_ssh, tokio/tokio-util, futures-util, keyring, serde/serde_json, tempfile,
   thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
   SSH только через проверенный SshSession, query/result limits и cancellation.

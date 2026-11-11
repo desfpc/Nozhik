@@ -10,6 +10,7 @@ use std::ops::Range;
     reason = "Independent console mode, invalidation, loading and lifecycle flags"
 )]
 pub struct SqlConsole {
+    pub redis: bool,
     pub table: Option<crate::table_editor::TableEditor>,
     pub metadata_loading: bool,
     pub retry_metadata: bool,
@@ -40,6 +41,7 @@ pub struct SqlConsole {
 impl SqlConsole {
     pub fn new(id: u64, connection: String, schema: String, sql: &str, title: String) -> Self {
         Self {
+            redis: false,
             table: None,
             metadata_loading: false,
             retry_metadata: false,

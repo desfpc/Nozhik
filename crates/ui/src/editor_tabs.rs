@@ -57,7 +57,11 @@ impl NozhikUi {
                     .path
                     .as_ref()
                     .map_or_else(|| t.connection.clone(), |p| p.display().to_string()),
-                dirty: t.is_dirty(),
+                dirty: if t.redis {
+                    self.database.redis.dirty_for(&t.connection)
+                } else {
+                    t.is_dirty()
+                },
                 selected: self.database.active == Some(i),
             });
         let files = self

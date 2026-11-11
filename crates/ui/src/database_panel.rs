@@ -9,11 +9,13 @@ use std::{collections::HashMap, sync::Arc};
 use zeroize::Zeroize;
 
 mod designer;
+mod redis;
 mod schema;
 mod tree;
 
 #[derive(Default)]
 pub struct DatabaseUi {
+    pub(crate) redis: redis::RedisUi,
     worker: Option<Worker>,
     profiles: Vec<ConnectionProfile>,
     trees: HashMap<String, DatabaseSchemaTree>,
@@ -183,6 +185,7 @@ impl DatabaseUi {
             }
         }
         incidents.extend(catalog_object_incidents(&self.trees));
+        incidents.extend(self.redis.incidents());
         incidents
     }
 
@@ -191,7 +194,8 @@ impl DatabaseUi {
         self.error.clear();
     }
     pub const fn modal_open(&self) -> bool {
-        self.form.is_some()
+        self.redis.modal_open()
+            || self.form.is_some()
             || self.login.is_some()
             || self.schema_dialog.is_some()
             || self.table_designer.is_some()
@@ -203,6 +207,7 @@ impl DatabaseUi {
             .is_some_and(crate::table_editor::TableEditor::modal_open)
     }
     pub fn shutdown(&mut self) {
+        self.redis.shutdown();
         self.schema_dialog = None;
         self.table_designer = None;
         if let Some(worker) = self.worker.take() {
@@ -228,10 +233,17 @@ impl DatabaseUi {
         self.next_id
     }
     pub fn cancel_ssh(&mut self, id: u64, error: String) {
+        if self.redis.cancel_ssh(id, &error) {
+            return;
+        }
         self.pending.remove(&id);
         self.error = error;
     }
     pub fn accept_ssh(&mut self, id: u64, session: SshSession) {
+        if id & (1 << 63) != 0 {
+            self.redis.accept_ssh(id, session);
+            return;
+        }
         if let Some(pending) = self.pending.remove(&id) {
             self.pending.insert(
                 id,
@@ -260,6 +272,7 @@ impl NozhikUi {
         reason = "Typed replies update connection, console and table state by request identity"
     )]
     pub(crate) fn database_tick(&mut self, ctx: &egui::Context) {
+        self.redis_tick(ctx);
         if self.database.worker.is_none() {
             let ctx = ctx.clone();
             self.database.worker = Some(Worker::start(
@@ -292,7 +305,7 @@ impl NozhikUi {
                         .table_errors
                         .retain(|(n, _, _), _| n != &old_name);
                     for tab in &mut self.database.tabs {
-                        if tab.connection == old_name {
+                        if !tab.redis && tab.connection == old_name {
                             if let Some((_, token)) = tab.pending.take() {
                                 token.cancel();
                             }
@@ -491,6 +504,7 @@ impl NozhikUi {
             self.database_dialogs(ctx);
             self.schema_dialog(ctx);
             self.table_designer_dialog(ctx);
+            self.redis_dialogs(ctx);
         }
     }
     fn start_database_connection(
@@ -574,6 +588,7 @@ impl NozhikUi {
             }
         });
         let mut selected = self.database.selected_object;
+        self.redis_connections(ui);
         let actions = egui::ScrollArea::both()
             .show(ui, |ui| tree::show(ui, &self.database, &mut selected))
             .inner;
@@ -877,6 +892,15 @@ impl NozhikUi {
         reason = "Routes console and shared table actions after scheduling lazy SQL metadata"
     )]
     pub(crate) fn database_editor(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        if self
+            .database
+            .active
+            .and_then(|i| self.database.tabs.get(i))
+            .is_some_and(|t| t.redis)
+        {
+            self.redis_editor_view(ui, enabled);
+            return;
+        }
         if let Some(tab) = self.database.active.and_then(|i| self.database.tabs.get(i)) {
             let name = tab.connection.clone();
             let needed = self
@@ -1070,6 +1094,7 @@ impl NozhikUi {
         let token = CancellationToken::new();
         if let Some(tab) = self.database.tabs.get(index) {
             if tab.pending.is_some()
+                || tab.redis
                 || tab.connection_invalid
                 || tab
                     .result_editors

@@ -270,7 +270,7 @@ async fn system_postgres_mysql_types_schema_and_cancellation()
     Ok(())
 }
 
-struct ForwardDatabase;
+pub struct ForwardDatabase;
 impl russh::server::Handler for ForwardDatabase {
     type Error = russh::Error;
     fn auth_password(

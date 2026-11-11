@@ -15,7 +15,7 @@
 | nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
-| nozhik-database | SQL pools, typed results, catalog metadata, background actor and owned SSH tunnels | sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
+| nozhik-database | SQL pools, Redis structures, typed results, catalog metadata, background actors and owned SSH tunnels | redis, sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
 | nozhik-ai-completion | Local Ollama FIM, cancellable generation, model inspection/download | reqwest, tokio, serde/serde_json, thiserror |
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus, ai_completion |
@@ -614,6 +614,44 @@ TextEditorView, локальный SQL lexer и отдельные result tabs. 
 двумерного viewport. Копирование выполняется по исходному значению, preview ячейки
 ограничен 256 символами. Результат и текст остаются при скрытии/смене вкладки.
 
+
+### Redis (v0.1.64)
+
+`database::redis` is a separate typed adapter, not a SQLx Pool variant. Profile
+JSON lives in `redis_connections.json`; passwords are Secret values and optionally
+native keyring entries under `dev.Nozhik.Nozhik.Redis`. Its bounded actor owns
+clients, session credentials bound to endpoints, test evidence and SSH tunnels.
+Profile I/O/keyring run through spawn_blocking; each network operation has a
+45s outer deadline and dedicated Redis socket with SELECT and 15s I/O timeouts.
+Only verified SshSession handles enter the adapter. Redis SSH request IDs reserve
+the upper bit so SQL and Redis replies cannot collide. Closing a project cancels
+actor work and drops tunnels. Writes are never automatically retried.
+
+SCAN uses escaped literal substring matching and cursor continuation. The UI
+removes duplicate keys, labels fetched TTL and caps results at 10,000 keys.
+String previews use GETRANGE; collections show length and sample contents.
+WATCH plus a small EXEC validates a coherent editor read. Atom is either UTF-8
+text or hexadecimal binary; Data preserves String/Hash/List/Set/Zset/Stream
+structure. Editor snapshots contain DUMP as an optimistic value token. Oversized
+or partial snapshots cannot mutate; the editor retains at most 1000 entries /
+1 MiB serialized data. Lua compares DUMP, then builds a replacement under an
+unused temporary key before RENAME; preparation/ACL errors leave the original
+key intact. Current key TTL and supported Hash field TTLs are copied to the replacement. Stream writes use
+XADD/XDEL instead of replacement and preserve consumer groups. Redis Lua is not
+a general rollback transaction; transport failures require explicit reload.
+
+`ui::database_panel::redis` provides profile forms and a virtualized key browser
+inside the shared editor tabs, using the same BufferId/close/overflow lifecycle
+as SQL table tabs. The database tab Redis mode never exposes its placeholder
+buffer to SQL execution, file saving or text-editor actions. Each connection
+retains a separate browser state (database, scan cursor, values, draft, pending
+request); inactive replies route by request ID without activating/reopening tabs. All operations correlate request IDs; edits
+block selection/database changes, failed operations retain drafts, and project
+close/Save All uses the shared dirty gate across active and inactive Redis tabs.
+Switching to another connection, SQL or file preserves each draft. Redis browser
+content is not modal; connection/SSH forms remain modal.
+Standalone TCP and SSH are supported; direct TLS, Cluster/Sentinel, value search
+and module-specific editors are not supported. SQL behavior is unchanged.
 
 ## Системная интеграция RC1 (Phase 9)
 

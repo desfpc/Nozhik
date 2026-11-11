@@ -4,6 +4,7 @@ pub mod changes;
 pub mod connection;
 pub mod driver;
 pub mod introspection;
+pub mod redis;
 pub mod schema;
 pub mod table_design;
 mod table_ops;

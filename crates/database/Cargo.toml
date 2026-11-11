@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+redis.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

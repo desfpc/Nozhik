@@ -142,7 +142,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "anyhow",
  "eframe",
@@ -774,7 +774,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4356eba6976435498d05a311ee9fc486da3bc81c200d3f0d7dd9703b41913f92"
 dependencies = [
  "bytes",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3078,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ai-completion"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "nix 0.28.0",
  "reqwest",
@@ -3091,7 +3095,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-buffer"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "nozhik-core",
  "nozhik-event-bus",
@@ -3103,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-config"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "directories",
  "nozhik-core",
@@ -3117,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-core"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3125,13 +3129,14 @@ dependencies = [
 
 [[package]]
 name = "nozhik-database"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "chrono",
  "futures-util",
  "keyring",
  "nozhik-remote-ssh",
  "rand 0.10.3",
+ "redis",
  "russh",
  "rust_decimal",
  "serde",
@@ -3146,7 +3151,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-docker"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "ignore",
  "nix 0.28.0",
@@ -3160,7 +3165,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-event-bus"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "nozhik-core",
  "thiserror 2.0.21",
@@ -3169,7 +3174,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-fs-model"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "fuzzy-matcher",
  "git2",
@@ -3185,7 +3190,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-language-support"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "csscolorparser",
  "ignore",
@@ -3207,7 +3212,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-plugin-host"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "directories",
  "nozhik-event-bus",
@@ -3221,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-remote-ssh"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "directories",
  "keyring",
@@ -3238,7 +3243,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-terminal"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "base64 0.22.1",
  "nix 0.28.0",
@@ -3251,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-ui"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3291,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "nozhik-vcs"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "git2",
  "tempfile",
@@ -4435,6 +4440,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
+name = "redis"
+version = "0.32.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014cc767fefab6a3e798ca45112bccad9c6e0e218fbd49720042716c73cfef44"
+dependencies = [
+ "bytes",
+ "cfg-if",
+ "combine",
+ "futures-util",
+ "itoa",
+ "num-bigint 0.4.8",
+ "percent-encoding",
+ "pin-project-lite",
+ "ryu",
+ "sha1_smol",
+ "socket2",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5133,6 +5160,12 @@ dependencies = [
  "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -5924,6 +5957,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]

@@ -79,3 +79,10 @@ published archives omit standalone license files. For these packages, the build
 also supplies the original source package, preserving embedded notices and author
 metadata. Apache-2.0.txt is retained for third-party dependencies; it is not the
 license for original Nozhik code.
+
+## Redis client
+
+Redis connectivity uses `redis` 0.32.7 (`redis-rs`), BSD-3-Clause, with
+`sha1_smol` (BSD-3-Clause) for script hashes. The native executable communicates
+with user-provided Redis servers; it does not bundle Redis server. The Redis
+client's original notices are included in generated distribution sidecars.

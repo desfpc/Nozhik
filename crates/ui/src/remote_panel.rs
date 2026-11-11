@@ -133,6 +133,9 @@ impl RemoteUi {
             .find(|p| p.name == name)
             .is_some_and(|p| self.connect(p.clone(), Intent::Database(id)))
     }
+    pub(crate) fn database_profile_names(&self) -> Vec<String> {
+        self.profiles.iter().map(|p| p.name.clone()).collect()
+    }
     pub const fn modal_open(&self) -> bool {
         self.form.is_some()
             || self.login.is_some()

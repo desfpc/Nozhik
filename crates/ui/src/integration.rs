@@ -108,7 +108,7 @@ impl NozhikUi {
             self.database
                 .tabs
                 .get_mut(index)
-                .filter(|t| t.table.is_none())
+                .filter(|t| t.table.is_none() && !t.redis)
                 .map(|t| &mut t.buffer)
         } else {
             self.active
@@ -120,7 +120,8 @@ impl NozhikUi {
     pub(crate) fn close_target_dirty(&self, target: CloseTarget) -> bool {
         match target {
             CloseTarget::Window | CloseTarget::Project => {
-                self.documents.iter().any(|d| d.buffer.is_dirty())
+                self.database.redis.any_dirty()
+                    || self.documents.iter().any(|d| d.buffer.is_dirty())
                     || self
                         .database
                         .tabs
@@ -129,11 +130,13 @@ impl NozhikUi {
             }
             CloseTarget::Files => self.documents.iter().any(|d| d.open && d.buffer.is_dirty()),
             CloseTarget::File(i) => self.documents.get(i).is_some_and(|d| d.buffer.is_dirty()),
-            CloseTarget::Sql(i) => self
-                .database
-                .tabs
-                .get(i)
-                .is_some_and(super::sql_console::SqlConsole::is_dirty),
+            CloseTarget::Sql(i) => self.database.tabs.get(i).is_some_and(|t| {
+                if t.redis {
+                    self.database.redis.dirty_for(&t.connection)
+                } else {
+                    t.is_dirty()
+                }
+            }),
         }
     }
     pub(crate) fn request_close(&mut self, target: CloseTarget, ctx: &egui::Context) {
@@ -177,6 +180,9 @@ impl NozhikUi {
                 }
             }
             CloseTarget::Sql(i) => {
+                if let Some(tab) = self.database.tabs.get(i).filter(|t| t.redis) {
+                    self.database.redis.close(&tab.connection.clone());
+                }
                 if i < self.database.tabs.len() {
                     self.database.tabs.remove(i);
                 }
@@ -197,6 +203,10 @@ impl NozhikUi {
 
     pub(crate) fn save_all(&mut self) {
         self.integration.save_error = None;
+        if self.database.redis.any_dirty() {
+            self.integration.save_error =
+                Some("Submit or Revert pending Redis changes before closing".into());
+        }
         for i in 0..self.documents.len() {
             if self.documents[i].buffer.is_dirty() {
                 self.save_document(i);
@@ -217,7 +227,7 @@ impl NozhikUi {
         let Some(tab) = self.database.tabs.get(index) else {
             return;
         };
-        if tab.table.is_some() {
+        if tab.table.is_some() || tab.redis {
             return;
         }
         let Some(path) = tab.path.clone() else {
@@ -536,30 +546,43 @@ impl NozhikUi {
             && self.integration.path_action.is_none()
         {
             let pending_table = match target {
-                CloseTarget::Sql(i) => self
-                    .database
-                    .tabs
-                    .get(i)
-                    .is_some_and(crate::sql_console::SqlConsole::data_dirty),
-                CloseTarget::Window | CloseTarget::Project => self
-                    .database
-                    .tabs
-                    .iter()
-                    .any(crate::sql_console::SqlConsole::data_dirty),
+                CloseTarget::Sql(i) => self.database.tabs.get(i).is_some_and(|t| {
+                    if t.redis {
+                        self.database.redis.dirty_for(&t.connection)
+                    } else {
+                        t.data_dirty()
+                    }
+                }),
+                CloseTarget::Window | CloseTarget::Project => {
+                    self.database.redis.any_dirty()
+                        || self
+                            .database
+                            .tabs
+                            .iter()
+                            .any(crate::sql_console::SqlConsole::data_dirty)
+                }
                 _ => false,
             };
             let mut save = false;
             let mut discard = false;
             let mut cancel = false;
+            let redis_writing = match target {
+                CloseTarget::Window | CloseTarget::Project => self.database.redis.any_writing(),
+                CloseTarget::Sql(i) => {
+                    self.database.tabs.get(i).is_some_and(|t| t.redis)
+                        && self.database.redis.any_writing()
+                }
+                _ => false,
+            };
             egui::Modal::new(egui::Id::new("unsaved_close")).show(ctx, |ui| {
                 ui.heading("Unsaved changes");
-                ui.label(if pending_table { "Table changes are pending. Cancel to return and use Submit or Revert; Discard closes without submitting." } else { "Save modified files before closing?" });
+                ui.label(if redis_writing { "A Redis write is in progress. Wait for its result before closing." } else if pending_table { "Database changes are pending. Cancel to return and use Submit or Revert; Discard closes without submitting." } else { "Save modified files before closing?" });
                 ui.horizontal(|ui| {
                     save = ui
                         .add_enabled(!self.integration.waiting && !pending_table, egui::Button::new("Save All"))
                         .clicked();
                     discard = ui
-                        .add_enabled(!self.integration.waiting, egui::Button::new("Discard"))
+                        .add_enabled(!self.integration.waiting && !redis_writing, egui::Button::new("Discard"))
                         .clicked();
                     cancel = ui.button("Cancel").clicked();
                 });

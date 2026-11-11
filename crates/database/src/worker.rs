@@ -247,11 +247,12 @@ impl Connection {
                     schema.filter(|s| !s.is_empty()).unwrap_or(&self.database)
                 )
             )),
-            crate::DbDriverType::Sqlite => None,
+            crate::DbDriverType::Sqlite | crate::DbDriverType::ClickHouse => None,
         };
         let mut results = match &self.pool {
             Pool::Postgres(p) => execute_pool!(p, pg_value, sql, cancel, schema_sql, server),
             Pool::Mysql(p) => execute_pool!(p, mysql_value, sql, cancel, schema_sql, server),
+            Pool::ClickHouse(p) => p.query(sql, schema.unwrap_or(&self.database), cancel).await,
             Pool::Sqlite(p) => execute_pool!(p, sqlite_value, sql, cancel, schema_sql, sqlite),
         }?;
         let elapsed = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -534,6 +535,11 @@ fn credential(profile: &crate::ConnectionProfile) -> Result<keyring::Entry> {
         &profile.user,
         &profile.database,
     ))?;
+    let account = if profile.driver == crate::DbDriverType::ClickHouse {
+        format!("{account}:tls={}", profile.tls)
+    } else {
+        account
+    };
     Ok(keyring::Entry::new("dev.Nozhik.Nozhik.Database", &account)?)
 }
 #[allow(
@@ -745,7 +751,7 @@ async fn handle(
 
 fn credential_identity(
     profile: &crate::ConnectionProfile,
-) -> (&str, crate::DbDriverType, &str, u16, &str, &str) {
+) -> (&str, crate::DbDriverType, &str, u16, &str, &str, bool) {
     (
         &profile.name,
         profile.driver,
@@ -753,6 +759,7 @@ fn credential_identity(
         profile.port,
         &profile.user,
         &profile.database,
+        profile.tls,
     )
 }
 fn same_endpoint(original: &crate::ConnectionProfile, profile: &crate::ConnectionProfile) -> bool {

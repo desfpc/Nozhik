@@ -37,6 +37,7 @@ pub fn creation_sql(new: &Definition) -> Result<String> {
     );
     let mut steps = Vec::new();
     match new.driver {
+        DbDriverType::ClickHouse => return Err(invalid("Use ClickHouse DDL in the SQL console")),
         DbDriverType::Sqlite => {
             create.push_str(match (new.strict, new.without_rowid) {
                 (true, true) => " STRICT, WITHOUT ROWID",

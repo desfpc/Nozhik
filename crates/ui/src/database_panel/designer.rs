@@ -15,6 +15,7 @@ pub(super) enum Action {
     Create,
     Ddl,
     Export,
+    Truncate,
 }
 pub(super) struct Dialog {
     profile: ConnectionProfile,
@@ -72,6 +73,8 @@ impl NozhikUi {
                 table,
                 if action == Action::Ddl {
                     super::schema::Action::Ddl
+                } else if action == Action::Truncate {
+                    super::schema::Action::Truncate
                 } else {
                     super::schema::Action::Export
                 },

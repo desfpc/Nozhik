@@ -11,6 +11,7 @@ fn profiles_roundtrip_validation_and_malformed_preservation()
         DbDriverType::Postgres,
         DbDriverType::Mysql,
         DbDriverType::Sqlite,
+        DbDriverType::ClickHouse,
     ] {
         profiles.push(ConnectionProfile {
             name: format!("{driver:?}"),
@@ -354,6 +355,7 @@ async fn system_postgres_through_authenticated_ssh_tunnel()
             database: "nozhik".into(),
             ssh_profile_id: Some(ssh_profile.name),
             save_password: false,
+            tls: false,
         };
         let db = Connection::connect(
             &db_profile,

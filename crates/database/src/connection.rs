@@ -26,6 +26,9 @@ pub struct ConnectionProfile {
     /// Explicit opt-in to OS-protected password persistence.
     #[serde(default)]
     pub save_password: bool,
+    /// Verify `ClickHouse` HTTPS certificates and hostname using trusted CA roots.
+    #[serde(default)]
+    pub tls: bool,
 }
 impl Default for ConnectionProfile {
     fn default() -> Self {
@@ -38,6 +41,7 @@ impl Default for ConnectionProfile {
             database: ":memory:".into(),
             ssh_profile_id: None,
             save_password: false,
+            tls: false,
         }
     }
 }
@@ -119,6 +123,7 @@ pub(crate) enum Pool {
     Postgres(sqlx::PgPool),
     Mysql(sqlx::MySqlPool),
     Sqlite(sqlx::SqlitePool),
+    ClickHouse(crate::clickhouse::Client),
 }
 /// A pool and its tunnel share a lifetime; queries never create an implicit SSH login.
 pub struct Connection {
@@ -154,6 +159,14 @@ impl Connection {
             });
         let password = password.map_or("", Secret::expose);
         let pool = match profile.driver {
+            DbDriverType::ClickHouse => Pool::ClickHouse(
+                crate::clickhouse::Client::connect(
+                    profile,
+                    password,
+                    tunnel.as_ref().map(TunnelHandle::local_addr),
+                )
+                .await?,
+            ),
             DbDriverType::Postgres => Pool::Postgres(
                 sqlx::postgres::PgPoolOptions::new()
                     .max_connections(4)
@@ -208,6 +221,20 @@ impl Connection {
         if self.tunnel.as_ref().is_some_and(|t| !t.is_running()) {
             return false;
         }
+        if let Pool::ClickHouse(client) = &self.pool {
+            return matches!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    client.query(
+                        "SELECT 1",
+                        &self.database,
+                        &tokio_util::sync::CancellationToken::new()
+                    )
+                )
+                .await,
+                Ok(Ok(_))
+            );
+        }
         // A busy pool is not a transport failure; avoid competing with active queries.
         let ping = async {
             match &self.pool {
@@ -225,7 +252,7 @@ impl Connection {
                         Ok(())
                     }
                 }
-                Pool::Sqlite(_) => Ok(()),
+                Pool::Sqlite(_) | Pool::ClickHouse(_) => Ok(()),
             }
         };
         matches!(
@@ -239,6 +266,7 @@ impl Connection {
             Pool::Postgres(p) => p.close().await,
             Pool::Mysql(p) => p.close().await,
             Pool::Sqlite(p) => p.close().await,
+            Pool::ClickHouse(_) => {}
         }
         if let Some(tunnel) = &self.tunnel {
             tunnel.stop();
@@ -253,14 +281,19 @@ impl Connection {
 /// Quote a single identifier; metadata names never become executable SQL.
 #[must_use]
 pub fn quote_identifier(driver: DbDriverType, name: &str) -> String {
-    let quote = if driver == DbDriverType::Mysql {
+    let quote = if matches!(driver, DbDriverType::Mysql | DbDriverType::ClickHouse) {
         '`'
     } else {
         '"'
     };
     format!(
         "{quote}{}{quote}",
-        name.replace(quote, &format!("{quote}{quote}"))
+        if driver == DbDriverType::ClickHouse {
+            name.replace('\\', "\\\\")
+                .replace(quote, &format!("\\{quote}"))
+        } else {
+            name.replace(quote, &format!("{quote}{quote}"))
+        }
     )
 }
 /// Safely construct a qualified table preview with 500 rows plus one lookahead row.

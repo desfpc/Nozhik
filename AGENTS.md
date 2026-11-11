@@ -62,4 +62,4 @@ CI binaries.yml сохраняет сборки обеих платформ то
 Версия ведётся в `[workspace.package].version` корневого `Cargo.toml`.
 Каждая следующая доработка/коммит увеличивает patch-версию один раз и обновляет
 `Cargo.lock`; интерфейс и app bundle используют эту же версию.
-Текущая версия — 0.1.66 (contrasting Light controls and Nozhik Light theme), следующая — 0.1.67.
+Текущая версия — 0.1.67 (ClickHouse HTTP/HTTPS, read-only grids and TRUNCATE), следующая — 0.1.68.

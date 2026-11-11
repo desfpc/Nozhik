@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum DbDriverType {
     /// PostgreSQL.
     Postgres,
+    /// `ClickHouse` over HTTP(S).
+    ClickHouse,
     /// MySQL and MariaDB.
     Mysql,
     /// Local SQLite file or :memory:.

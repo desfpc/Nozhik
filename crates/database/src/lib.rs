@@ -1,6 +1,7 @@
 //! Relational database connections, typed results, metadata and background execution.
 pub mod catalog;
 pub mod changes;
+mod clickhouse;
 pub mod connection;
 pub mod driver;
 pub mod introspection;
@@ -19,6 +20,9 @@ pub use tokio_util::sync::CancellationToken;
 /// Database subsystem failures. SQL errors retain their original cause.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// HTTP transport failure (request URLs are omitted to protect credentials).
+    #[error("{0}")]
+    Http(#[from] reqwest::Error),
     /// Driver or server failure.
     #[error("{0}")]
     Sql(#[from] sqlx::Error),

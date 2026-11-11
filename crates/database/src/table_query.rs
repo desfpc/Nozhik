@@ -118,7 +118,7 @@ fn validate(source: &str, driver: DbDriverType) -> Result<()> {
         }
         if c == ';'
             || c == '\0'
-            || (c == '#' && driver == DbDriverType::Mysql)
+            || (c == '#' && matches!(driver, DbDriverType::Mysql | DbDriverType::ClickHouse))
             || (c == '-' && chars.peek() == Some(&'-'))
             || (c == '/' && chars.peek() == Some(&'*'))
         {

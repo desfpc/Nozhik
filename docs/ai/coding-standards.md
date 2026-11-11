@@ -97,7 +97,7 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   подтверждением либо legacy pin), секреты вне serde-профилей. Сохранение пароля
   только явным opt-in в OS credential store, без plaintext fallback; native API
   через spawn_blocking. Тесты используют injected/mock store без реального Keychain.
-- database: redis (async Tokio, scripts, no default features), sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls, chrono/uuid/JSON/decimal),
+- database: reqwest (HTTP/stream/Rustls для ClickHouse), redis (async Tokio, scripts, no default features), sqlx (PostgreSQL/MySQL/SQLite, Tokio/Rustls, chrono/uuid/JSON/decimal),
   remote_ssh, tokio/tokio-util, futures-util, keyring, serde/serde_json, tempfile,
   thiserror. Без UI/config/event_bus; OS credentials только spawn_blocking,
   SSH только через проверенный SshSession, query/result limits и cancellation.
@@ -303,3 +303,17 @@ edited side; transform only its counterpart, bound queued work and gate results
 by revision including mode changes. Reject malformed escapes, invalid Base64 and
 non-UTF-8 without lossy replacement or destroying the last valid counterpart.
 Keep URL component and form '+' semantics explicit in the UI and test both.
+
+### ClickHouse
+
+ClickHouse — HTTP(S) variant в Connection, без SQLx transaction. Read-only gate
+обязателен и в TableEditor (обычные таблицы и console results), и в backend
+TableChanges/Apply; primary key ClickHouse не означает уникальную identity.
+TRUNCATE запускается отдельной schema task после preview и подтверждения, без
+обещания rollback. HTTPS сохраняет имя сервера при SSH DNS override; нельзя
+отключать проверку сертификата/hostname, перенаправлять auth или сериализовать пароль.
+HTTP parser читает поток по записям с пределами, сохраняет метаданные пустых SELECT,
+точность чисел и raw nested JSON (в том числе duplicate Map keys). SQL-экспорт
+использует native Values serialization и byte escapes для не-UTF-8 строк.
+Не применяйте console row limit к полному экспорту. Tests используют только
+явно изолированный ClickHouse и временные имена, не пользовательские базы.

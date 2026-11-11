@@ -640,6 +640,7 @@ pub fn migration_sql(old: &Definition, new: &Definition) -> Result<String> {
 fn plan(old: &Definition, new: &Definition) -> Result<Plan> {
     validate(old, new)?;
     match old.driver {
+        DbDriverType::ClickHouse => Err(invalid("Use ClickHouse DDL in the SQL console")),
         DbDriverType::Sqlite => sqlite_plan(old, new),
         DbDriverType::Mysql => mysql_plan(old, new),
         DbDriverType::Postgres => postgres_plan(old, new),

@@ -290,7 +290,8 @@ impl TableEditor {
     )]
     pub fn show(&mut self, ui: &mut egui::Ui, busy: bool, enabled: bool) {
         let dirty = self.dirty();
-        let editable = !self.info.is_view && self.changes.is_some();
+        let editable =
+            self.driver != DbDriverType::ClickHouse && !self.info.is_view && self.changes.is_some();
         ui.add_enabled_ui(enabled && !self.preview, |ui| {
             egui::ScrollArea::horizontal()
                 .id_salt("table_toolbar")
@@ -395,6 +396,9 @@ impl TableEditor {
                     });
                 });
         });
+        if self.driver == DbDriverType::ClickHouse {
+            ui.label("ClickHouse: read-only grid. Use the SQL console for INSERT and DDL; clear tables with TRUNCATE in the explorer.");
+        }
         if !self.console_result {
             self.query_fields(ui, enabled && !busy && !self.preview && !self.dirty());
         } else if self.info.is_view {
@@ -415,7 +419,7 @@ impl TableEditor {
                         &mut self.inputs,
                         self.reveal_row.take(),
                         GridOptions {
-                            editable: !self.info.is_view,
+                            editable,
                             offset: self.offset,
                             driver: self.driver,
                             query: &self.query,
@@ -916,6 +920,89 @@ fn parse_input(text: &str, kind: &str, previous: Option<&DbValue>) -> DbValue {
 #[cfg(test)]
 mod console_tests {
     use super::*;
+    #[test]
+    fn clickhouse_table_and_console_grids_ignore_mutation_controls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (tree, mut result) = crate::sql_support::tests::fixture();
+        result.rows = vec![vec![
+            DbValue::Int(1),
+            DbValue::Int(2),
+            DbValue::Text("original".into()),
+        ]];
+        let ctx = egui::Context::default();
+        for console_result in [false, true] {
+            let mut editor =
+                TableEditor::new(DbDriverType::ClickHouse, tree.schemas[0].tables[0].clone());
+            editor.console_result = console_result;
+            editor.loaded("main", result.clone());
+            editor.selected.insert(0);
+            let frame = |editor: &mut TableEditor, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1400.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| editor.show(ui, false, true));
+                    },
+                )
+            };
+            frame(&mut editor, vec![]);
+            for label in ["+", "−", "Submit", "Preview Pending Changes"] {
+                let output = frame(&mut editor, vec![]);
+                let point = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| format!("Missing {label}"))?;
+                frame(
+                    &mut editor,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                assert!(!editor.dirty());
+                assert!(!editor.preview);
+                assert!(editor.action.is_none());
+                assert_eq!(
+                    editor.changes.as_ref().ok_or("snapshot")?.rows.len(),
+                    result.rows.len()
+                );
+            }
+            // Sorting and table filters retain their existing read-only behavior.
+            editor.cycle_sort(0);
+            assert_eq!(
+                editor.query.column_descending(editor.driver, "id"),
+                console_result.then_some(false)
+            );
+            if !console_result {
+                assert!(matches!(editor.action, Some(TableAction::Query)));
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn console_sort_cycles_without_changing_row_identity_or_insert_defaults()
     -> Result<(), Box<dyn std::error::Error>> {

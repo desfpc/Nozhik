@@ -4652,3 +4652,66 @@ cargo clean удалил 9.8 GiB (26640 файлов), удалены task logs 
 .DS_Store. Финальный размер проекта — 397 MiB, binaries — 116 MiB. Исходники,
 история, незакоммиченные изменения и актуальные бинарники с legal materials
 сохранены; после очистки сборок не было.
+
+### ClickHouse: HTTP(S), SQL, read-only grids и TRUNCATE (v0.1.67, 2026-11-11)
+
+SQL-профили и Connection/Worker получили ClickHouse HTTP transport через уже
+используемый reqwest/Rustls: direct HTTP/HTTPS, проверенные SSH-туннели,
+Test/Save/Connect/Edit, отдельный пароль БД и штатный OS credential opt-in.
+TLS сохраняет original DNS hostname при SSH routing; redirects/proxy отключены,
+сертификаты проверяются. Старые JSON-профили читаются с tls=false; TLS входит
+в identity credentials ClickHouse, прежние credential IDs других SQL БД сохранены.
+
+Дерево читает system.databases/tables/columns: базы, таблицы/views, columns,
+null/default/key, engine/partition/sort/primary/sampling keys и native CREATE с TTL,
+projections, indexes/settings. Переиспользованы SQL highlighting/completion,
+query results, server-side WHERE/ORDER BY/pages, copy, DDL tabs и schema dialogs.
+Гриды таблиц и консоли read-only; backend statements/Apply также отклоняют
+row mutations. INSERT VALUES/SELECT и DDL доступны в консоли; визуальный designer
+и schema settings ClickHouse отключены.
+
+TRUNCATE Table… открывает точный SQL и требует Confirm TRUNCATE; выполняется
+квалифицированный TRUNCATE TABLE ... SYNC. Views не получают это действие;
+ошибки движка/ACL идут в Problems. Открытые страницы таблицы перечитываются
+с начала, без смены активной вкладки. UPDATE/DELETE UI и transactional Submit нет.
+
+Dynamic JSONCompactEachRowWithNamesAndTypes decoder работает потоком, сохраняет
+пустые metadata, duplicate aliases, Decimal/UInt128 и raw nested JSON с duplicate
+Map keys. Консоль: 10 000 строк / 16 MiB, запись: 16 MiB, HTTP deadline: 300 s.
+Late server errors не становятся успешным partial result. Cancel использует
+query ID/KILL (best effort), без обещания rollback. Между запросами нет session:
+БД задаёт toolbar, query settings — SETTINGS, standalone USE/SET/transactions
+отклоняются. Splitter учитывает strings/backslashes/comments/heredocs.
+
+Полные CSV и SQL одной таблицы не ограничены console row limit; preview — 64 KiB.
+Native Values serialization через hex/byte escapes сохраняет binary String,
+Unicode, точные числа и вложенные типы; INSERT исключает MATERIALIZED/ALIAS.
+Run SQL File дренирует большие SELECT и продолжает последующие statements.
+Grid/CSV отклоняют binary non-UTF-8 явно; просмотр через hex(column) доступен.
+Экспорты не обещают snapshot при concurrent writes. SQL data dump всей БД,
+custom CA UI, native TCP transport и отдельный ClickHouse designer не реализованы.
+
+Версия workspace/lock — 0.1.67, следующая — 0.1.68. Новых пакетов нет:
+nozhik-database переиспользует reqwest, serde_json включает raw_value.
+
+Проверки: fmt и workspace/all-targets/all-features Clippy с -D warnings прошли.
+Финальный cargo test --workspace --all-features -- --test-threads=1:
+469 passed, 0 failed, 19 optional ignored. В промежуточном параллельном прогоне
+был нестабильный прежний SQLite headless-тест; отдельный повтор и финальный
+последовательный прогон прошли. Три ClickHouse system tests с --ignored прошли
+на изолированном ClickHouse 25.8.33.6: direct SQL/catalog/types/export/restore/
+TRUNCATE/cancel/auth errors/большой SQL file, реальный verified SSH forwarding,
+headless pointer UI с отменой/подтверждением TRUNCATE и reload открытой таблицы.
+Обычные tests дополнительно проверяют fragmented HTTP, late server errors,
+duplicate labels, precise values, malformed scripts и disabled grid controls
+для table и console results. Ручной native GUI, HTTPS с реальным сертификатом,
+OS credential store и Windows build/Clippy не запускались. Commit/push не выполнялись.
+
+Workspace release build прошёл. Штатный update-binaries.py обновил macOS ARM64
+executable, Nozhik.app.zip и legal sidecars; --check подтвердил fingerprint
+2356910aee72c939a3beb630e9cffb01ee38d9fd6f9d314be819c6eb9a63589a и SHA-256,
+включая повтор после очистки. Windows не пересобирался. cargo clean удалил
+12.4 GiB (30893 файла); удалены временный ClickHouse container/image, task logs
+и untracked Finder .DS_Store. Финальный размер проекта — 398 MiB, binaries —
+116 MiB. Исходники, история и актуальные бинарники с legal materials сохранены;
+после очистки сборок не было.

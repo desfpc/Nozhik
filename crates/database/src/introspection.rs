@@ -66,12 +66,14 @@ impl Connection {
     pub async fn catalog(&self) -> Result<DatabaseSchemaTree> {
         let mut tree = DatabaseSchemaTree::default();
         let schemas:Vec<String>=match &self.pool {
+            Pool::ClickHouse(client) => return client.catalog().await,
             Pool::Sqlite(p)=>sqlx::query("PRAGMA database_list").fetch_all(p).await?.iter().map(|r|r.try_get("name")).collect::<std::result::Result<_,_>>()?,
             Pool::Postgres(p)=>sqlx::query_scalar("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name").fetch_all(p).await?,
             Pool::Mysql(p)=>sqlx::query_scalar("SELECT CAST(SCHEMA_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY SCHEMA_NAME").fetch_all(p).await?,
         };
         for schema in schemas {
             let relations:Vec<(String,String)>=match &self.pool {
+                Pool::ClickHouse(client) => return client.catalog().await,
                 Pool::Sqlite(p)=>sqlx::query_as(&format!("SELECT name,type FROM {}.sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",quote_identifier(self.driver,&schema))).fetch_all(p).await?,
                 Pool::Postgres(p)=>sqlx::query_as("SELECT table_name,table_type FROM information_schema.tables WHERE table_schema=$1 ORDER BY table_name").bind(&schema).fetch_all(p).await?,
                 Pool::Mysql(p)=>sqlx::query_as("SELECT CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4),CAST(TABLE_TYPE AS CHAR CHARACTER SET utf8mb4) FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME").bind(&schema).fetch_all(p).await?,
@@ -102,6 +104,7 @@ impl Connection {
         is_view: bool,
     ) -> Result<TableInfo> {
         let columns = match &self.pool {
+            Pool::ClickHouse(client) => return client.describe(schema, table, is_view).await,
             Pool::Sqlite(p) => {
                 let rows = sqlx::query(&format!(
                     "PRAGMA {}.table_info({})",

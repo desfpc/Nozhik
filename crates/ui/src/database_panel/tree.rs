@@ -265,7 +265,9 @@ impl Tree<'_> {
                             ] {
                                 if ui
                                     .add_enabled(
-                                        !table.is_view || action != super::designer::Action::Modify,
+                                        (!table.is_view
+                                            && profile.driver != DbDriverType::ClickHouse)
+                                            || action != super::designer::Action::Modify,
                                         egui::Button::new(label),
                                     )
                                     .clicked()
@@ -278,6 +280,18 @@ impl Tree<'_> {
                                     ));
                                     ui.close();
                                 }
+                            }
+                            if profile.driver == DbDriverType::ClickHouse
+                                && !table.is_view
+                                && ui.button("TRUNCATE Table…").clicked()
+                            {
+                                tree.actions.push(Action::Table(
+                                    profile.clone(),
+                                    schema.name.clone(),
+                                    table.name.clone(),
+                                    super::designer::Action::Truncate,
+                                ));
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Open Table (First 500 rows)").clicked() {
@@ -301,7 +315,13 @@ impl Tree<'_> {
             );
             if !views {
                 response.context_menu(|ui| {
-                    if ui.button("+ New Table").clicked() {
+                    if ui
+                        .add_enabled(
+                            profile.driver != DbDriverType::ClickHouse,
+                            egui::Button::new("+ New Table"),
+                        )
+                        .clicked()
+                    {
                         let mut name = "new_table".to_owned();
                         while schema
                             .tables
@@ -413,6 +433,10 @@ impl Tree<'_> {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Connection and namespace menus route actions from the same tree state"
+)]
 pub(super) fn show(ui: &mut Ui, db: &DatabaseUi, selected: &mut Option<egui::Id>) -> Vec<Action> {
     let mut tree = Tree {
         selected,
@@ -446,7 +470,14 @@ pub(super) fn show(ui: &mut Ui, db: &DatabaseUi, selected: &mut Option<egui::Id>
                             ("Run SQL Script...", super::schema::Action::Run),
                             ("Export Data to File", super::schema::Action::Export),
                         ] {
-                            if ui.button(label).clicked() {
+                            if ui
+                                .add_enabled(
+                                    profile.driver != DbDriverType::ClickHouse
+                                        || action != super::schema::Action::Modify,
+                                    egui::Button::new(label),
+                                )
+                                .clicked()
+                            {
                                 tree.actions.push(Action::Schema(
                                     profile.clone(),
                                     schema.name.clone(),

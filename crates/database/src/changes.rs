@@ -100,6 +100,9 @@ impl TableChanges {
     /// # Errors
     /// Rejects malformed snapshots; row identity uses the full original snapshot.
     pub fn statements(&self) -> Result<Vec<String>> {
+        if self.driver == DbDriverType::ClickHouse {
+            return Err(Error::Invalid("ClickHouse grids are read-only".into()));
+        }
         let quote = |s: &str| quote_identifier(self.driver, s);
         let table = format!("{}.{}", quote(&self.schema), quote(&self.table));
         let mut statements = Vec::new();
@@ -238,6 +241,7 @@ pub fn literal(driver: DbDriverType, value: &DbValue) -> Result<String> {
             }
         }
         DbValue::Text(s) | DbValue::Json(s) | DbValue::DateTime(s) => match driver {
+            DbDriverType::ClickHouse => crate::clickhouse::text(s),
             DbDriverType::Postgres => format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''")),
             DbDriverType::Mysql => format!("CONVERT(X'{}' USING utf8mb4)", hex(s.as_bytes())),
             DbDriverType::Sqlite => format!("CAST(X'{}' AS TEXT)", hex(s.as_bytes())),

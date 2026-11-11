@@ -74,6 +74,9 @@ pub(super) fn table(ui: &mut egui::Ui, t: &mut Definition) {
             ui.checkbox(&mut t.row_security, "Enable row-level security");
             ui.checkbox(&mut t.force_row_security, "Force row-level security");
         }
+        DbDriverType::ClickHouse => {
+            ui.label("Use the SQL console for ClickHouse DDL");
+        }
         DbDriverType::Sqlite => {
             ui.checkbox(&mut t.strict, "STRICT");
             ui.checkbox(&mut t.without_rowid, "WITHOUT ROWID");
@@ -288,6 +291,7 @@ fn column(ui: &mut egui::Ui, d: DbDriverType, c: &mut Column) {
                     "bytea",
                     "uuid",
                 ][..],
+                DbDriverType::ClickHouse => &["String", "UInt64", "DateTime"][..],
                 DbDriverType::Sqlite => &["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC", "ANY"][..],
             } {
                 ui.selectable_value(&mut c.data_type, (*data_type).into(), *data_type);

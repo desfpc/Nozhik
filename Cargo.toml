@@ -3,7 +3,7 @@ members = ["crates/core", "crates/event_bus", "crates/config", "crates/app", "cr
 resolver = "3"
 
 [workspace.package]
-version = "0.1.66"
+version = "0.1.67"
 edition = "2024"
 license-file = "LICENSE"
 
@@ -64,7 +64,7 @@ regex-cursor = { version = "0.1.5", features = ["ropey"] }
 anyhow = "1"
 directories = "6"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net", "fs"] }

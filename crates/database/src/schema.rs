@@ -7,6 +7,7 @@ use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{path::PathBuf, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+mod clickhouse;
 mod mysql;
 mod postgres;
 mod script;
@@ -116,6 +117,8 @@ pub enum Task {
     ),
     /// Fetch current settings.
     Settings,
+    /// Clear a `ClickHouse` table without row mutation or transactional promises.
+    Truncate(String),
     /// Apply the exact validated diff shown in the preview.
     Modify(Box<Settings>, Box<Settings>),
     /// Create DDL only for the selected table.
@@ -169,7 +172,7 @@ pub const fn privileges(driver: DbDriverType) -> &'static [&'static str] {
             "LOCK TABLES",
         ],
         DbDriverType::Postgres => &["USAGE", "CREATE"],
-        DbDriverType::Sqlite => &[],
+        DbDriverType::Sqlite | DbDriverType::ClickHouse => &[],
     }
 }
 /// Build the SQL displayed by Modify Schema, with dialect quoting and validation.
@@ -188,6 +191,11 @@ pub fn modification_sql(driver: DbDriverType, old: &Settings, new: &Settings) ->
     }
     let mut sql = Vec::new();
     match driver {
+        DbDriverType::ClickHouse => {
+            return Err(Error::Invalid(
+                "Use ClickHouse DDL in the SQL console".into(),
+            ));
+        }
         DbDriverType::Mysql => {
             if old.name != new.name {
                 return Err(Error::Invalid(
@@ -342,6 +350,21 @@ impl Connection {
                 self.execute_schema_script(&sql, schema, cancel).await?;
                 Ok(Output::Done("Schema updated".into()))
             }
+            Task::Truncate(table) => {
+                if self.driver != DbDriverType::ClickHouse {
+                    return Err(Error::Invalid("TRUNCATE action requires ClickHouse".into()));
+                }
+                let q = |s: &str| quote_identifier(self.driver, s);
+                self.query(
+                    &format!("TRUNCATE TABLE {}.{} SYNC", q(schema), q(&table)),
+                    Some(schema),
+                    cancel,
+                )
+                .await?;
+                Ok(Output::Done(
+                    "Table cleared; reload open table pages to see current data".into(),
+                ))
+            }
             Task::RunFile(path) => {
                 let file =
                     cancellable(cancel, async { Ok(tokio::fs::File::open(path).await?) }).await?;
@@ -418,6 +441,11 @@ impl Connection {
             ..Settings::default()
         };
         match &self.pool {
+            Pool::ClickHouse(_) => {
+                return Err(Error::Invalid(
+                    "Use ClickHouse DDL in the SQL console".into(),
+                ));
+            }
             Pool::Mysql(pool) => {
                 settings.collation = sqlx::query_scalar("SELECT CAST(DEFAULT_COLLATION_NAME AS CHAR) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?").bind(schema).fetch_one(pool).await?;
                 settings.collations = sqlx::query_scalar("SELECT CAST(COLLATION_NAME AS CHAR) FROM information_schema.COLLATIONS ORDER BY COLLATION_NAME").fetch_all(pool).await?;
@@ -471,6 +499,7 @@ impl Connection {
         }
         let q = quote_identifier(self.driver, schema);
         match &self.pool {
+            Pool::ClickHouse(client) => client.execute(sql, schema, cancel).await,
             Pool::Postgres(p) => run!(p, Some(format!("SET search_path TO {q}")), true),
             Pool::Mysql(p) => run!(p, Some(format!("USE {q}")), true),
             Pool::Sqlite(p) => {
@@ -550,6 +579,10 @@ impl Connection {
         ddl_only: bool,
     ) -> Result<Artifact> {
         match &self.pool {
+            Pool::ClickHouse(client) => {
+                self.clickhouse_dump(client, schema, options, ddl_only)
+                    .await
+            }
             Pool::Sqlite(_) => self.sqlite_dump(schema, options, ddl_only).await,
             Pool::Mysql(_) => self.mysql_dump(schema, options, ddl_only).await,
             Pool::Postgres(_) => self.postgres_dump(schema, options, ddl_only).await,
@@ -726,6 +759,9 @@ impl Connection {
             }};
         }
         match &self.pool {
+            Pool::ClickHouse(client) => {
+                return self.clickhouse_csv_export(client, schema, options).await;
+            }
             Pool::Mysql(pool) => {
                 let columns: Vec<(String,String)> = sqlx::query_as("SELECT CAST(COLUMN_NAME AS CHAR), CAST(DATA_TYPE AS CHAR) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND (? OR COALESCE(GENERATION_EXPRESSION,'')='') ORDER BY ORDINAL_POSITION").bind(schema).bind(&options.table).bind(options.generated).fetch_all(pool).await?;
                 let projection = columns

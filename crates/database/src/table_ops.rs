@@ -61,6 +61,9 @@ impl Connection {
             }};
         }
         match &self.pool {
+            Pool::ClickHouse(_) => Err(Error::Invalid(
+                "ClickHouse grids are read-only; use INSERT in the SQL console".into(),
+            )),
             Pool::Postgres(p) => apply!(p, server),
             Pool::Mysql(p) => apply!(p, server),
             Pool::Sqlite(p) => apply!(p, sqlite),

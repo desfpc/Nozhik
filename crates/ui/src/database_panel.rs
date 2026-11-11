@@ -1151,6 +1151,7 @@ impl NozhikUi {
                                         (DbDriverType::Postgres, "PostgreSQL"),
                                         (DbDriverType::Mysql, "MySQL / MariaDB"),
                                         (DbDriverType::Sqlite, "SQLite"),
+                                        (DbDriverType::ClickHouse, "ClickHouse (HTTP / HTTPS)"),
                                     ] {
                                         if ui
                                             .selectable_value(
@@ -1160,11 +1161,12 @@ impl NozhikUi {
                                             )
                                             .changed()
                                         {
-                                            form.profile.port = if driver == DbDriverType::Mysql {
-                                                3306
-                                            } else {
-                                                5432
-                                            };
+                                            form.profile.port = match driver { DbDriverType::ClickHouse => 8123, DbDriverType::Mysql => 3306, _ => 5432 };
+                                            form.profile.tls = false;
+                                            if driver == DbDriverType::ClickHouse {
+                                                form.profile.user = "default".into();
+                                                form.profile.database = "default".into();
+                                            }
                                             if driver == DbDriverType::Sqlite {
                                                 form.profile.ssh_profile_id = None;
                                             }
@@ -1181,6 +1183,13 @@ impl NozhikUi {
                                             .range(1..=65535),
                                     );
                                 });
+                                if form.profile.driver == DbDriverType::ClickHouse {
+                                    if ui.checkbox(&mut form.profile.tls, "HTTPS (verify TLS certificate)").changed() {
+                                        if form.profile.tls && form.profile.port == 8123 { form.profile.port = 8443; }
+                                        else if !form.profile.tls && form.profile.port == 8443 { form.profile.port = 8123; }
+                                    }
+                                    ui.weak("Use the HTTP port (8123), HTTPS port (8443), or your server's configured HTTP endpoint.");
+                                }
                                 ui.label("User");
                                 ui.add(crate::form::singleline(&mut form.profile.user));
                                 ui.label(if form.original.is_some() {

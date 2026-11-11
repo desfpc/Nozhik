@@ -11,6 +11,7 @@ impl Connection {
     /// Returns catalog/permission errors or unsupported relation kinds.
     pub async fn table_definition(&self, schema: &str, table: &str) -> Result<Definition> {
         match &self.pool {
+            Pool::ClickHouse(_) => Err(invalid("Use ClickHouse DDL in the SQL console")),
             Pool::Sqlite(p) => {
                 let mut c = p.acquire().await?;
                 c.lock_handle().await?.remove_progress_handler();

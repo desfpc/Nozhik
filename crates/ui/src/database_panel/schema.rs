@@ -12,6 +12,7 @@ use std::{path::PathBuf, sync::Arc};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Action {
     Console,
+    Truncate,
     Modify,
     Ddl,
     Run,
@@ -127,6 +128,11 @@ impl NozhikUi {
             })
             .unwrap_or_default();
         let options = ExportOptions {
+            format: if profile.driver == DbDriverType::ClickHouse && table.is_none() {
+                Format::Csv
+            } else {
+                Format::Sql
+            },
             only_table: table.is_some(),
             table: table.clone().unwrap_or_default(),
             ..ExportOptions::default()
@@ -209,6 +215,7 @@ impl NozhikUi {
         let mut followup = None;
         let mut refresh = None;
         let mut close = false;
+        let mut cleared = None;
         match result {
             Err(e) => dialog.error = e.to_string(),
             Ok(Output::Table(_)) => dialog.error = "Unexpected table result".into(),
@@ -238,12 +245,43 @@ impl NozhikUi {
                 };
             }
             Ok(Output::Done(message)) => {
+                if dialog.action == Action::Truncate {
+                    cleared = dialog.table.as_ref().map(|t| {
+                        (
+                            dialog.profile.name.clone(),
+                            dialog.schema.clone(),
+                            t.clone(),
+                        )
+                    });
+                }
                 self.status.clone_from(&message);
                 dialog.message = message;
                 if matches!(after, After::Modify | After::Run) {
                     refresh = Some(dialog.profile.name.clone());
                     close = true;
                 }
+            }
+        }
+        if let Some((connection, schema, table)) = cleared {
+            let indexes: Vec<_> = self
+                .database
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, tab)| {
+                    !tab.connection_invalid
+                        && tab.connection == connection
+                        && tab.schema == schema
+                        && tab.table.as_ref().is_some_and(|t| t.info.name == table)
+                        && tab.pending.is_none()
+                })
+                .map(|(index, _)| index)
+                .collect();
+            for index in indexes {
+                if let Some(table) = &mut self.database.tabs[index].table {
+                    table.pending_page = Some((0, 500));
+                }
+                self.reload_database_table(index);
             }
         }
         if let Some(name) = refresh {
@@ -271,7 +309,7 @@ impl NozhikUi {
         let busy = dialog.pending.is_some();
         let modal = egui::Modal::new(egui::Id::new("schema_actions")).show(ctx, |ui| {
             ui.set_width(900.0_f32.min(ctx.screen_rect().width() - 60.0));
-            ui.heading(match dialog.action { Action::Modify => "Modify Schema", Action::Export => "Export Data", Action::Ddl => "Generate DDL to Clipboard", Action::Run => "Run SQL Script", Action::Console => "SQL Console" });
+            ui.heading(match dialog.action { Action::Modify => "Modify Schema", Action::Export => "Export Data", Action::Ddl => "Generate DDL to Clipboard", Action::Run => "Run SQL Script", Action::Console => "SQL Console", Action::Truncate => "TRUNCATE Table" });
             ui.label(format!("{} / {}{}", dialog.profile.name, dialog.schema,dialog.table.as_ref().map_or(String::new(),|t|format!(" / {t}"))));
             ui.separator();
             if dialog.action == Action::Modify && let Some(original) = &dialog.original {
@@ -288,11 +326,20 @@ impl NozhikUi {
                 }
                 ui.label("DDL can commit immediately. On error or cancellation, completed commands may remain applied.");
             }
+            if dialog.action == Action::Truncate && let Some(table) = &dialog.table {
+                let q = |s: &str| nozhik_database::connection::quote_identifier(DbDriverType::ClickHouse, s);
+                sql_preview(ui, &format!("TRUNCATE TABLE {}.{} SYNC;", q(&dialog.schema), q(table)));
+                ui.label("Permanently remove ALL rows from this table. This operation cannot be rolled back. Server engine support and privileges are checked on execution.");
+                if ui.add_enabled(!busy, egui::Button::new("Confirm TRUNCATE")).clicked() {
+                    request = Some((Task::Truncate(table.clone()), After::Run));
+                }
+            }
             if dialog.action == Action::Export {
                 ui.columns(2, |columns| {
                     let left = &mut columns[0];
                     let before = dialog.options.clone();
-                    left.add_enabled_ui(!busy, |ui| export_form(ui, &mut dialog.options, &dialog.tables));
+                    left.add_enabled_ui(!busy, |ui| export_form(ui, &mut dialog.options, &dialog.tables, dialog.profile.driver != DbDriverType::ClickHouse || dialog.table.is_some()));
+                    if dialog.profile.driver == DbDriverType::ClickHouse { if dialog.table.is_none() { dialog.options.format = Format::Csv; } left.small("ClickHouse: CSV or SQL for one table. SQL exports native DDL and INSERT; database-wide data export requires selecting a table."); }
                     if before != dialog.options { dialog.artifact = None; dialog.message.clear(); }
                     left.separator(); left.label("Output file:");
                     left.label(if dialog.output.is_empty() { "Choose with Export to File…" } else { &dialog.output });
@@ -429,6 +476,9 @@ fn settings_form(ui: &mut egui::Ui, driver: DbDriverType, draft: &mut Settings) 
                 ui.add(crate::form::singleline(&mut draft.comment));
             });
         }
+        DbDriverType::ClickHouse => {
+            ui.label("Use ClickHouse DDL in the SQL console");
+        }
         DbDriverType::Sqlite => {
             ui.horizontal(|ui| {
                 ui.label("User version:");
@@ -497,11 +547,18 @@ fn grants_form(ui: &mut egui::Ui, driver: DbDriverType, grants: &mut Vec<Grant>)
         });
     }
 }
-fn export_form(ui: &mut egui::Ui, options: &mut ExportOptions, tables: &[String]) {
+fn export_form(
+    ui: &mut egui::Ui,
+    options: &mut ExportOptions,
+    tables: &[String],
+    sql_allowed: bool,
+) {
     crate::form::begin(ui);
     ui.label("Extractor:");
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut options.format, Format::Sql, "SQL Inserts");
+        ui.add_enabled_ui(sql_allowed, |ui| {
+            ui.selectable_value(&mut options.format, Format::Sql, "SQL Inserts")
+        });
         ui.selectable_value(&mut options.format, Format::Csv, "CSV");
     });
     if options.format == Format::Sql {
@@ -669,6 +726,90 @@ mod tests {
         }
         assert!(copied);
         assert!(shell.database.schema_dialog.is_none());
+        shell.database.shutdown();
+        Ok(())
+    }
+    #[test]
+    #[ignore = "Requires an explicitly isolated ClickHouse server via NOZHIK_TEST_CLICKHOUSE_PORT"]
+    fn system_clickhouse_ui_truncate_confirmation_and_readonly_reload()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let profile = ConnectionProfile {
+            name: "ClickHouse UI fixture".into(),
+            driver: DbDriverType::ClickHouse,
+            host: "127.0.0.1".into(),
+            port: std::env::var("NOZHIK_TEST_CLICKHOUSE_PORT")?.parse()?,
+            user: "nozhik".into(),
+            database: "nozhik".into(),
+            ..ConnectionProfile::default()
+        };
+        let runtime = tokio::runtime::Runtime::new()?;
+        let db = runtime.block_on(Connection::connect(
+            &profile,
+            Some(&nozhik_remote_ssh::credentials::Secret::new(
+                "nozhik-test-only".into(),
+            )),
+            None,
+        ))?;
+        runtime.block_on(db.query("CREATE TABLE nozhik.phase_clickhouse_ui(id UInt64) ENGINE=Memory; INSERT INTO nozhik.phase_clickhouse_ui VALUES (1)", None, &CancellationToken::new()))?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        let ctx = egui::Context::default();
+        ctx.style_mut(|s| s.animation_time = 0.0);
+        frame(&mut shell, &ctx, vec![]);
+        shell.start_database_connection(
+            profile.clone(),
+            Some(nozhik_remote_ssh::credentials::Secret::new(
+                "nozhik-test-only".into(),
+            )),
+            false,
+        );
+        wait(&mut shell, &ctx, |s| {
+            s.database.trees.contains_key("ClickHouse UI fixture")
+        })?;
+        shell.database.profiles = vec![profile.clone()];
+        let info = runtime.block_on(db.describe_table("nozhik", "phase_clickhouse_ui", false))?;
+        shell.open_database_table(profile.clone(), "nozhik".into(), info);
+        wait(&mut shell, &ctx, |s| s.database.tabs[0].pending.is_none())?;
+        assert!(!shell.database.tabs[0].is_dirty());
+        click_label(&mut shell, &ctx, &profile.name)?;
+        click_label(&mut shell, &ctx, "nozhik")?;
+        click_label(&mut shell, &ctx, "tables")?;
+        connection_menu(&mut shell, &ctx, "phase_clickhouse_ui")?;
+        click_label(&mut shell, &ctx, "TRUNCATE Table…")?;
+        assert!(
+            shell
+                .database
+                .schema_dialog
+                .as_ref()
+                .is_some_and(|d| d.pending.is_none() && d.action == Action::Truncate)
+        );
+        let before = runtime.block_on(db.query(
+            "SELECT count() FROM nozhik.phase_clickhouse_ui",
+            None,
+            &CancellationToken::new(),
+        ))?;
+        assert_eq!(before[0].rows[0][0], DbValue::Int(1));
+        click_label(&mut shell, &ctx, "Close")?;
+        assert!(shell.database.schema_dialog.is_none());
+        connection_menu(&mut shell, &ctx, "phase_clickhouse_ui")?;
+        click_label(&mut shell, &ctx, "TRUNCATE Table…")?;
+        click_label(&mut shell, &ctx, "Confirm TRUNCATE")?;
+        wait(&mut shell, &ctx, |s| {
+            s.database.schema_dialog.is_none() && s.database.tabs[0].pending.is_none()
+        })?;
+        assert_eq!(shell.database.tabs[0].error, "");
+        let table = shell.database.tabs[0].table.as_ref().ok_or("table")?;
+        assert_eq!(table.driver, DbDriverType::ClickHouse);
+        assert_eq!(table.changes.as_ref().ok_or("snapshot")?.rows.len(), 0);
+        assert!(!table.dirty());
+        runtime.block_on(db.query(
+            "DROP TABLE nozhik.phase_clickhouse_ui",
+            None,
+            &CancellationToken::new(),
+        ))?;
+        runtime.block_on(db.close());
         shell.database.shutdown();
         Ok(())
     }

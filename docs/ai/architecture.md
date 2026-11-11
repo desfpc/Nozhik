@@ -15,7 +15,7 @@
 | nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
 | nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
-| nozhik-database | SQL pools, Redis structures, typed results, catalog metadata, background actors and owned SSH tunnels | redis, sqlx, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
+| nozhik-database | SQL pools, Redis structures, typed results, catalog metadata, background actors and owned SSH tunnels | redis, sqlx, reqwest, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
 | nozhik-ai-completion | Local Ollama FIM, cancellable generation, model inspection/download | reqwest, tokio, serde/serde_json, thiserror |
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus, ai_completion |
@@ -2405,3 +2405,44 @@ CRLF, результат сохраняет CRLF. Это не официальн
 Каталог языков мигрирует до версии 4. Версия меньше 4 с непустым списком
 получает Go один раз. Пустой список не меняется. У новых настроек версия сразу
 4. Правила предыдущих версий для JSON, Markdown и JavaScript сохраняются.
+
+## ClickHouse (v0.1.67)
+
+DbDriverType::ClickHouse / Pool::ClickHouse добавляют reqwest HTTP(S) к общему
+Connection/Worker. Профили остаются database_connections.json; serde-default tls
+сохраняет старые файлы. Credentials не входят в URL/JSON, TLS входит в ClickHouse
+credential identity. SSH tunnel живёт вместе с Connection; HTTPS сохраняет
+original DNS name для SNI/certificate verification и использует loopback resolver
+override. Redirect/proxy отключены, сертификаты проверяются Rustls.
+
+POST с database/default_format/query_id возвращает
+JSONCompactEachRowWithNamesAndTypes. Поток собирается по newline, отдельно names,
+types и rows; пустой SELECT имеет metadata, duplicate labels позиционны. Числа
+квотируются для точности; RawValue сохраняет вложенный JSON с duplicate Map keys.
+Retained script results: 10 000 rows / 16 MiB, record: 16 MiB, deadline: 300 s.
+Отмена/лимит пытаются выполнить KILL QUERY по собственному ID; readonly HTTP
+запросы также просят cancel on client disconnect. Ошибки HTTP и поздние server
+exceptions не возвращают успешный partial result. Между запросами нет session:
+USE/SET/transactions отклоняются; database selector и query SETTINGS явные.
+Script splitter учитывает quotes, backslash escapes, comments и dollar heredocs.
+
+Catalog/describe читают system.databases/tables/columns с безопасными литералами;
+имена relations quote-ятся с ClickHouse backslash escapes. TableObjects показывает
+engine, partition/sort/primary/sampling keys, native create_table_query с TTL и
+advanced clauses. Completion и lazy relation metadata переиспользуют общий UI.
+ClickHouse key не становится row identity: TableEditor отключает mutations для
+таблиц и console results, TableChanges::statements и Apply также отклоняют их.
+
+Task::Truncate выполняет квалифицированный TRUNCATE TABLE ... SYNC после modal
+preview/confirmation; views исключены из меню. Успех перечитывает открытые страницы
+исходной таблицы с начала, ошибки сохраняют snapshot. DDL выполняется в консоли;
+визуальный designer и schema settings недоступны для ClickHouse.
+
+schema/clickhouse обеспечивает полный CSV с общими options и SQL dump одной
+таблицы. Native formatRowNoNewline('Values', columns) передаётся через hex и
+превращается в ASCII byte escapes: Decimal/UInt128, вложенные типы и binary String
+не теряются. INSERT пропускает MATERIALIZED/ALIAS. Streaming exports не имеют
+лимита строк консоли, preview 64 KiB; transpose остаётся bounded 16 MiB.
+Это не транзакционный snapshot. Полный SQL data dump базы не поддержан; DDL
+выдаёт native relation definitions без обещания полного dependency/privilege dump.
+Бинарный не-UTF-8 в grid/CSV отклоняется явно; hex(column) и SQL export доступны.

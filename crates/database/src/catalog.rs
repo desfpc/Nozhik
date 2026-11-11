@@ -42,6 +42,7 @@ impl Connection {
         let mut objects = TableObjects::default();
         let q = |s: &str| quote_identifier(self.driver, s);
         match &self.pool {
+            Pool::ClickHouse(client) => return client.objects(schema, table).await,
             Pool::Sqlite(pool) => {
                 let rows = sqlx::query(&format!("SELECT sql FROM {}.sqlite_master WHERE tbl_name=? AND sql IS NOT NULL ORDER BY type DESC, name",q(schema))).bind(table).fetch_all(pool).await?;
                 objects.ddl = rows

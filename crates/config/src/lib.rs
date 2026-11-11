@@ -116,9 +116,12 @@ impl Config {
                 "AI model must be nonempty and debounce must be 50–5000 ms",
             ));
         }
-        if !matches!(self.theme.as_str(), "dark" | "light" | "catppuccin") {
+        if !matches!(
+            self.theme.as_str(),
+            "dark" | "light" | "catppuccin" | "nozhik" | "nozhik-light"
+        ) {
             return Err(ConfigError::Invalid(
-                "theme must be dark, light, or catppuccin",
+                "theme must be dark, light, catppuccin, nozhik, or nozhik-light",
             ));
         }
         Ok(())

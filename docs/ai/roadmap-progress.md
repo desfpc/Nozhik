@@ -4586,3 +4586,69 @@ cargo clean удалил 9.7 GiB (26692 файла). Удалены времен
 untracked Finder .DS_Store. Финальный размер проекта — 396 MiB, binaries — 116 MiB.
 Исходники, история, незакоммиченные изменения и актуальные бинарники с legal
 materials сохранены; после очистки сборок не было.
+
+### Тема Nozhik (v0.1.65, 2026-11-11)
+
+В Settings → General → Color scheme добавлена четвёртая схема Nozhik (`nozhik`).
+Редактор использует почти чёрный графитовый фон #18161B, панели — тёмно-фиолетовый
+#241A32, основной акцент — оранжевый #FF9D43. Выделения — глубокий оранжевый
+#8B4018, hover — насыщенный фиолетовый с оранжевой рамкой. Палитра согласует
+синтаксис, терминал ANSI, diff, HTTP, severity, ссылки и остальные семантические
+роли через прежний JSON-каталог. Тема сохраняется штатным Config; выбор по
+умолчанию не менялся. Новых зависимостей и отдельных палитр в UI-компонентах нет.
+
+Проверка контраста sRGB: текст/редактор 13.29:1, текст/панель 12.25:1,
+текст/hover 7.35:1, текст/выделение 5.46:1, primary text/primary 8.32:1;
+проверенные текстовые пары выше 4.5:1. Прежние тесты каталога/контраста теперь
+проверяют все CHOICES, включая валидность каждого id для Config.
+Версия workspace/lock — 0.1.65, следующая — 0.1.66.
+
+Проверки: fmt, workspace/all-targets/all-features Clippy с -D warnings,
+cargo test --workspace --all-features -- --test-threads=8 — 464 passed, 0 failed,
+16 прежних optional ignored; workspace release build прошёл. Ручной native GUI
+и Windows build/Clippy не запускались. Commit/push не выполнялись.
+
+macOS ARM64 executable/app archive и legal sidecars обновлены штатным
+update-binaries.py. Проверка source fingerprint
+fe38dab2129aab9ff5fab16e761876141d55f26234264d2aeaf957d229e547ef и контрольных
+сумм прошла после удаления лишнего Finder .DS_Store, повторно — после очистки.
+Windows не собирался. cargo clean удалил 8.0 GiB (24898 файлов), удалены task logs
+и untracked Finder .DS_Store. Финальный размер проекта — 397 MiB, binaries — 116 MiB.
+Исходники, история и актуальные бинарники с legal materials сохранены;
+после очистки сборок не было.
+
+### Контрастная Light и Nozhik Light (v0.1.66, 2026-11-11)
+
+New UI Light сохраняет белый редактор #FFFFFF; панели, хром, кнопки, поля,
+hover и рамки получили более тёмные серо-синие оттенки. Primary немного затемнён
+для читаемости белой надписи. Добавлена пятая схема Nozhik Light (`nozhik-light`):
+почти белый редактор #FFFDFF, светло-сиреневые панели #E8DFF0, фиолетовые элементы
+управления #8A649A, оранжевый акцент #FF9D43 с тёмным текстом. Синтаксис, ANSI,
+HTTP, diff, severity и ссылки адаптированы к светлому фону. Выбор/сохранение идёт
+через прежние Settings → General → Color scheme и Config.theme.
+
+Причина бледных ползунков: egui Slider рисует дорожку и бегунок через сильную
+заливку inactive.bg_fill; она совпадала с белым button. Добавлен общий токен
+control во все пять схем, parser, fallback и getter. Он используется для сильной
+заливки, а обычные кнопки сохраняют отдельный button/weak_bg_fill. У трёх тёмных
+схем control совпадает с прежним button. Новых зависимостей нет.
+
+Проверен контраст sRGB светлых схем: control/panel — 3.27:1 у Light и 3.72:1 у
+Nozhik Light; проверенные текстовые пары выше 4.5:1. Новый headless-тест рисует
+настоящий Slider в обеих схемах и проверяет видимые дорожку/бегунок и отделение
+цвета обычной кнопки. Каталог, Config validation и общий тест контраста охватывают
+все пять схем. Версия workspace/lock — 0.1.66, следующая — 0.1.67.
+
+Проверки: fmt, workspace/all-targets/all-features Clippy с -D warnings,
+465 workspace tests passed, 0 failed, 16 прежних optional ignored; workspace
+release build прошёл. Ручной native GUI и Windows build/Clippy не запускались.
+Commit/push не выполнялись.
+
+macOS ARM64 executable/app archive и legal sidecars обновлены штатным
+update-binaries.py; source fingerprint
+5c31be054e5ca7d028a8539ca73483df59ab34a96a8879cfe87e1c401b80d5df и контрольные
+суммы подтверждены --check, включая повтор после очистки. Windows не собирался.
+cargo clean удалил 9.8 GiB (26640 файлов), удалены task logs и untracked Finder
+.DS_Store. Финальный размер проекта — 397 MiB, binaries — 116 MiB. Исходники,
+история, незакоммиченные изменения и актуальные бинарники с legal materials
+сохранены; после очистки сборок не было.

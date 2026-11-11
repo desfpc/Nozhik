@@ -45,12 +45,14 @@ Result и `?`. Не игнорируйте Result через `let _ =` без о
 `crates/ui/assets/color-schemes.json`. Рисование идёт через функции
 `crate::theme`, а не через литералы `Color32` для фона, обводки, текста,
 hover, selection, primary и disabled. `Config.theme` принимает `dark`
-(New UI Dark, стандарт), `light` (New UI Light) или `catppuccin`
-(Catppuccin Mocha). Неизвестный id в интерфейсе показывает `dark`;
+(New UI Dark, стандарт), `light` (New UI Light), `catppuccin`
+(Catppuccin Mocha), `nozhik` (Nozhik: графитовый/фиолетовый/оранжевый) или
+`nozhik-light` (Nozhik Light: почти белый/сиреневый/оранжевый).
+Неизвестный id в интерфейсе показывает `dark`;
 повреждённый `settings.toml` по-прежнему не перезаписывается.
 
 При создании или правке элемента используйте существующий токен. Если роли
-в схеме нет, добавьте поле во все три схемы и функцию в `theme.rs` в том же
+в схеме нет, добавьте поле во все пять схем и функцию в `theme.rs` в том же
 изменении. Не заводите отдельную палитру для Git, Snippets, HTTP, OpenAPI
 или другого окна. Радиус `theme::RADIUS` и ширина разделителя
 `theme::SPLITTER` общие для всех схем.

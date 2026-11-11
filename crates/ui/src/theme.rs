@@ -17,6 +17,8 @@ pub const CHOICES: &[(&str, &str)] = &[
     ("dark", "New UI Dark"),
     ("light", "New UI Light"),
     ("catppuccin", "Catppuccin"),
+    ("nozhik", "Nozhik"),
+    ("nozhik-light", "Nozhik Light"),
 ];
 
 /// Problem-card tone. Fills and icons come from the active scheme.
@@ -72,6 +74,7 @@ struct Scheme {
     link: Color32,
     openapi: Color32,
     button: Color32,
+    control: Color32,
     syntax: Syntax,
     ansi: [Color32; 16],
     http: Http,
@@ -171,6 +174,7 @@ struct RawScheme {
     link: String,
     openapi: String,
     button: String,
+    control: String,
     syntax: RawSyntax,
     ansi: [String; 16],
     http: RawHttp,
@@ -304,6 +308,11 @@ color!(
 );
 color!(surface, surface, "Raised cards, popups and list wells.");
 color!(input, input, "Text field background.");
+color!(
+    control,
+    control,
+    "Solid slider rails, handles and other strong widget fills."
+);
 color!(border, border, "Dividers and control outlines.");
 color!(
     border_strong,
@@ -578,7 +587,7 @@ fn visuals() -> Visuals {
     widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border());
     widgets.noninteractive.fg_stroke.color = disabled();
     widgets.noninteractive.corner_radius = radius;
-    widgets.inactive.bg_fill = button();
+    widgets.inactive.bg_fill = control();
     widgets.inactive.weak_bg_fill = button();
     widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
     widgets.inactive.fg_stroke.color = text();
@@ -795,6 +804,7 @@ fn convert_scheme(raw: RawScheme) -> Result<Scheme, String> {
         link: hex_color(&raw.link)?,
         openapi: hex_color(&raw.openapi)?,
         button: hex_color(&raw.button)?,
+        control: hex_color(&raw.control)?,
         syntax: convert_syntax(&raw.syntax)?,
         ansi,
         http: Http {
@@ -899,6 +909,7 @@ fn fallback_scheme() -> Scheme {
         link: color,
         openapi: color,
         button: color,
+        control: color,
         syntax,
         ansi: [color; 16],
         http: Http {
@@ -940,6 +951,12 @@ mod tests {
         assert_eq!(ids, choice_ids);
         for (scheme, (_, name)) in schemes.iter().zip(CHOICES) {
             assert_eq!(scheme.name, *name);
+            nozhik_config::Config {
+                theme: scheme.id.clone(),
+                ..Default::default()
+            }
+            .validate()
+            .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -992,8 +1009,8 @@ mod tests {
     }
 
     #[test]
-    fn light_and_catppuccin_keep_text_readable_on_their_background() {
-        for id in ["dark", "light", "catppuccin"] {
+    fn built_in_schemes_keep_text_readable_on_their_background() {
+        for &(id, _) in CHOICES {
             let scheme = resolve(id);
             let text_luma = luma(scheme.text);
             let background_luma = luma(scheme.background);
@@ -1001,7 +1018,7 @@ mod tests {
                 (text_luma - background_luma).abs() > 80.0,
                 "{id} text and background are too close"
             );
-            assert_eq!(scheme.light, id == "light");
+            assert_eq!(scheme.light, matches!(id, "light" | "nozhik-light"));
             if scheme.light {
                 assert!(text_luma + 40.0 < background_luma);
             } else {
@@ -1015,6 +1032,42 @@ mod tests {
             Color32::from_rgb(30, 30, 46)
         );
         assert_eq!(resolve("missing").id, "dark");
+    }
+
+    #[test]
+    fn light_schemes_paint_visible_slider_rails_and_handles() {
+        for id in ["light", "nozhik-light"] {
+            let ctx = egui::Context::default();
+            apply_id(&ctx, id);
+            let mut value = 0.5;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(panel()))
+                    .show(ctx, |ui| {
+                        ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Editor size"));
+                    });
+            });
+            let fill = super::control();
+            assert!(
+                luma(panel()) - luma(fill) > 75.0,
+                "{id}: slider blends into its panel"
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == fill && rect.rect.width() > 30.0 && rect.rect.height() < 12.0
+            )), "{id}: visible slider rail missing");
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::Circle(circle) if circle.fill == fill && circle.radius > 3.0
+                )),
+                "{id}: visible slider handle missing"
+            );
+            assert_eq!(
+                ctx.style().visuals.widgets.inactive.weak_bg_fill,
+                super::button()
+            );
+        }
     }
 
     #[test]

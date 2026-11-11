@@ -747,7 +747,13 @@ UI project_icons рисует векторные папки, документы 
 
 Цвета всех окон читаются из `crates/ui/assets/color-schemes.json`.
 `theme::apply_id` ставит активную схему на контекст egui в начале кадра.
-Стандарт — New UI Dark (`dark`). Рядом лежат New UI Light и Catppuccin Mocha.
+Стандарт — New UI Dark (`dark`). Рядом лежат New UI Light, Catppuccin Mocha и Nozhik (`nozhik`): графитовый
+редактор, тёмно-фиолетовые панели и яркие оранжевые акценты. Nozhik Light
+(`nozhik-light`) сочетает почти белый редактор, светло-сиреневые панели и те же
+оранжевые акценты. У New UI Light белый редактор отделён от серо-синих панелей.
+Токен `control` задаёт сильную заливку дорожек/бегунков Slider и других
+элементов; обычные кнопки используют отдельный `button` (weak_bg_fill),
+поэтому светлые ползунки видны независимо от цвета кнопок.
 Выбор хранится в `settings.toml` (`theme`) и в Settings → General.
 
 `binaries/` целиком исключён из Git. `scripts/update-binaries.py` сохраняет
@@ -2243,7 +2249,7 @@ Text — это исходник. Лексер в `language_support` пишет 
 их через `syntax_format`: курсив у emphasis и комментариев, зачёркивание у
 strike, фон `chip` у встроенного кода. Семейство шрифта редактора не меняется,
 поэтому колонки каретки стабильны. Роли `markup.heading`, `markup.strong`,
-`markup.emphasis` и `markup.raw` лежат в `color-schemes.json` у всех трёх схем.
+`markup.emphasis` и `markup.raw` лежат в `color-schemes.json` у всех пяти схем.
 
 GUI не правит буфер. `pulldown-cmark` живёт только в UI, без default features,
 с таблицами, зачёркиванием и task-списками. Заголовки и жирный текст берут

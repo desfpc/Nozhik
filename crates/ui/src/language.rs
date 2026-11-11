@@ -1051,7 +1051,7 @@ impl crate::NozhikUi {
     }
     pub(crate) fn index_dialogs(&mut self, ctx: &egui::Context) {
         if self.language.invalidate_dialog {
-            egui::Modal::new(egui::Id::new("invalidate_caches")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("invalidate_caches", [600.0, 320.0]).show(ctx, |ui| {
                 ui.heading("Invalidate Caches / Delete Caches…");
                 ui.label(
                     "Delete this project's .nozhik/cache directory and rebuild its symbol index?",

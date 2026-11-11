@@ -497,7 +497,7 @@ impl NozhikUi {
         let mut remove = None;
         let mut cancel = false;
         if let Some(name) = &self.remote.delete {
-            egui::Modal::new(egui::Id::new("delete_ssh_profile")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("delete_ssh_profile", [560.0, 240.0]).show(ctx, |ui| {
                 ui.heading(format!("Delete SSH host {name}?"));
                 ui.label("The profile and saved password will be removed. Active connections will close; open editor buffers keep their text.");
                 if ui.add_enabled(!self.remote.profile_busy, egui::Button::new("Delete host")).clicked() { remove = Some(name.clone()); }
@@ -523,7 +523,7 @@ impl NozhikUi {
     fn host_trust_dialog(&mut self, ctx: &egui::Context) {
         let mut close = false;
         if let Some(error) = &self.remote.host_key_error {
-            egui::Modal::new(egui::Id::new("ssh_changed_key")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("ssh_changed_key", [680.0, 320.0]).show(ctx, |ui| {
                 ui.heading("SSH host key changed — connection blocked");
                 ui.label(error);
                 ui.label(
@@ -538,7 +538,7 @@ impl NozhikUi {
         let mut accept = false;
         let mut cancel = false;
         if let Some((profile, pin, _)) = &self.remote.trust {
-            egui::Modal::new(egui::Id::new("ssh_host_trust")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("ssh_host_trust", [680.0, 380.0]).show(ctx, |ui| {
                 ui.heading("Trust SSH server?");
                 ui.label(format!("First connection to {}:{}", profile.host, profile.port));
                 ui.label("This server's identity has not been saved yet.");
@@ -596,7 +596,7 @@ impl NozhikUi {
             && self.remote.host_key_error.is_none()
             && let Some(form) = &mut self.remote.form
         {
-            egui::Modal::new(egui::Id::new("ssh_profile")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("ssh_profile", [680.0, 650.0]).show(ctx, |ui| {
                 crate::form::begin(ui);
                 ui.heading(if form.original.is_some() { "Edit SSH host" } else { "Add SSH host" });
                 if form.original.is_some() { ui.weak("Changing connection identity removes its saved password and disconnects active sessions."); }
@@ -699,7 +699,7 @@ impl NozhikUi {
             if !can_remember {
                 profile.save_password = false;
             }
-            egui::Modal::new(egui::Id::new("ssh_credentials")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("ssh_credentials", [600.0, 340.0]).show(ctx, |ui| {
                 crate::form::begin(ui);
                 ui.heading(format!("SSH credentials: {}", profile.name));
                 ui.label(if matches!(profile.auth, AuthMethod::Password) {

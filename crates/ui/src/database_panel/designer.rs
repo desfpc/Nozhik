@@ -286,8 +286,8 @@ impl NozhikUi {
             return;
         };
         let mut controls = Controls::default();
-        let modal = egui::Modal::new(egui::Id::new("modify_table"))
-            .show(ctx, |ui| draw_dialog(ui, ctx, dialog, &mut controls));
+        let modal = crate::dialog::Dialog::new("modify_table", [1180.0, 760.0])
+            .show(ctx, |ui| draw_dialog(ui, dialog, &mut controls));
         let sql_error = controls.sql_error.take();
         if controls.close || modal.should_close() {
             self.database.table_designer = None;
@@ -314,9 +314,8 @@ struct Controls {
     clippy::too_many_lines,
     reason = "Fixed split layout, live preview and commit controls render as one modal"
 )]
-fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls: &mut Controls) {
+fn draw_dialog(ui: &mut egui::Ui, d: &mut Dialog, controls: &mut Controls) {
     let busy = d.pending.is_some();
-    ui.set_width((ctx.screen_rect().width() - 60.0).clamp(600.0, 1180.0));
     ui.heading("Modify Table");
     if d.original.is_none() && d.draft.is_some() {
         ui.label("Create new table");
@@ -324,7 +323,7 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
     ui.label(format!("{} / {} / {}", d.profile.name, d.schema, d.target));
     ui.separator();
     if let Some(draft) = &mut d.draft {
-        let height = (ctx.screen_rect().height() * 0.45).clamp(200.0, 470.0);
+        let height = ((ui.available_height() - 150.0) * 0.7).max(120.0);
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), height),
             egui::Sense::hover(),
@@ -405,7 +404,7 @@ fn draw_dialog(ui: &mut egui::Ui, ctx: &egui::Context, d: &mut Dialog, controls:
                     super::schema::sql_preview_height(
                         ui,
                         &sql,
-                        (ctx.screen_rect().height() - height - 220.0).clamp(80.0, 220.0),
+                        (ui.available_height() - 90.0).max(60.0),
                     );
                     ui.horizontal(|ui| {
                         if ui

@@ -939,7 +939,7 @@ impl NozhikUi {
             let action = tab.active_table_mut().and_then(|t| t.action.take());
             self.editor_focus = tab.focus_id;
             self.integration.last_editor = tab.editor_id;
-            let mut layout = self.layout.value;
+            let mut layout = self.layout.value.clone();
             layout.sql = tab.split;
             self.layout.set(layout);
             if let Some((name, schema, info)) = retry {
@@ -1130,16 +1130,13 @@ impl NozhikUi {
         if let Some(form) = &mut self.database.form {
             let old = form.profile.clone();
             let old_password = Secret::new(form.password.clone());
-            let modal = egui::Modal::new(egui::Id::new("new_database")).show(ctx, |ui| {
+            let modal = crate::dialog::Dialog::new("new_database", [640.0, 650.0]).show(ctx, |ui| {
                 ui.heading(if form.original.is_some() {
                     "Edit Database Connection"
                 } else {
                     "New Database Connection"
                 });
-                ui.set_width(480.0);
-                egui::ScrollArea::vertical()
-                    .max_height((ctx.screen_rect().height() - 100.0).max(100.0))
-                    .show(ui, |ui| {
+                ui.scope(|ui| {
                         ui.add_enabled_ui(!self.database.saving, |ui| {
                             crate::form::begin(ui);
                             ui.label("Connection name");
@@ -1338,16 +1335,17 @@ impl NozhikUi {
         let mut login = false;
         let mut cancel = false;
         if let Some(profile) = &self.database.login {
-            let modal = egui::Modal::new(egui::Id::new("database_login")).show(ctx, |ui| {
-                crate::form::begin(ui);
-                ui.heading(format!("Connect: {}", profile.name));
-                ui.label("Session password");
-                ui.add(crate::form::singleline(&mut self.database.password).password(true));
-                ui.horizontal(|ui| {
-                    login = ui.button("Connect").clicked();
-                    cancel = ui.button("Cancel").clicked();
+            let modal =
+                crate::dialog::Dialog::new("database_login", [560.0, 260.0]).show(ctx, |ui| {
+                    crate::form::begin(ui);
+                    ui.heading(format!("Connect: {}", profile.name));
+                    ui.label("Session password");
+                    ui.add(crate::form::singleline(&mut self.database.password).password(true));
+                    ui.horizontal(|ui| {
+                        login = ui.button("Connect").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
                 });
-            });
             cancel |= modal.should_close();
         }
         if login && let Some(profile) = self.database.login.take() {
@@ -1370,6 +1368,57 @@ mod tests {
     use nozhik_config::{Config, ConfigManager};
     use nozhik_event_bus::EventBus;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn new_connection_form_shows_first_and_last_fields_and_resize_grip()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let bus = EventBus::new(32)?;
+        let settings = ConfigManager::from_path(dir.path().join("settings.toml"), bus.clone())?;
+        let mut shell = NozhikUi::new(bus, settings, Config::default());
+        shell.database.form = Some(Form {
+            profile: ConnectionProfile {
+                driver: DbDriverType::ClickHouse,
+                user: "default".into(),
+                database: "default".into(),
+                ..ConnectionProfile::default()
+            },
+            original: None,
+            password: String::new(),
+            tested: false,
+        });
+        let ctx = egui::Context::default();
+        let draw = |shell: &mut NozhikUi| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 1000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| shell.database_dialogs(ctx),
+            )
+        };
+        draw(&mut shell);
+        let output = draw(&mut shell);
+        for label in [
+            "Connection name",
+            "User",
+            "Password",
+            "Database",
+            "Test Connection",
+            "Save",
+            "Cancel",
+        ] {
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == label && s.clip_rect.contains_rect(egui::Rect::from_min_size(t.pos, t.galley.size())))), "Not visible: {label}");
+        }
+        let grip = ctx
+            .read_response(egui::Id::new("new_database").with("resize_grip"))
+            .ok_or("grip")?;
+        assert!(grip.rect.is_positive());
+        Ok(())
+    }
 
     #[test]
     fn sqlite_explorer_console_shortcut_results_and_modal_guards()

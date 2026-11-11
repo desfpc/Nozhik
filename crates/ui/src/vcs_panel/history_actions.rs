@@ -296,10 +296,9 @@ impl VcsPanel {
             .is_some_and(|id| self.pending.contains(&id));
         let mut close = false;
         let mut apply = false;
-        let modal = egui::Modal::new(egui::Id::new("git_history_action"))
+        let modal = crate::dialog::Dialog::new("git_history_action", [800.0, 620.0])
             .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(22))
             .show(ctx, |ui| {
-                ui.set_width(540.0_f32.min((ctx.screen_rect().width()-64.0).max(180.0)));
                 ui.horizontal(|ui| { ui.heading(dialog.title.trim_end_matches('…')); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { close = true; } }); });
                 ui.separator();
                 ui.add_enabled_ui(!working, |ui| {

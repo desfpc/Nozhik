@@ -2446,3 +2446,32 @@ schema/clickhouse обеспечивает полный CSV с общими opti
 Это не транзакционный snapshot. Полный SQL data dump базы не поддержан; DDL
 выдаёт native relation definitions без обещания полного dependency/privilege dump.
 Бинарный не-UTF-8 в grid/CSV отклоняется явно; hex(column) и SQL export доступны.
+
+## Изменяемые модальные диалоги (v0.1.68)
+
+ui::dialog::Dialog оборачивает egui::Modal, сохраняя backdrop, modal input layer
+и should_close/Escape. Внутри рамки расположен bounded ScrollArea по обеим осям
+и отдельная нижняя полоса с resize grip; прокрутка не прячет уголок. Outer rect
+вычисляется из content size + Frame::total_margin и ограничивается screen_rect
+при каждом кадре. Содержимое может быть шире/выше viewport, но не расширяет рамку.
+Предпочтения хранят logical pixels и не уменьшаются при временном сжатии viewport.
+Centered modal меняет обе стороны при drag, поэтому движение grip соответствует
+движению указателя. Новых цветов и зависимостей нет.
+
+22 формы/подтверждения используют стабильные строковые keys: SQL/Redis/SSH,
+settings/plugins, clone, file/path, schema/table designer, SQL preview,
+Git/history, OpenAPI authorization и служебные подтверждения. Search Everywhere
+и CSS reference popup сохраняют специализированную геометрию. Внутренние editor
+layouts используют доступный размер вместо прежних фиксированных width/height.
+Settings сохраняет компактную навигацию и доступную кнопку Close на малом viewport.
+
+Layout стал Clone (без Copy) и получил serde-default dialogs: BTreeMap<String,
+[f32;2]>. Существующие layouts без поля читаются как раньше. Размеры валидируются
+на finite/positive, без верхнего предела, привязанного к текущему монитору.
+Каждый LayoutManager владеет Arc<Mutex<Sizes>>, привязываемым к egui Context при
+tick активной сессии. Dialog пишет только эту память; tick собирает изменения
+и использует прежний последовательный worker с 250 ms debounce и атомарной записью.
+finish собирает последний drag без требования ещё одного кадра. Обновление dock
+layout не перезаписывает drag того же кадра. Переключение проекта меняет binding,
+размеры разных проектов не смешиваются. Ошибочный JSON/невалидные размеры
+сохраняют файл и запрещают его автоматическую перезапись, как и раньше.

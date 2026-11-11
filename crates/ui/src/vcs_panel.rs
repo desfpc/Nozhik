@@ -1034,7 +1034,7 @@ impl VcsPanel {
         let Some(path) = self.discard.clone() else {
             return;
         };
-        let modal = egui::Modal::new(egui::Id::new("discard_changes")).show(ctx, |ui| {
+        let modal = crate::dialog::Dialog::new("discard_changes", [600.0, 300.0]).show(ctx, |ui| {
             ui.heading("Discard Changes?");
             for item in &path { ui.label(item.to_string_lossy()); }
             ui.label("This restores the file and its staging to HEAD. An untracked file is deleted. Editor buffers are retained.");

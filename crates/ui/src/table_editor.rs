@@ -454,47 +454,48 @@ impl TableEditor {
         }
         if self.preview {
             let mut close = false;
-            egui::Modal::new(ui.id().with("dml_preview")).show(ui.ctx(), |ui| {
-                ui.set_width(680.0);
-                ui.heading("DML Preview");
-                if let Some(changes) = &self.changes {
-                    match changes.statements() {
-                        Ok(statements) => {
-                            self.preview_error.clear();
-                            let mut sql = format!("BEGIN;\n{}\nCOMMIT;", statements.join("\n"));
-                            egui::ScrollArea::both().max_height(360.0).show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut sql)
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .interactive(false),
-                                );
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Cancel").clicked() {
+            crate::dialog::Dialog::new("dml_preview", [800.0, 560.0])
+                .id(ui.id().with("dml_preview"))
+                .show(ui.ctx(), |ui| {
+                    ui.heading("DML Preview");
+                    if let Some(changes) = &self.changes {
+                        match changes.statements() {
+                            Ok(statements) => {
+                                self.preview_error.clear();
+                                let mut sql = format!("BEGIN;\n{}\nCOMMIT;", statements.join("\n"));
+                                egui::ScrollArea::both().max_height(360.0).show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut sql)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .interactive(false),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.button("Cancel").clicked() {
+                                        close = true;
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            enabled && !busy && dirty,
+                                            egui::Button::new("Submit"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.action = Some(TableAction::Submit);
+                                        close = true;
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                self.preview_error = e.to_string();
+                                if ui.button("Close").clicked() {
                                     close = true;
                                 }
-                                if ui
-                                    .add_enabled(
-                                        enabled && !busy && dirty,
-                                        egui::Button::new("Submit"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.action = Some(TableAction::Submit);
-                                    close = true;
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            self.preview_error = e.to_string();
-                            if ui.button("Close").clicked() {
-                                close = true;
                             }
                         }
                     }
-                }
-            });
+                });
             if close {
                 self.preview = false;
                 ui.ctx().request_repaint();

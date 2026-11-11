@@ -574,7 +574,7 @@ impl NozhikUi {
                 }
                 _ => false,
             };
-            egui::Modal::new(egui::Id::new("unsaved_close")).show(ctx, |ui| {
+            crate::dialog::Dialog::new("unsaved_close", [600.0, 320.0]).show(ctx, |ui| {
                 ui.heading("Unsaved changes");
                 ui.label(if redis_writing { "A Redis write is in progress. Wait for its result before closing." } else if pending_table { "Database changes are pending. Cancel to return and use Submit or Revert; Discard closes without submitting." } else { "Save modified files before closing?" });
                 ui.horizontal(|ui| {
@@ -628,7 +628,7 @@ impl NozhikUi {
         };
         let mut accept = false;
         let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::new("path_dialog")).show(ctx, |ui| {
+        let modal = crate::dialog::Dialog::new("path_dialog", [600.0, 320.0]).show(ctx, |ui| {
             crate::form::begin(ui);
             ui.heading(match action {
                 PathAction::NewProject => "New project",

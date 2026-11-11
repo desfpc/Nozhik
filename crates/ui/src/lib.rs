@@ -11,6 +11,7 @@ mod ai_inline;
 mod css_colors;
 mod database_panel;
 mod deployment;
+mod dialog;
 mod diff_view;
 mod docker_panel;
 mod editor_tabs;

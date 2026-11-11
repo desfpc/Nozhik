@@ -493,7 +493,7 @@ impl NozhikUi {
                         ui.weak("Tool window placeholder");
                     }
                 });
-            let mut layout = self.layout.value;
+            let mut layout = self.layout.value.clone();
             layout.bottom = (panel.response.rect.height() / viewport.height()).clamp(0.05, 1.0);
             if ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
                 self.layout.set(layout);
@@ -651,7 +651,7 @@ impl NozhikUi {
                         self.database_panel(ui);
                     }
                 });
-            let mut layout = self.layout.value;
+            let mut layout = self.layout.value.clone();
             let width = (panel.response.rect.width() / viewport.width()).clamp(0.1, 0.4);
             match tool {
                 LeftTool::Commit => layout.git = width,

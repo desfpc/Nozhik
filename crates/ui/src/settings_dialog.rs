@@ -222,11 +222,12 @@ impl SettingsDialog {
         containers: &[(String, String)],
     ) -> bool {
         let compact = size.x < 560.0;
-        let height = (size.y - if compact { 126.0 } else { 86.0 }).max(0.0);
+        let height = (size.y - if compact { 50.0 } else { 0.0 }).max(0.0);
         if compact {
             // One category row keeps the modal inside a short window; further rows scroll.
             let plugins = egui::ScrollArea::vertical()
                 .id_salt("settings_categories_compact")
+                .min_scrolled_height(0.0)
                 .auto_shrink([false, true])
                 .max_height(40.0)
                 .show(ui, |ui| {
@@ -556,7 +557,7 @@ impl crate::NozhikUi {
             .into_iter()
             .map(|container| (container.id, container.name))
             .collect();
-        let modal = egui::Modal::new(egui::Id::new("settings"))
+        let modal = crate::dialog::Dialog::new("settings", [920.0, 680.0])
             .frame(
                 egui::Frame::new()
                     .fill(crate::theme::background())
@@ -564,11 +565,6 @@ impl crate::NozhikUi {
                     .inner_margin(16),
             )
             .show(ctx, |ui| {
-                let scope_height = if self.project.is_some() { 42.0 } else { 0.0 };
-                let size = (ctx.screen_rect().size() - egui::vec2(64.0, 64.0 + scope_height))
-                    .min(egui::vec2(690.0, 380.0 - scope_height))
-                    .max(egui::Vec2::ZERO);
-                ui.set_width(size.x);
                 ui.visuals_mut().window_corner_radius = egui::CornerRadius::same(8);
                 ui.heading("Settings");
                 if let Some(project) = &self.project {
@@ -579,6 +575,10 @@ impl crate::NozhikUi {
                     ui.small(project.root_path.display().to_string());
                 }
                 ui.separator();
+                let size = egui::vec2(
+                    ui.available_width(),
+                    (ui.available_height() - 48.0).max(0.0),
+                );
                 if self.settings_dialog.content(
                     ui,
                     &mut config,
@@ -964,7 +964,11 @@ mod tests {
                                 viewport.contains_rect(rect),
                                 "Close outside {size:?}: {rect:?}"
                             );
-                            assert!(shape.clip_rect.contains_rect(rect));
+                            assert!(
+                                shape.clip_rect.contains_rect(rect),
+                                "Close clipped at {size:?}, category {category}: {rect:?}, clip {:?}",
+                                shape.clip_rect
+                            );
                             close = Some(rect.center());
                         }
                     }
@@ -976,10 +980,12 @@ mod tests {
                     viewport.contains_rect(bounds),
                     "Settings outside {size:?}: {bounds:?}"
                 );
-                assert!(
-                    bounds.height() <= 460.0,
-                    "Unbounded Settings height: {bounds:?}"
-                );
+                if size.x > 1000.0 {
+                    assert!(
+                        bounds.width() >= 900.0 && bounds.height() >= 650.0,
+                        "Settings should open spaciously: {bounds:?}"
+                    );
+                }
                 assert!(
                     visible_control,
                     "Settings controls must be visible for category {category} at {size:?}"

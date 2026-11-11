@@ -725,38 +725,39 @@ impl NozhikUi {
         };
         let mut accept = false;
         let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::new("project_entry_dialog")).show(ctx, |ui| {
-            crate::form::begin(ui);
-            ui.set_width(360.0);
-            ui.heading(if dialog.directory {
-                "New Folder"
-            } else {
-                "New File"
-            });
-            ui.label(format!("In: {}", dialog.parent.display()));
-            ui.label(if dialog.directory {
-                "Folder name"
-            } else {
-                "File name (including extension)"
-            });
-            let input = ui.add_enabled(!dialog.pending, crate::form::singleline(&mut dialog.name));
-            if dialog.focus {
-                input.request_focus();
-                dialog.focus = false;
-            }
-            ui.horizontal(|ui| {
-                accept = ui
-                    .add_enabled(!dialog.pending, egui::Button::new("Create"))
-                    .clicked()
-                    || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
-                cancel = ui
-                    .add_enabled(!dialog.pending, egui::Button::new("Cancel"))
-                    .clicked();
-                if dialog.pending {
-                    ui.spinner();
+        let modal =
+            crate::dialog::Dialog::new("project_entry_dialog", [600.0, 300.0]).show(ctx, |ui| {
+                crate::form::begin(ui);
+                ui.heading(if dialog.directory {
+                    "New Folder"
+                } else {
+                    "New File"
+                });
+                ui.label(format!("In: {}", dialog.parent.display()));
+                ui.label(if dialog.directory {
+                    "Folder name"
+                } else {
+                    "File name (including extension)"
+                });
+                let input =
+                    ui.add_enabled(!dialog.pending, crate::form::singleline(&mut dialog.name));
+                if dialog.focus {
+                    input.request_focus();
+                    dialog.focus = false;
                 }
+                ui.horizontal(|ui| {
+                    accept = ui
+                        .add_enabled(!dialog.pending, egui::Button::new("Create"))
+                        .clicked()
+                        || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+                    cancel = ui
+                        .add_enabled(!dialog.pending, egui::Button::new("Cancel"))
+                        .clicked();
+                    if dialog.pending {
+                        ui.spinner();
+                    }
+                });
             });
-        });
         if accept && !dialog.pending {
             dialog.pending = self.fs.send(Command::CreateEntry {
                 parent: dialog.parent.clone(),

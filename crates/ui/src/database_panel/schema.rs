@@ -307,8 +307,7 @@ impl NozhikUi {
         let mut export = false;
         let mut schema_sql_error = None;
         let busy = dialog.pending.is_some();
-        let modal = egui::Modal::new(egui::Id::new("schema_actions")).show(ctx, |ui| {
-            ui.set_width(900.0_f32.min(ctx.screen_rect().width() - 60.0));
+        let modal = crate::dialog::Dialog::new("schema_actions", [1000.0, 700.0]).show(ctx, |ui| {
             ui.heading(match dialog.action { Action::Modify => "Modify Schema", Action::Export => "Export Data", Action::Ddl => "Generate DDL to Clipboard", Action::Run => "Run SQL Script", Action::Console => "SQL Console", Action::Truncate => "TRUNCATE Table" });
             ui.label(format!("{} / {}{}", dialog.profile.name, dialog.schema,dialog.table.as_ref().map_or(String::new(),|t|format!(" / {t}"))));
             ui.separator();

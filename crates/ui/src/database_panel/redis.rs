@@ -821,7 +821,7 @@ impl NozhikUi {
         if let Some(form) = &mut state.form {
             let old = form.profile.clone();
             let old_password = Secret::new(form.password.clone());
-            let modal = egui::Modal::new(egui::Id::new("redis_connection")).show(ctx, |ui| {
+            let modal = crate::dialog::Dialog::new("redis_connection", [640.0, 540.0]).show(ctx, |ui| {
                 crate::form::begin(ui);
                 ui.heading("Redis Connection");
                 ui.add_enabled_ui(!busy, |ui| {

@@ -172,57 +172,51 @@ impl CloneDialog {
         let mut clone = false;
         let mut dismiss = false;
         let busy = self.busy();
-        egui::Modal::new(egui::Id::new("clone_repository")).show(ctx, |ui| {
-            ui.set_width(600.0);
+        crate::dialog::Dialog::new("clone_repository", [800.0, 680.0]).show(ctx, |ui| {
             ui.heading("Clone a Repository");
             ui.add_space(12.0);
-            egui::ScrollArea::vertical()
-                .id_salt("clone_form")
-                .max_height((ctx.screen_rect().height() - 150.0).max(120.0))
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        crate::form::begin(ui);
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.github, true, "GitHub.com");
-                            ui.selectable_value(&mut self.github, false, "URL");
-                        });
-                        ui.separator();
-                        if self.github {
-                            connect = self.github_form(ui);
-                        } else {
-                            self.url_form(ui);
-                        }
-                        ui.add_space(10.0);
-                        ui.label("Local destination (new project directory)");
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                crate::form::singleline(&mut self.destination).desired_width(485.0),
-                            );
-                            if ui.button("Choose…").clicked() {
-                                match crate::project_dialog::pick(
-                                    crate::project_dialog::Picker::Folder,
-                                    None,
-                                ) {
-                                    Ok(Some(path)) => {
-                                        let remote = self.selected.as_deref().unwrap_or(&self.url);
-                                        let name = remote
-                                            .trim_end_matches('/')
-                                            .rsplit(['/', ':'])
-                                            .next()
-                                            .unwrap_or("project")
-                                            .trim_end_matches(".git");
-                                        self.destination = path
-                                            .join(if name.is_empty() { "project" } else { name })
-                                            .display()
-                                            .to_string();
-                                    }
-                                    Ok(None) => {}
-                                    Err(error) => self.error = Some(error),
+            ui.scope(|ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    crate::form::begin(ui);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.github, true, "GitHub.com");
+                        ui.selectable_value(&mut self.github, false, "URL");
+                    });
+                    ui.separator();
+                    if self.github {
+                        connect = self.github_form(ui);
+                    } else {
+                        self.url_form(ui);
+                    }
+                    ui.add_space(10.0);
+                    ui.label("Local destination (new project directory)");
+                    ui.horizontal(|ui| {
+                        ui.add(crate::form::singleline(&mut self.destination).desired_width(485.0));
+                        if ui.button("Choose…").clicked() {
+                            match crate::project_dialog::pick(
+                                crate::project_dialog::Picker::Folder,
+                                None,
+                            ) {
+                                Ok(Some(path)) => {
+                                    let remote = self.selected.as_deref().unwrap_or(&self.url);
+                                    let name = remote
+                                        .trim_end_matches('/')
+                                        .rsplit(['/', ':'])
+                                        .next()
+                                        .unwrap_or("project")
+                                        .trim_end_matches(".git");
+                                    self.destination = path
+                                        .join(if name.is_empty() { "project" } else { name })
+                                        .display()
+                                        .to_string();
                                 }
+                                Ok(None) => {}
+                                Err(error) => self.error = Some(error),
                             }
-                        });
+                        }
                     });
                 });
+            });
             if let Some(error) = &self.error {
                 ui.colored_label(crate::theme::error(), error);
             }

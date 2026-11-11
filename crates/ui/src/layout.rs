@@ -7,7 +7,7 @@ use std::{
 };
 
 /// Logical proportions of the application viewport, clamped for usable splitters.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     /// Left dock width / viewport width.
@@ -25,6 +25,8 @@ pub struct Layout {
     /// HTTP Requests tag sidebar width / viewport width, independent of the project dock.
     #[serde(default = "default_http_requests")]
     pub http_requests: f32,
+    /// Preferred modal content sizes in logical pixels; scoped to this project.
+    pub dialogs: crate::dialog::Sizes,
 }
 
 const fn default_http_requests() -> f32 {
@@ -40,11 +42,12 @@ impl Default for Layout {
             sql: 0.45,
             snippets: 0.18,
             http_requests: default_http_requests(),
+            dialogs: crate::dialog::Sizes::default(),
         }
     }
 }
 impl Layout {
-    fn valid(self) -> bool {
+    fn valid(&self) -> bool {
         [
             self.left,
             self.git,
@@ -58,6 +61,9 @@ impl Layout {
             && self.bottom.is_finite()
             && (0.05..=1.0).contains(&self.bottom)
             && self.left + self.right <= 0.8
+            && self.dialogs.iter().all(|(key, size)| {
+                !key.is_empty() && size.iter().all(|v| v.is_finite() && *v > 0.0)
+            })
     }
 }
 fn load(path: &Path) -> Result<Layout, String> {
@@ -73,7 +79,7 @@ fn load(path: &Path) -> Result<Layout, String> {
         Err("Invalid layout proportions".into())
     }
 }
-fn save(path: &Path, layout: Layout) -> Result<(), String> {
+fn save(path: &Path, layout: &Layout) -> Result<(), String> {
     use std::io::Write;
     load(path)?;
     if !layout.valid() {
@@ -82,7 +88,7 @@ fn save(path: &Path, layout: Layout) -> Result<(), String> {
     let parent = path.parent().ok_or("Layout path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    temp.write_all(&serde_json::to_vec_pretty(&layout).map_err(|e| e.to_string())?)
+    temp.write_all(&serde_json::to_vec_pretty(layout).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     temp.as_file().sync_all().map_err(|e| e.to_string())?;
     temp.persist(path).map_err(|e| e.to_string())?;
@@ -95,6 +101,7 @@ enum Task {
 #[derive(Default)]
 pub struct LayoutManager {
     pub value: Layout,
+    dialogs: crate::dialog::SharedSizes,
     worker: Option<mpsc::Sender<Task>>,
     output: Option<mpsc::Receiver<Result<Option<Layout>, String>>>,
     changed: Option<Instant>,
@@ -114,7 +121,7 @@ impl LayoutManager {
                 match task {
                     Task::Save(layout) => {
                         let result = if writable {
-                            save(&path, layout)
+                            save(&path, &layout)
                         } else {
                             Err("Malformed layout.json preserved".into())
                         };
@@ -122,7 +129,7 @@ impl LayoutManager {
                         wake();
                     }
                     Task::Finish(layout, done) => {
-                        if writable && let Err(e) = save(&path, layout) {
+                        if writable && let Err(e) = save(&path, &layout) {
                             eprintln!("Layout save: {e}");
                         }
                         let _sent = done.send(());
@@ -135,38 +142,56 @@ impl LayoutManager {
         self.output = Some(receiver);
     }
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.collect_dialogs();
         if let Some(output) = &self.output {
             while let Ok(reply) = output.try_recv() {
                 match reply {
-                    Ok(Some(value)) if !self.touched => self.value = value,
+                    Ok(Some(value)) if !self.touched => {
+                        crate::dialog::replace(&self.dialogs, value.dialogs.clone());
+                        self.value = value;
+                    }
                     Ok(_) => {}
                     Err(e) => self.error = Some(e),
                 }
             }
         }
+        crate::dialog::bind(ctx, self.dialogs.clone());
         if let Some(changed) = self.changed {
             let remaining = Duration::from_millis(250).saturating_sub(changed.elapsed());
             if remaining.is_zero() {
                 self.changed = None;
                 if let Some(worker) = &self.worker {
-                    let _sent = worker.send(Task::Save(self.value));
+                    let _sent = worker.send(Task::Save(self.value.clone()));
                 }
             } else {
                 ctx.request_repaint_after(remaining);
             }
         }
     }
-    pub fn set(&mut self, value: Layout) {
+    pub fn set(&mut self, mut value: Layout) {
+        if value.dialogs == self.value.dialogs {
+            value.dialogs = crate::dialog::snapshot(&self.dialogs);
+        }
         if value.valid() && value != self.value {
+            crate::dialog::replace(&self.dialogs, value.dialogs.clone());
             self.value = value;
             self.touched = true;
             self.changed = Some(Instant::now());
         }
     }
+    fn collect_dialogs(&mut self) {
+        let dialogs = crate::dialog::snapshot(&self.dialogs);
+        if dialogs != self.value.dialogs {
+            self.value.dialogs = dialogs;
+            self.touched = true;
+            self.changed = Some(Instant::now());
+        }
+    }
     pub fn finish(&mut self) {
+        self.collect_dialogs();
         if let Some(worker) = self.worker.take() {
             let (done, wait) = mpsc::channel();
-            if worker.send(Task::Finish(self.value, done)).is_ok() {
+            if worker.send(Task::Finish(self.value.clone(), done)).is_ok() {
                 let _finished = wait.recv_timeout(Duration::from_secs(1));
             }
         }
@@ -197,7 +222,7 @@ mod tests {
             left: 0.25,
             ..Layout::default()
         };
-        save(&path, value)?;
+        save(&path, &value)?;
         assert_eq!(load(&path)?, value);
         std::fs::write(
             &path,
@@ -206,7 +231,7 @@ mod tests {
         let older = load(&path)?;
         assert!((older.http_requests - 0.18).abs() < f32::EPSILON);
         std::fs::write(&path, "bad")?;
-        assert!(save(&path, value).is_err());
+        assert!(save(&path, &value).is_err());
         assert_eq!(std::fs::read_to_string(&path)?, "bad");
         assert!(
             !Layout {
@@ -214,6 +239,54 @@ mod tests {
                 ..value
             }
             .valid()
+        );
+        Ok(())
+    }
+    #[test]
+    fn dialog_sizes_survive_restart_and_project_switch_and_preserve_invalid_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("layout.json");
+        let ctx = egui::Context::default();
+        let mut manager = LayoutManager::default();
+        manager.start(path.clone(), Arc::new(|| {}));
+        manager.tick(&ctx);
+        let sizes = crate::dialog::Sizes::from([
+            ("new_database".into(), [820.0, 720.0]),
+            ("settings".into(), [1200.0, 800.0]),
+        ]);
+        crate::dialog::replace(&manager.dialogs, sizes.clone());
+        let mut split = manager.value.clone();
+        split.sql = 0.6;
+        manager.set(split);
+        assert_eq!(crate::dialog::snapshot(&manager.dialogs), sizes);
+        // Finish collects the last drag even when no further UI frame ran.
+        manager.finish();
+        assert_eq!(load(&path)?.dialogs, sizes);
+        let mut restored = LayoutManager::default();
+        restored.start(path.clone(), Arc::new(|| {}));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while restored.value.dialogs.is_empty() && Instant::now() < deadline {
+            restored.tick(&ctx);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(restored.value.dialogs, sizes);
+        let mut other = LayoutManager::default();
+        other.tick(&ctx);
+        crate::dialog::replace(
+            &other.dialogs,
+            crate::dialog::Sizes::from([("new_database".into(), [450.0, 400.0])]),
+        );
+        other.tick(&ctx);
+        restored.tick(&ctx);
+        assert_eq!(restored.value.dialogs, sizes);
+        assert_ne!(other.value.dialogs, sizes);
+        restored.finish();
+        std::fs::write(&path, r#"{"dialogs":{"new_database":[-1,300]}}"#)?;
+        assert!(save(&path, &Layout::default()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            r#"{"dialogs":{"new_database":[-1,300]}}"#
         );
         Ok(())
     }

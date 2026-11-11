@@ -1187,9 +1187,8 @@ fn authorize_modal(ctx: &egui::Context, state: &mut FileState) {
         Parsed::Spec(spec) => spec.schemes.clone(),
         Parsed::Invalid(_) => Vec::new(),
     };
-    egui::Modal::new(egui::Id::new("openapi-auth")).show(ctx, |ui| {
+    crate::dialog::Dialog::new("openapi-auth", [680.0, 520.0]).show(ctx, |ui| {
         crate::form::begin(ui);
-        ui.set_width(520.0);
         ui.horizontal(|ui| {
             ui.heading("Available authorizations");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

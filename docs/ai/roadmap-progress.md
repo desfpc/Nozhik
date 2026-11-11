@@ -4715,3 +4715,45 @@ executable, Nozhik.app.zip и legal sidecars; --check подтвердил finge
 и untracked Finder .DS_Store. Финальный размер проекта — 398 MiB, binaries —
 116 MiB. Исходники, история и актуальные бинарники с legal materials сохранены;
 после очистки сборок не было.
+
+### Крупные изменяемые диалоги и память размеров (v0.1.68, 2026-11-11)
+
+Добавлен общий Dialog поверх egui::Modal для 22 типов форм и подтверждений.
+Форма SQL-соединения открывается с content size 640×650 вместо короткого scroller;
+Settings — 920×680. Redis/SSH, clone, plugins, file/path, Git/history,
+OpenAPI auth, schema/table designer, SQL previews и подтверждения получили
+свои defaults. Нижний правый угол содержит нарисованный resize grip с cursor
+ResizeNwSe. Drag меняет обе оси; общая рамка с footer помещается в viewport IDE,
+содержимое прокручивается, фиксированного верхнего предела в пикселях нет.
+
+Предпочтения каждого диалога сохраняются отдельно для проекта в layout.json
+через существующий background worker/debounce/atomic save. Стартовый экран имеет
+свой layout. Сжатие основного окна временно ограничивает геометрию, не затирая
+сохранённый размер. Повторное открытие/перезапуск восстанавливают preference;
+finish забирает последний drag без дополнительного UI frame. Старые layouts
+поддержаны serde default, malformed/invalid files не перезаписываются.
+Внутренние формы и Settings используют доступный viewport; компактная навигация
+Settings больше не раздувается до стандартной min scroll height.
+
+Версия workspace/lock — 0.1.68, следующая — 0.1.69. Новых зависимостей нет.
+
+Проверки: fmt, git diff --check, workspace/all-targets/all-features Clippy
+с -D warnings; полный cargo test --workspace --all-features -- --test-threads=1 —
+473 passed, 0 failed, 19 прежних optional ignored. Новые headless-тесты проверяют
+реальный pointer drag уголка, восстановление размера при повторном открытии,
+разные формы, ограничение рамки при resize/маленьком viewport, сохранение
+предпочтения при сжатии основного окна, Escape, worker persistence/restart,
+раздельные проекты, последний drag перед finish, старый и malformed JSON.
+Регрессия SQL-формы проверяет одновременную видимость первого поля, Database
+и Test/Save/Cancel; Settings проверяет доступность controls/Close до 420×280.
+Workspace release build прошёл. Ручной native GUI и Windows build/Clippy
+не запускались. Commit/push не выполнялись.
+
+Штатный update-binaries.py обновил macOS ARM64 executable/app archive и legal
+sidecars. Source fingerprint
+a9e1e2c4e3a2c67082f1db479b80f26b04232000d209606901edecf1b7d1d93b и SHA-256
+подтверждены --check, включая повтор после очистки. Windows не пересобирался.
+cargo clean удалил 10.5 GiB (27516 файлов); удалены task logs и 7 untracked
+Finder .DS_Store. Финальный размер проекта — 399 MiB, binaries — 117 MiB.
+Исходники, история, незакоммиченные изменения и готовые актуальные бинарники
+с legal materials сохранены; после очистки сборок не было.

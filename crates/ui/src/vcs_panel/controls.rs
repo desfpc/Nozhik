@@ -544,11 +544,10 @@ impl VcsPanel {
         if dialog == Dialog::None {
             return;
         }
-        let modal = egui::Modal::new(egui::Id::new("git_operation_dialog"))
+        let modal = crate::dialog::Dialog::new("git_operation_dialog", [760.0, 560.0])
             .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(24).corner_radius(6))
             .show(ctx, |ui| {
                         crate::form::begin(ui);
-                        ui.set_width(500.0_f32.min(ctx.screen_rect().width()-70.0).max(150.0));
             let title = match &dialog { Dialog::NewBranch => "Create a Branch".into(), Dialog::Switch(_) => "Switch Branch".into(), Dialog::Merge => format!("Merge into {}", self.branch()), Dialog::Conflicts => "Resolve conflicts before Merge".into(), Dialog::Abort => "Abort Merge?".into(), Dialog::None => String::new() };
             ui.horizontal(|ui| { ui.heading(title); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { self.dialog = Dialog::None; } }); });
             ui.add_space(12.0); ui.separator(); ui.add_space(12.0);

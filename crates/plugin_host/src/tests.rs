@@ -330,7 +330,12 @@ fn real_process_rpc_crash_timeout_and_oversize_isolation() -> TestResult {
         install(&root, mode, &value)?;
         std::fs::copy(&binary, root.join(mode).join(&executable))?;
     }
-    let host = PluginManager::with_paths(EventBus::new(32)?, vec![root.clone()], None)?;
+    let host = PluginManager::with_paths_guarded(
+        EventBus::new(32)?,
+        vec![root.clone()],
+        None,
+        nozhik_core::ExecutionGuard::unrestricted(),
+    )?;
     wait(&host, |s| s.plugins.len() == 4)?;
     let actions = host.actions();
     for mode in ["ok", "crash", "hang", "oversize"] {
@@ -356,7 +361,12 @@ fn real_process_rpc_crash_timeout_and_oversize_isolation() -> TestResult {
     std::fs::remove_file(root.join("hang/started"))?;
     let bus = EventBus::new(16)?;
     let mut closed = bus.subscribe();
-    let host = PluginManager::with_paths(bus.clone(), vec![root.clone()], None)?;
+    let host = PluginManager::with_paths_guarded(
+        bus.clone(),
+        vec![root.clone()],
+        None,
+        nozhik_core::ExecutionGuard::unrestricted(),
+    )?;
     wait(&host, |s| s.plugins.len() == 4)?;
     host.actions()
         .execute("hang.run", ActionContext::default())?;
@@ -417,5 +427,51 @@ fn platform_equivalent_chords_conflict() -> TestResult {
     assert_eq!(conflicts.len(), 1);
     assert_eq!(keymap.bindings()?.len(), 1);
 
+    Ok(())
+}
+
+#[test]
+fn project_open_wildcard_fixture_requires_host_authorization() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("project");
+    let plugins = root.join(".nozhik/plugins");
+    let executable = format!("fixture{}", std::env::consts::EXE_SUFFIX);
+    let mut value = manifest("org.nozhik.fixture");
+    value["activation_events"] = json!(["*"]);
+    value["executable"] = json!(executable);
+    install(&plugins, "fixture", &value)?;
+    let binary = plugins.join("fixture").join(&executable);
+    let output =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/process_plugin.rs"))
+            .arg("-o")
+            .arg(binary)
+            .output()?;
+    assert!(output.status.success());
+    let host = PluginManager::with_paths(EventBus::new(32)?, Vec::new(), None)?;
+    host.scan(Some(root.clone()))?;
+    wait(&host, |snapshot| !snapshot.plugins.is_empty())?;
+    assert!(!plugins.join("fixture/started").exists());
+    host.scan_guarded(
+        Some(root.clone()),
+        nozhik_core::ExecutionGuard::unrestricted(),
+    )?;
+    wait(&host, |snapshot| {
+        snapshot
+            .plugins
+            .iter()
+            .any(|p| p.status == PluginStatus::Active)
+    })?;
+    assert!(
+        plugins.join("fixture/started").exists(),
+        "explicitly authorized scan executes the reviewed fixture"
+    );
+    host.scan(Some(root))?;
+    wait(&host, |snapshot| {
+        snapshot
+            .plugins
+            .iter()
+            .all(|plugin| plugin.status != PluginStatus::Active)
+    })?;
     Ok(())
 }

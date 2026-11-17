@@ -35,6 +35,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) enum Request {
     Scan(Option<PathBuf>),
+    ScanGuarded(Option<PathBuf>, nozhik_core::ExecutionGuard),
     Toggle { id: String, enabled: bool },
     Execute { owner: String, command: String },
 }

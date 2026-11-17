@@ -416,3 +416,39 @@ fn yaml_only_project_has_no_semantic_index_or_cache() -> TestResult {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+
+#[test]
+fn restricted_language_worker_keeps_syntax_without_spawning_lsp() -> TestResult {
+    use nozhik_language_support::{Command, Event, LanguageService, ServerCommand};
+    let dir = tempfile::tempdir()?;
+    let service = LanguageService::with_guard(
+        dir.path().to_path_buf(),
+        Some(ServerCommand {
+            program: dir.path().join("MUST_NOT_RUN"),
+            args: vec![],
+        }),
+        nozhik_core::ExecutionGuard::restricted(),
+        || {},
+    );
+    let uri = Url::from_file_path(dir.path().join("file.php")).map_err(|()| "URI")?;
+    assert!(service.send(Command::Sync {
+        uri,
+        revision: 1,
+        text: ropey::Rope::from_str("<?php function demo() {}")
+    }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut syntax = false;
+    while !syntax && std::time::Instant::now() < deadline {
+        for event in service.drain() {
+            match event {
+                Event::Highlights { .. } => syntax = true,
+                Event::Error(message) => return Err(message.into()),
+                _ => {}
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(syntax);
+    service.shutdown();
+    Ok(())
+}

@@ -50,6 +50,7 @@ pub mod theme;
 mod tool_icons;
 mod tool_languages;
 mod tools;
+mod trust;
 mod usages_popup;
 mod vcs_panel;
 
@@ -115,6 +116,7 @@ enum RefreshState {
 
 /// Application state for eframe, independent of the composition root.
 pub struct NozhikUi {
+    trust: trust::TrustUi,
     workspace: workspace::SessionLinks,
     welcome: welcome::Welcome,
     integration: integration::Integration,
@@ -182,7 +184,12 @@ impl NozhikUi {
         #[cfg(not(test))]
         let plugins = PluginManager::start(bus.clone());
         #[cfg(test)]
-        let plugins = PluginManager::with_paths(bus.clone(), Vec::new(), None);
+        let plugins = PluginManager::with_paths_guarded(
+            bus.clone(),
+            Vec::new(),
+            None,
+            nozhik_core::ExecutionGuard::restricted(),
+        );
         let plugins = match plugins {
             Ok(manager) => {
                 for &(id, title, when) in menu_bar::MENUS.iter().flat_map(|(_, entries)| *entries) {
@@ -203,6 +210,7 @@ impl NozhikUi {
             }
         };
         Self {
+            trust: trust::TrustUi::default(),
             workspace: workspace::SessionLinks::default(),
             welcome: welcome::Welcome::default(),
             settings_dialog: settings_dialog::SettingsDialog::start(

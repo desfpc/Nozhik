@@ -246,6 +246,22 @@ impl LanguageService {
         configured: Option<ServerCommand>,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
+        Self::with_guard(
+            root,
+            configured,
+            nozhik_core::ExecutionGuard::unrestricted(),
+            wake,
+        )
+    }
+    /// Starts language workers with revocable permission for external LSP execution.
+    /// Syntax and local formatting remain available while permission is denied.
+    #[must_use]
+    pub fn with_guard(
+        root: PathBuf,
+        configured: Option<ServerCommand>,
+        guard: nozhik_core::ExecutionGuard,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(wake);
         let (events, receiver) = mpsc::channel();
         let (stop, stopping) = tokio::sync::oneshot::channel();
@@ -313,7 +329,7 @@ impl LanguageService {
             {
                 Ok(runtime) => {
                     runtime.block_on(server_actor(
-                        root, configured, commands, stopping, &events, &wake,
+                        root, configured, guard, commands, stopping, &events, &wake,
                     ));
                 }
                 Err(error) => {
@@ -376,6 +392,7 @@ impl Drop for LanguageService {
 async fn server_actor(
     root: PathBuf,
     configured: Option<ServerCommand>,
+    guard: nozhik_core::ExecutionGuard,
     mut commands: tokio::sync::mpsc::Receiver<Command>,
     mut stop: tokio::sync::oneshot::Receiver<()>,
     output: &mpsc::Sender<Event>,
@@ -384,15 +401,23 @@ async fn server_actor(
     let mut server = None;
     let mut notifications = None;
     let mut attempted = false;
+    let mut last_guard_check = std::time::Instant::now();
     let mut documents: HashMap<Url, (u64, String, tokio::time::Instant)> = HashMap::new();
     let mut synchronized = HashMap::new();
     let mut timer = tokio::time::interval(std::time::Duration::from_millis(25));
     loop {
+        if server.is_some() && last_guard_check.elapsed() >= std::time::Duration::from_secs(1) {
+            last_guard_check = std::time::Instant::now();
+            if !guard.current() {
+                server = None;
+                notifications = None;
+            }
+        }
         let running = async {
             tokio::select! {
                 command = commands.recv() => {
                     let Some(command) = command else { return false; };
-                    if !attempted && matches!(command, Command::Sync { .. }) {
+                    if !attempted && matches!(command, Command::Sync { .. }) && guard.check() {
                         attempted = true;
                         if let Some((path,args)) = configured.as_ref().map(|c| (c.program.clone(),c.args.clone())).or_else(lsp::manager::discover) {
                             match lsp::manager::LspManager::start(tokio::process::Command::new(path).args(args), &root).await {

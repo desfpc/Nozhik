@@ -4,6 +4,7 @@ pub mod code_style;
 pub mod deployment;
 pub mod languages;
 pub mod linters;
+pub mod project_trust;
 pub mod test_tools;
 
 use std::{

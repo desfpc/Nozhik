@@ -422,9 +422,11 @@ impl NozhikUi {
                     ui.set_min_height(ui.available_height());
                     if label == crate::llm_panel::LLM_LABEL {
                         let enabled = !self.global_modal() && !self.search.open;
+                        let execution_guard = self.execution_guard();
                         let panel = self
                             .llm
                             .get_or_insert_with(|| crate::llm_panel::LlmPanel::new(ctx));
+                        panel.set_execution_guard(execution_guard);
                         let root = self.project.as_ref().map(|p| p.root_path.as_path());
                         let file = self
                             .active
@@ -444,9 +446,11 @@ impl NozhikUi {
                             self.bottom = None;
                         }
                     } else if label == crate::terminal_panel::TERMINAL_LABEL {
+                        let execution_guard = self.execution_guard();
                         let panel = self
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+                        panel.execution_guard = Some(execution_guard);
                         let root = self.project.as_ref().map(|p| p.root_path.as_path());
                         let enabled = !self.language.invalidate_dialog
                             && self.language.usages.is_none()
@@ -784,7 +788,9 @@ impl NozhikUi {
                     } else {
                         None
                     };
-                    self.editor.ai.configure(&self.config);
+                    let mut ai_config = self.config.clone();
+                    ai_config.ai_enabled &= self.execution_allowed();
+                    self.editor.ai.configure(&ai_config);
                     self.editor.proportional_font = self.config.editor_font == "proportional";
                     if let Some(language) = self.language.views.get_mut(&self.documents[index].path)
                     {
@@ -861,9 +867,11 @@ impl NozhikUi {
         };
         self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
         let outcome = {
+            let execution_guard = self.execution_guard();
             let panel = self
                 .terminal
                 .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+            panel.execution_guard = Some(execution_guard);
             panel.focus = true;
             let needs_session = !panel.has_running_session();
             if needs_session && let Some(error) = panel.create(&root) {
@@ -925,6 +933,7 @@ impl NozhikUi {
         let wake_context = ctx.clone();
         self.fs.set_wakeup(move || wake_context.request_repaint());
         self.receive_files();
+        self.trust_tick(ctx);
         if self.project.is_none() {
             self.snippets.finish();
             self.http_requests.finish();
@@ -1001,6 +1010,7 @@ impl NozhikUi {
         self.observe_session_problems();
         self.menu_bar(ctx);
         self.top_bar(ctx);
+        self.trust_banner(ctx);
         self.project_tabs(ctx);
         self.panels(ctx);
         if self.active.is_none() || self.database.active.is_some() {
@@ -1069,6 +1079,12 @@ impl NozhikUi {
     }
 
     fn start_tests(&mut self, ctx: &egui::Context) {
+        if !self.execution_allowed() {
+            self.status =
+                "Restricted Mode: review and trust the project before running tools".into();
+            return;
+        }
+
         let Some(root) = self
             .project
             .as_ref()
@@ -1081,9 +1097,11 @@ impl NozhikUi {
             return;
         }
         let program = nozhik_docker::docker_program();
+        let execution_guard = self.execution_guard();
         let panel = self
             .terminal
             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+        panel.execution_guard = Some(execution_guard);
         let mut started = Vec::new();
         let mut failures = Vec::new();
         for launch in launches {
@@ -1113,6 +1131,12 @@ impl NozhikUi {
     }
 
     fn start_linters(&mut self, ctx: &egui::Context) {
+        if !self.execution_allowed() {
+            self.status =
+                "Restricted Mode: review and trust the project before running tools".into();
+            return;
+        }
+
         let Some(root) = self
             .project
             .as_ref()
@@ -1121,6 +1145,7 @@ impl NozhikUi {
             return;
         };
         let containers = self.docker.containers();
+        self.linters.execution_guard = Some(self.execution_guard());
         if let Err(error) = self.linters.start(ctx, &self.config, &root, &containers) {
             self.note_status("linter", "Linter", crate::problems::Severity::Error, error);
         }

@@ -67,6 +67,9 @@ impl LlmPanel {
             message: String::new(),
         }
     }
+    pub(crate) fn set_execution_guard(&mut self, guard: nozhik_core::ExecutionGuard) {
+        self.terminal.execution_guard = Some(guard);
+    }
     pub fn tick(&mut self) {
         if let Some(message) = self.terminal.tick() {
             self.message = message;

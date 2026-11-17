@@ -325,9 +325,11 @@ impl NozhikUi {
             }
             Reply::Shell(name, shell) => {
                 self.remote.connected.insert(name.clone());
+                let execution_guard = self.execution_guard();
                 let panel = self
                     .terminal
                     .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+                panel.execution_guard = Some(execution_guard);
                 match panel.create_remote(&name, Box::new(shell)) {
                     Ok(()) => self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL),
                     Err(e) => self.note_status(

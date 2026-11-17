@@ -29,11 +29,15 @@ fn collect(mut pipe: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
 /// Resolves the Docker CLI.
 ///
 /// A matching file on `PATH` wins. Otherwise the function checks known install
-/// locations and finally returns the bare name `docker`.
+/// locations and finally returns an absolute missing-path sentinel. Relative PATH
+/// entries never resolve against an untrusted project directory.
 #[must_use]
 pub fn docker_program() -> PathBuf {
     if let Some(paths) = std::env::var_os("PATH") {
         for path in std::env::split_paths(&paths) {
+            if !path.is_absolute() {
+                continue;
+            }
             let candidate = path.join(if cfg!(windows) {
                 "docker.exe"
             } else {
@@ -53,7 +57,14 @@ pub fn docker_program() -> PathBuf {
             return path.into();
         }
     }
-    "docker".into()
+    if cfg!(windows) {
+        PathBuf::from(
+            r"C:
+ozhik-missing-docker.exe",
+        )
+    } else {
+        PathBuf::from("/nozhik-missing-docker")
+    }
 }
 struct RawOutput {
     code: i32,

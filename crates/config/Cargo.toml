@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+sha2.workspace = true
 nozhik-core.workspace = true
 nozhik-event-bus.workspace = true
 directories.workspace = true

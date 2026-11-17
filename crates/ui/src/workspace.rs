@@ -71,7 +71,7 @@ pub struct Workspace {
     next_session: u64,
     closing_window: bool,
     closing_project: bool,
-    ai: tokio::sync::watch::Sender<Option<String>>,
+    ai: tokio::sync::watch::Sender<nozhik_ai_completion::lifecycle::Desired>,
     last_title: String,
 }
 
@@ -81,7 +81,7 @@ impl Workspace {
     pub fn new(
         mut launcher: NozhikUi,
         runtime: tokio::runtime::Handle,
-        ai: tokio::sync::watch::Sender<Option<String>>,
+        ai: tokio::sync::watch::Sender<nozhik_ai_completion::lifecycle::Desired>,
     ) -> Self {
         launcher.workspace.managed = true;
         let (output, prepared) = mpsc::channel();
@@ -254,6 +254,7 @@ impl Workspace {
             }
             project.workspace.background = true;
             project.receive_files();
+            project.trust_tick(ctx);
             project.receive_events();
             project.receive_remote(ctx);
             project.deployment_tick();
@@ -270,6 +271,33 @@ impl Workspace {
             }
             project.workspace.background = false;
         }
+    }
+
+    fn sync_ai(&self) {
+        let desired = self
+            .active
+            .and_then(|i| self.projects.get(i))
+            .and_then(|project| {
+                project
+                    .config
+                    .ai_enabled
+                    .then_some(project)
+                    .filter(|project| project.execution_allowed())
+                    .map(|project| (project.config.ai_model.clone(), project.execution_guard()))
+            });
+        self.ai.send_if_modified(|old| {
+            let same = match (old.as_ref(), desired.as_ref()) {
+                (None, None) => true,
+                (Some((a, ga)), Some((b, gb))) => a == b && ga.same_authorization(gb),
+                _ => false,
+            };
+            if same {
+                false
+            } else {
+                *old = desired;
+                true
+            }
+        });
     }
 
     fn update(&mut self, ctx: &Context) {
@@ -304,23 +332,7 @@ impl Workspace {
             .collect();
         self.current().workspace.entries = entries;
         self.current().update_frame(ctx);
-        let desired = self
-            .active
-            .and_then(|i| self.projects.get(i))
-            .and_then(|project| {
-                project
-                    .config
-                    .ai_enabled
-                    .then(|| project.config.ai_model.clone())
-            });
-        self.ai.send_if_modified(|old| {
-            if *old == desired {
-                false
-            } else {
-                *old = desired;
-                true
-            }
-        });
+        self.sync_ai();
         if let Some(error) = self.current().workspace.failed.take() {
             self.close_active(ctx);
             self.current().status = error;

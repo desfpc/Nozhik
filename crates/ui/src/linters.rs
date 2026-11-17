@@ -79,6 +79,7 @@ struct Jump {
 
 /// Per-project linter results and the background run.
 pub struct LinterUi {
+    pub(crate) execution_guard: Option<nozhik_core::ExecutionGuard>,
     running: bool,
     items: Vec<DiagnosticItem>,
     ran: bool,
@@ -94,6 +95,7 @@ impl LinterUi {
     pub(crate) fn new() -> Self {
         let (sender, inbox) = mpsc::channel();
         Self {
+            execution_guard: None,
             running: false,
             items: Vec::new(),
             ran: false,
@@ -152,6 +154,7 @@ impl LinterUi {
         let context = ctx.clone();
         let program = nozhik_docker::docker_program();
         let root = root.to_path_buf();
+        let guard = self.execution_guard.clone();
         std::thread::Builder::new()
             .name("nozhik-linter".into())
             .spawn(move || {
@@ -159,6 +162,13 @@ impl LinterUi {
                 let mut failures = Vec::new();
                 for job in jobs {
                     if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if guard.as_ref().is_some_and(|g| !g.check()) {
+                        failures.push((
+                            job.kind.id().to_owned(),
+                            "Restricted Mode: linter execution is disabled".into(),
+                        ));
                         break;
                     }
                     match nozhik_docker::linter::run(&program, &root, &job, &cancel) {

@@ -59,6 +59,8 @@ pub fn default_shell() -> ShellCommand {
 pub struct SessionOptions {
     /// Native project working directory.
     pub cwd: PathBuf,
+    /// Host-owned execution authorization, checked on the PTY worker.
+    pub execution_guard: Option<nozhik_core::ExecutionGuard>,
     /// Explicit command, or platform shell discovery.
     pub shell: Option<ShellCommand>,
     /// Enable local foreground-agent monitoring for an LLM console.
@@ -74,6 +76,7 @@ impl SessionOptions {
     pub const fn new(cwd: PathBuf) -> Self {
         Self {
             cwd,
+            execution_guard: None,
             shell: None,
             monitor_agent: false,
             rows: 24,
@@ -112,6 +115,15 @@ impl PtyProcess {
         command.cwd(&options.cwd);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        if options
+            .execution_guard
+            .as_ref()
+            .is_some_and(|guard| !guard.check())
+        {
+            return Err(TerminalError::Invalid(
+                "Restricted Mode: terminal execution is disabled".into(),
+            ));
+        }
         let child = pair.slave.spawn_command(command).map_err(error)?;
         drop(pair.slave);
         Ok(Self {

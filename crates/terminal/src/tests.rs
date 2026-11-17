@@ -565,3 +565,27 @@ fn native_selection_osc52_copy_is_gated_and_never_reads_clipboard() -> TestResul
     manager.shutdown();
     Ok(())
 }
+
+#[test]
+fn denied_execution_guard_never_starts_a_pty_child() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut options = options(dir.path());
+    options.execution_guard = Some(nozhik_core::ExecutionGuard::restricted());
+    assert!(PtyProcess::spawn(&options).is_err());
+    let manager = TerminalManager::new(Arc::new(|| {}));
+    let mut manager = manager;
+    let id = manager.create(options)?;
+    wait_for(|| {
+        manager
+            .session(id)
+            .and_then(crate::TerminalSession::snapshot)
+            .is_some_and(|s| matches!(s.state, SessionState::Failed(_)))
+    })?;
+    assert!(
+        !manager
+            .drain()
+            .any(|event| matches!(event, TerminalEvent::Started { .. }))
+    );
+    manager.shutdown();
+    Ok(())
+}

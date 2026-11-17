@@ -1,7 +1,8 @@
 // Standalone std-only process fixture, compiled by the lifecycle test.
 use std::io::{self, BufRead, Write};
 fn main() -> io::Result<()> {
-    std::fs::write("started", std::process::id().to_string())?;
+    let marker = std::env::args_os().nth(2).map(std::path::PathBuf::from).unwrap_or_else(|| "started".into());
+    std::fs::write(&marker, std::process::id().to_string())?;
     let mode = std::env::args().nth(1).unwrap_or_default();
     for line in io::stdin().lock().lines() {
         let line = line?;

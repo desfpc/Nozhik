@@ -109,9 +109,14 @@ impl crate::NozhikUi {
         if self.docker.root.as_ref() != Some(&root) {
             self.docker = DockerUi::default();
             let context = ctx.clone();
-            self.docker.worker = Some(DockerWorker::start(root.clone(), move || {
-                context.request_repaint();
-            }));
+            self.docker.worker = Some(DockerWorker::with_guard(
+                root.clone(),
+                None,
+                self.execution_guard(),
+                move || {
+                    context.request_repaint();
+                },
+            ));
             self.docker.root = Some(root);
         }
         let events: Vec<_> = self
@@ -174,7 +179,8 @@ impl crate::NozhikUi {
                 self.docker_request(Some(Action::Up(service)));
             }
         }
-        let visible = self.left == Some(crate::LeftTool::Docker) || self.docker.details;
+        let visible = self.execution_allowed()
+            && (self.left == Some(crate::LeftTool::Docker) || self.docker.details);
         if visible && self.docker.selected.is_some() {
             let now = Instant::now();
             if self.docker.busy.is_none() && self.docker.next_refresh.is_none_or(|next| now >= next)
@@ -267,9 +273,11 @@ impl crate::NozhikUi {
                         id,
                     }) => {
                         let root = self.docker.root.clone().unwrap_or_default();
+                        let execution_guard = self.execution_guard();
                         let panel = self
                             .terminal
                             .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+                        panel.execution_guard = Some(execution_guard);
                         if let Err(error) = panel.create_docker(&root, program, args, &id, &name) {
                             self.docker.error = Some(error.to_string());
                         } else {

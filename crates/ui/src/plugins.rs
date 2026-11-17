@@ -21,7 +21,10 @@ impl NozhikUi {
                 return;
             };
             if ui.button("Rescan installed plugins").clicked()
-                && let Err(error) = manager.scan(self.project.as_ref().map(|p| p.root_path.clone()))
+                && let Err(error) = manager.scan_guarded(
+                    self.project.as_ref().map(|p| p.root_path.clone()),
+                    self.execution_guard(),
+                )
             {
                 plugin_errors.push(error.to_string());
             }

@@ -43,6 +43,9 @@ pub fn discover() -> Option<(PathBuf, Vec<String>)> {
         ("intelephense", vec!["--stdio".into()]),
     ] {
         for directory in std::env::split_paths(&paths) {
+            if !directory.is_absolute() {
+                continue;
+            }
             for suffix in if cfg!(windows) {
                 &[".exe", ".cmd", ".bat"][..]
             } else {

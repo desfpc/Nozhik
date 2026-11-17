@@ -9,14 +9,14 @@
 | nozhik-buffer | Rope, координаты, курсоры, история, поиск | core, event_bus |
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
-| nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror, zeroize, tempfile, keyring, serde_json |
-| nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
-| nozhik-language-support | PHP/CSS/JavaScript/Go/YAML incremental syntax, local formatting, PHP/CSS/JavaScript/Go project indexes, PHP stdio LSP | tree-sitter/php/css/javascript/go/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
-| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
-| nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
+| nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | core, git2, thiserror, zeroize, tempfile, keyring, serde_json |
+| nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | core, event_bus, tokio, serde/serde_json, semver, directories |
+| nozhik-language-support | PHP/CSS/JavaScript/Go/YAML incremental syntax, local formatting, PHP/CSS/JavaScript/Go project indexes, PHP stdio LSP | core, tree-sitter/php/css/javascript/go/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
+| nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | core, tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
+| nozhik-terminal | Native PTY, VT100 grid/scrollback, background sessions and lifecycle | core, portable-pty, vt100/vte, parking_lot, nix (Unix), thiserror |
 | nozhik-remote-ssh | SSHv2, protected credentials, host trust, SFTP, loopback forwarding | russh, russh-sftp, keyring, zeroize, tokio, serde/serde_json, directories, tempfile |
 | nozhik-database | SQL pools, Redis structures, typed results, catalog metadata, background actors and owned SSH tunnels | redis, sqlx, reqwest, tokio/tokio-util, remote_ssh, keyring, serde/serde_json, tempfile |
-| nozhik-ai-completion | Local Ollama FIM, cancellable generation, model inspection/download | reqwest, tokio, serde/serde_json, thiserror |
+| nozhik-ai-completion | Local Ollama FIM, cancellable generation, model inspection/download | core, reqwest, tokio, serde/serde_json, thiserror |
 | nozhik-ui | UI shell, documents, project/Git integration, editor view, search | core, buffer, config, event_bus, fs_model, vcs, plugin_host, language_support, terminal, remote_ssh, database |
 | app | Инициализация, жизненный цикл, eframe | ui, config, event_bus, ai_completion |
 
@@ -2493,3 +2493,37 @@ preview_clipboard перед рисованием Markdown/OpenAPI открыв�
 Текст таблиц Markdown также участвует в label selection. Общая команда Copy для
 GUI направляется в отображаемое выделение; Cut/Paste не изменяют скрытый исходник.
 Лицензирование/обновления по-прежнему не реализованы этим изменением.
+
+## Project execution trust — v0.1.71
+
+`core::ExecutionGuard` передаёт отзываемую авторизацию без зависимости core от
+конфигурации или файловой системы. `config::project_trust::ProjectTrust` владеет
+фоновым монитором, канонизацией, SHA-256 (sha2), подтверждённым снимком и атомарным
+хранилищем в OS config/project-trust вне проекта. Подтверждение связывается со
+снимком и поколением отзыва; устаревший запрос не включает исполнение. При закрытии
+сессии все выданные guards отзываются, сохранённый grant остаётся для повторного
+открытия неизменённой папки. Несовпадение входов удаляет grant.
+
+UI читает только состояние в памяти. `trust_tick` устанавливает guards до
+обработки действий, обновляет неактивные проекты и при отзыве отменяет языковые,
+терминальные, Docker, linter и AI службы, сохраняя документы. Подтверждение
+заблокировано во время сохранения настроек. Каждый новый запуск проверяет
+`guard.check()` на worker; для работающих служб используется дешёвый `current()`.
+Ollama получает пару model/guard через watch, проверяет guard в blocking worker
+перед spawn, а смена проекта заменяет авторизацию даже при одинаковой модели.
+
+Plugin host по умолчанию restricted. Только `scan_guarded` устанавливает
+разрешение; обычный scan его сбрасывает. Декларативные вклады можно читать без
+запуска, exec activation повторно проверяет актуальный plugin.json. Локальный
+синтаксис/индексы/форматирование не требуют внешнего сервера. VCS read-only задачи
+остаются доступны, остальные UI-запросы проходят guarded очередь. Самостоятельные
+библиотечные API с явно доверенными входами сохраняют unrestricted варианты;
+проектный UI их для запуска инструментов не использует.
+
+Проверяются настройки, плагины, известные host tools, файлы из аргументов,
+вложенные Compose/Dockerfile и package manifests, Git config/hooks, включая
+worktree/common-dir. Ссылки в путях конфигурации и Git includes fail closed.
+Монитор кэширует хеши по файловой идентичности/ctime/mtime/size/mode; подтверждение
+и непосредственная проверка запуска читают байты заново. Лимиты и границы модели
+доверия описаны в README: это защита от автоматического исполнения до согласия,
+а не ОС-песочница или контроль произвольных транзитивных зависимостей.

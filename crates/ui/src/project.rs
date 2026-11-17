@@ -309,8 +309,21 @@ impl NozhikUi {
             .project
             .as_ref()
             .is_none_or(|p| p.root_path != tree.root_path)
+        {
+            // Revoke the previous scope before any queued Git authentication/action
+            // can observe the newly opened repository.
+            self.trust = crate::trust::TrustUi::default();
+            self.vcs.execution_guard = Some(nozhik_core::ExecutionGuard::restricted());
+        }
+        if self
+            .project
+            .as_ref()
+            .is_none_or(|p| p.root_path != tree.root_path)
             && let Some(manager) = &self.plugins
-            && let Err(error) = manager.scan(Some(tree.root_path.clone()))
+            && let Err(error) = manager.scan_guarded(
+                Some(tree.root_path.clone()),
+                nozhik_core::ExecutionGuard::restricted(),
+            )
         {
             self.note_status(
                 "plugins",

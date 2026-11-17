@@ -32,6 +32,7 @@ enum DeploymentAvailability {
     Busy,
 }
 pub struct VcsPanel {
+    pub(crate) execution_guard: Option<nozhik_core::ExecutionGuard>,
     pub open_branches: bool,
     worker: Vcs,
     git_settings: git_settings::SettingsState,
@@ -102,6 +103,7 @@ impl Default for VcsPanel {
         Self {
             open_branches: false,
             worker: Vcs::start(),
+            execution_guard: None,
             git_settings: git_settings::SettingsState::default(),
             clone_auth: None,
             project: None,
@@ -323,7 +325,14 @@ impl VcsPanel {
         if matches!(&task, Task::Fetch | Task::Pull | Task::PullPush) {
             self.fetch_request = id;
         }
-        if self.worker.send(self.generation, id, task) {
+        let guard = if mutation {
+            self.execution_guard
+                .clone()
+                .unwrap_or_else(nozhik_core::ExecutionGuard::unrestricted)
+        } else {
+            nozhik_core::ExecutionGuard::unrestricted()
+        };
+        if self.worker.send_guarded(self.generation, id, task, guard) {
             if mutation {
                 self.mutations.insert(id);
             }

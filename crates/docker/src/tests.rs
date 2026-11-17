@@ -241,3 +241,34 @@ fn worker_discovery_revision_errors_and_cancellation()
     );
     Ok(())
 }
+
+#[test]
+fn restricted_worker_never_invokes_the_docker_fixture()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (dir, program) = fixture()?;
+    let root = dir.path().canonicalize()?;
+    let worker = DockerWorker::with_guard(
+        root.clone(),
+        Some(program),
+        nozhik_core::ExecutionGuard::restricted(),
+        || {},
+    );
+    assert!(worker.send(Command::Refresh {
+        token: 77,
+        files: vec![root.join("compose.yaml")]
+    }));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut denied = false;
+    while !denied && std::time::Instant::now() < deadline {
+        for event in worker.drain() {
+            if let Event::Completed(77, result) = event {
+                assert!(result.is_err());
+                denied = true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(denied);
+    assert!(!root.join("mock-commands.log").exists());
+    Ok(())
+}

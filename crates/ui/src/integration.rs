@@ -500,9 +500,11 @@ impl NozhikUi {
                 "ui.new_terminal" => {
                     self.bottom = Some(crate::terminal_panel::TERMINAL_LABEL);
                     let root = self.project.as_ref().map(|p| p.root_path.clone());
+                    let execution_guard = self.execution_guard();
                     let panel = self
                         .terminal
                         .get_or_insert_with(|| crate::terminal_panel::TerminalPanel::new(ctx));
+                    panel.execution_guard = Some(execution_guard);
                     if let Some(root) = root
                         && let Some(e) = panel.create(&root)
                     {

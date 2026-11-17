@@ -1,5 +1,9 @@
 //! Application-scoped local service ownership and bounded model cleanup.
 use crate::{DEFAULT_ENDPOINT, Ollama};
+use nozhik_core::ExecutionGuard;
+
+/// Desired model and the project authorization that requested it.
+pub type Desired = Option<(String, ExecutionGuard)>;
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
     process::{Child, Command},
@@ -10,7 +14,7 @@ use tokio::{
 
 /// Owns the background lifecycle task. Call shutdown before stopping the runtime.
 pub struct Lifecycle {
-    settings: watch::Sender<Option<String>>,
+    settings: watch::Sender<Desired>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
 }
@@ -31,7 +35,8 @@ impl Lifecycle {
         endpoint: String,
         executables: Vec<PathBuf>,
     ) -> Self {
-        let (settings, mut changes) = watch::channel(model);
+        let (settings, mut changes) =
+            watch::channel(model.map(|model| (model, ExecutionGuard::unrestricted())));
         let (stop, mut stopping) = oneshot::channel();
         let task = runtime.spawn(async move {
             let Ok(client) = Ollama::new(&endpoint) else {
@@ -43,9 +48,14 @@ impl Lifecycle {
                 executables,
                 child: None,
                 model: None,
+                guard: ExecutionGuard::restricted(),
             };
             loop {
-                let model = changes.borrow_and_update().clone();
+                let desired = changes.borrow_and_update().clone();
+                let model = desired.map(|(model, guard)| {
+                    session.guard = guard;
+                    model
+                });
                 tokio::select! {
                     biased;
                     _ = &mut stopping => break,
@@ -67,7 +77,7 @@ impl Lifecycle {
     }
     /// Settings updates are coalesced; None disables AI and releases owned resources.
     #[must_use]
-    pub fn controller(&self) -> watch::Sender<Option<String>> {
+    pub fn controller(&self) -> watch::Sender<Desired> {
         self.settings.clone()
     }
     /// Cancels startup/preload, unloads the last selected model, then kills/reaps only our server.
@@ -92,13 +102,14 @@ struct Session {
     executables: Vec<PathBuf>,
     child: Option<Child>,
     model: Option<String>,
+    guard: ExecutionGuard,
 }
 impl Session {
     async fn apply(&mut self, model: Option<String>) {
         if self.model != model {
             self.release_model().await;
         }
-        let Some(model) = model else {
+        let Some(model) = model.filter(|_| self.guard.current()) else {
             self.release().await;
             return;
         };
@@ -123,6 +134,13 @@ impl Session {
             let _ = terminate_tree(&mut child).await;
         }
         for path in &self.executables {
+            let guard = self.guard.clone();
+            if !tokio::task::spawn_blocking(move || guard.check())
+                .await
+                .unwrap_or(false)
+            {
+                return false;
+            }
             let mut command = Command::new(path);
             #[cfg(unix)]
             {
@@ -216,7 +234,22 @@ fn canonical(model: &str) -> String {
     }
 }
 fn executable_candidates() -> Vec<PathBuf> {
-    let paths = vec![PathBuf::from("ollama")];
+    let paths = std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .filter(|path| path.is_absolute())
+                .map(|path| {
+                    path.join(if cfg!(windows) {
+                        "ollama.exe"
+                    } else {
+                        "ollama"
+                    })
+                })
+                .filter(|path| path.is_file())
+                .take(1)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     #[cfg(target_os = "macos")]
     let paths = {
         let mut paths = paths;
@@ -321,6 +354,7 @@ mod tests {
             executables: Vec::new(),
             child: None,
             model: None,
+            guard: ExecutionGuard::unrestricted(),
         };
         session.apply(Some("one".into())).await;
         session.apply(Some("two".into())).await;
@@ -363,7 +397,12 @@ mod tests {
             executables: vec![executable],
             child: None,
             model: None,
+            guard: ExecutionGuard::unrestricted(),
         };
+        session.guard = ExecutionGuard::restricted();
+        assert!(!session.start_service().await);
+        assert!(session.child.is_none());
+        session.guard = ExecutionGuard::unrestricted();
         // Exercise real owned subprocess creation/reaping without touching a real Ollama install.
         assert!(session.start_service().await);
         assert!(
@@ -413,7 +452,9 @@ mod tests {
         let lifecycle = Lifecycle::spawn(&Handle::current(), None, endpoint, vec![executable]);
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!marker.exists());
-        lifecycle.controller().send_replace(Some("one".into()));
+        lifecycle
+            .controller()
+            .send_replace(Some(("one".into(), ExecutionGuard::unrestricted())));
         tokio::time::timeout(Duration::from_secs(3), async {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;

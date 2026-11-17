@@ -182,6 +182,7 @@ pub struct Reply {
     pub result: Result<Outcome, VcsError>,
 }
 struct Request {
+    guard: nozhik_core::ExecutionGuard,
     generation: u64,
     id: u64,
     task: Task,
@@ -213,7 +214,13 @@ impl Vcs {
                 let reply = Reply {
                     generation: request.generation,
                     id: request.id,
-                    result: worker.execute(request.task),
+                    result: if request.guard.check() {
+                        worker.execute(request.task)
+                    } else {
+                        Err(VcsError::Invalid(
+                            "Restricted Mode: Git execution is disabled".into(),
+                        ))
+                    },
                 };
                 if results.send(reply).is_err() {
                     break;
@@ -236,8 +243,25 @@ impl Vcs {
     /// Queues a task. False means the worker has stopped.
     #[must_use]
     pub fn send(&self, generation: u64, id: u64, task: Task) -> bool {
+        self.send_guarded(
+            generation,
+            id,
+            task,
+            nozhik_core::ExecutionGuard::unrestricted(),
+        )
+    }
+    /// Queues a task with host authorization checked on the Git worker.
+    #[must_use]
+    pub fn send_guarded(
+        &self,
+        generation: u64,
+        id: u64,
+        task: Task,
+        guard: nozhik_core::ExecutionGuard,
+    ) -> bool {
         self.requests
             .send(Request {
+                guard,
                 generation,
                 id,
                 task,
@@ -254,6 +278,25 @@ impl Vcs {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn revoked_request_is_rejected_before_git_execution() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let vcs = Vcs::start();
+        assert!(vcs.send_guarded(
+            12,
+            3,
+            Task::Fetch,
+            nozhik_core::ExecutionGuard::restricted()
+        ));
+        let reply = vcs
+            .replies
+            .recv_timeout(std::time::Duration::from_secs(5))?;
+        assert_eq!((reply.generation, reply.id), (12, 3));
+        assert!(
+            matches!(reply.result, Err(VcsError::Invalid(message)) if message.contains("Restricted Mode"))
+        );
+        Ok(())
+    }
     #[test]
     fn worker_preserves_request_identity_and_wakes_ui() -> Result<(), Box<dyn std::error::Error>> {
         let first = tempfile::tempdir()?;

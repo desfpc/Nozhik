@@ -60,7 +60,15 @@ fn wait(
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-fn fixture() -> Result<(tempfile::TempDir, NozhikUi, egui::Context), Box<dyn std::error::Error>> {
+fn fixture() -> Result<
+    (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        NozhikUi,
+        egui::Context,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().canonicalize()?;
     let program = root.join(format!("mock-docker{}", std::env::consts::EXE_SUFFIX));
@@ -104,17 +112,39 @@ fn fixture() -> Result<(tempfile::TempDir, NozhikUi, egui::Context), Box<dyn std
         open: true,
         buffer: nozhik_buffer::TextBuffer::load_from_str(nozhik_core::BufferId(500), source),
     });
+    let storage = tempfile::tempdir()?;
+    let trust = nozhik_config::project_trust::ProjectTrust::with_storage(
+        root.clone(),
+        storage.path().join("trust"),
+        vec![program.clone()],
+        || {},
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !trust.status().ready {
+        if Instant::now() >= deadline {
+            return Err("Trust inspection timeout".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    trust.approve(trust.status().fingerprint.ok_or("Trust candidate")?);
+    while !trust.allowed() {
+        if Instant::now() >= deadline {
+            return Err("Trust approval timeout".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    shell.trust.session = Some(trust);
     shell.active = Some(0);
     shell.left = Some(LeftTool::Docker);
     shell.docker.root = Some(root.clone());
     shell.docker.worker = Some(DockerWorker::with_program(root, Some(program), || {}));
     let ctx = egui::Context::default();
     crate::theme::apply(&ctx);
-    Ok((dir, shell, ctx))
+    Ok((dir, storage, shell, ctx))
 }
 #[test]
 fn docker_gutter_actions_dirty_gate_controls_logs_and_terminal_tab() -> TestResult {
-    let (dir, mut shell, ctx) = fixture()?;
+    let (dir, _trust_storage, mut shell, ctx) = fixture()?;
     wait(&mut shell, &ctx, |s| {
         s.docker.snapshot.is_some() && s.editor.docker_rects.len() == 2
     })?;

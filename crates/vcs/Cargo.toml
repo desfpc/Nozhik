@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+nozhik-core.workspace = true
 zeroize.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

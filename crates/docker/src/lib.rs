@@ -176,6 +176,21 @@ impl DockerWorker {
         program: Option<PathBuf>,
         wake: impl Fn() + Send + 'static,
     ) -> Self {
+        Self::with_guard(
+            root,
+            program,
+            nozhik_core::ExecutionGuard::unrestricted(),
+            wake,
+        )
+    }
+    /// Starts with host authorization, rechecked for every external Docker operation.
+    #[must_use]
+    pub fn with_guard(
+        root: PathBuf,
+        program: Option<PathBuf>,
+        guard: nozhik_core::ExecutionGuard,
+        wake: impl Fn() + Send + 'static,
+    ) -> Self {
         let (input, commands) = mpsc::sync_channel(32);
         let (output, events) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -186,6 +201,7 @@ impl DockerWorker {
             worker(
                 &root,
                 program,
+                &guard,
                 &commands,
                 &output,
                 &stopping,
@@ -220,9 +236,14 @@ impl Drop for DockerWorker {
         self.cancel.store(true, Ordering::Relaxed);
     }
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Worker owns command, cancellation, authorization and wake channels"
+)]
 fn worker(
     root: &std::path::Path,
     program: Option<PathBuf>,
+    guard: &nozhik_core::ExecutionGuard,
     input: &mpsc::Receiver<Command>,
     output: &mpsc::Sender<Event>,
     stop: &Arc<AtomicBool>,
@@ -265,6 +286,20 @@ fn worker(
             break;
         }
         cancel.store(false, Ordering::Relaxed);
+        if matches!(&command, Command::Refresh { .. } | Command::Act { .. }) && !guard.check() {
+            let token = match &command {
+                Command::Refresh { token, .. } | Command::Act { token, .. } => *token,
+                _ => 0,
+            };
+            let _sent = output.send(Event::Completed(
+                token,
+                Err(Error::Message(
+                    "Restricted Mode: Docker execution is disabled".into(),
+                )),
+            ));
+            wake();
+            continue;
+        }
         let event = match command {
             Command::Discover => {
                 discover(&mut known, &mut first);

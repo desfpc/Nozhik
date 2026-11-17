@@ -76,24 +76,43 @@ impl PluginManager {
     /// Returns thread/runtime construction failures.
     pub fn start(bus: EventBus) -> Result<Self> {
         let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".nozhik"));
-        Self::with_paths(
+        Self::with_paths_guarded(
             bus,
             home.as_ref()
                 .map(|p| p.join("plugins"))
                 .into_iter()
                 .collect(),
             home.map(|p| p.join("keymap.json")),
+            nozhik_core::ExecutionGuard::restricted(),
         )
     }
 
     /// Starts a host using explicit global roots and keymap path (useful for embedders/tests).
-    /// Project roots are supplied later with [`Self::scan`].
+    /// External execution is denied by default, including later [`Self::scan`] calls.
+    /// Use [`Self::scan_guarded`] after explicit host authorization.
     /// # Errors
     /// Returns thread/runtime construction failures.
     pub fn with_paths(
         bus: EventBus,
         roots: Vec<PathBuf>,
         keymap_path: Option<PathBuf>,
+    ) -> Result<Self> {
+        Self::with_paths_guarded(
+            bus,
+            roots,
+            keymap_path,
+            nozhik_core::ExecutionGuard::restricted(),
+        )
+    }
+
+    /// Starts with a revocable host-owned execution guard. Declarative plugins remain available.
+    /// # Errors
+    /// Returns thread/runtime construction failures.
+    pub fn with_paths_guarded(
+        bus: EventBus,
+        roots: Vec<PathBuf>,
+        keymap_path: Option<PathBuf>,
+        guard: nozhik_core::ExecutionGuard,
     ) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -106,6 +125,7 @@ impl PluginManager {
         let keymap = KeymapRegistry::default();
         keymap.replace(KeymapConfig::default())?;
         let mut worker = Worker {
+            guard,
             roots,
             keymap_path,
             keymap_source: None,
@@ -140,6 +160,19 @@ impl PluginManager {
             actions,
             keymap,
         })
+    }
+
+    /// Changes project and authorization together, stopping old sessions before scanning.
+    /// # Errors
+    /// Returns a stopped/full request queue.
+    pub fn scan_guarded(
+        &self,
+        project: Option<PathBuf>,
+        guard: nozhik_core::ExecutionGuard,
+    ) -> Result<()> {
+        self.requests
+            .try_send(Request::ScanGuarded(project, guard))
+            .map_err(|_| Error::Queue)
     }
 
     /// Subscribe to lifecycle and keymap changes for event-driven UI wakeup.
@@ -196,6 +229,7 @@ enum KeymapSource {
 }
 
 struct Worker {
+    guard: nozhik_core::ExecutionGuard,
     roots: Vec<PathBuf>,
     keymap_path: Option<PathBuf>,
     keymap_source: Option<KeymapSource>,
@@ -222,7 +256,8 @@ impl Worker {
                 request = requests.recv() => {
                     let Some(request) = request else { break; };
                     match request {
-                        Request::Scan(project) => self.scan(project.as_deref()).await,
+                        Request::Scan(project) => { self.guard = nozhik_core::ExecutionGuard::restricted(); self.scan(project.as_deref()).await; },
+                        Request::ScanGuarded(project, guard) => { self.guard = guard; self.scan(project.as_deref()).await; },
                         Request::Toggle { id, enabled } => {
                             if enabled {
                                 if let Err(error) = self.enable(&id) { self.fail(&id, error.to_string()).await; }
@@ -258,6 +293,11 @@ impl Worker {
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = timer.tick() => {
+                    if !self.sessions.is_empty() && !self.guard.current() {
+                        for (_, session) in std::mem::take(&mut self.sessions) { session.stop().await; }
+                        for plugin in self.plugins.values_mut().filter(|p| p.manifest.executable.is_some()) { plugin.status = PluginStatus::Enabled; }
+                        self.publish();
+                    }
                     let old_source = self.keymap_source.clone();
                     let old_diagnostics = self.snapshot.diagnostics.len();
                     self.reload_keymap();
@@ -494,9 +534,27 @@ impl Worker {
                 return Err(Error::Invalid(format!("plugin disabled: {id}")));
             }
             if plugin.status == PluginStatus::Active {
+                if plugin.manifest.executable.is_some() && !self.guard.check() {
+                    return Err(Error::Invalid(
+                        "Restricted Mode: executable authorization was revoked".into(),
+                    ));
+                }
                 continue;
             }
             if plugin.manifest.executable.is_some() {
+                if !self.guard.check() {
+                    return Err(Error::Invalid(
+                        "Restricted Mode: trust the project before running plugins".into(),
+                    ));
+                }
+                let current = PluginManifest::parse(&std::fs::read_to_string(
+                    plugin.directory.join("plugin.json"),
+                )?)?;
+                if serde_json::to_value(&current)? != serde_json::to_value(&plugin.manifest)? {
+                    return Err(Error::Invalid(
+                        "Plugin manifest changed; review and rescan".into(),
+                    ));
+                }
                 let session = Session::start(&plugin.directory, &plugin.manifest).await?;
                 self.sessions.insert(id.clone(), session);
             }

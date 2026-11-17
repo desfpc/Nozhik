@@ -35,6 +35,10 @@ pub struct SettingsDialog {
     pending: usize,
 }
 impl SettingsDialog {
+    pub const fn saving(&self) -> bool {
+        self.pending != 0
+    }
+
     /// AI service and SFTP deployment settings failures.
     pub(crate) fn incidents(&self) -> Vec<crate::problems::Incident> {
         let mut incidents = Vec::new();
@@ -600,6 +604,9 @@ impl crate::NozhikUi {
         if config != self.config {
             match self.settings.replace(config.clone()) {
                 Ok(()) => {
+                    if let Some(session) = &self.trust.session {
+                        session.revoke();
+                    }
                     self.config = config.clone();
                     if self
                         .settings_dialog

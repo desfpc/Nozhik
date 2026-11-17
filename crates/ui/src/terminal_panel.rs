@@ -13,6 +13,7 @@ use std::{
 pub const TERMINAL_LABEL: &str = "⌘ Terminal";
 pub struct TerminalPanel {
     manager: TerminalManager,
+    pub(crate) execution_guard: Option<nozhik_core::ExecutionGuard>,
     context: egui::Context,
     llm: bool,
     active: Option<TerminalSessionId>,
@@ -72,6 +73,7 @@ impl TerminalPanel {
     pub fn new(ctx: &egui::Context) -> Self {
         let ctx = ctx.clone();
         Self {
+            execution_guard: None,
             context: ctx.clone(),
             llm: false,
             manager: TerminalManager::new(std::sync::Arc::new(move || ctx.request_repaint())),
@@ -310,11 +312,12 @@ impl TerminalPanel {
 
     fn spawn_docker(
         &mut self,
-        options: SessionOptions,
+        mut options: SessionOptions,
         container_id: &str,
         name: &str,
         label: &str,
     ) -> nozhik_terminal::Result<()> {
+        options.execution_guard.clone_from(&self.execution_guard);
         let id = self.manager.create(options)?;
         self.labels.insert(id, label.to_owned());
         self.docker
@@ -342,6 +345,7 @@ impl TerminalPanel {
     pub(crate) fn create(&mut self, root: &Path) -> Option<String> {
         let mut options = SessionOptions::new(root.into());
         options.monitor_agent = self.llm;
+        options.execution_guard.clone_from(&self.execution_guard);
         match self.manager.create(options) {
             Ok(id) => {
                 self.active = Some(id);

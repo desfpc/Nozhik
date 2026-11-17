@@ -251,8 +251,12 @@ impl crate::NozhikUi {
                         move || index_ctx.request_repaint(),
                     ),
                 );
-                self.language.service =
-                    Some(LanguageService::start(root, move || ctx.request_repaint()));
+                self.language.service = Some(LanguageService::with_guard(
+                    root,
+                    None,
+                    self.execution_guard(),
+                    move || ctx.request_repaint(),
+                ));
             }
         }
         self.language.enabled_languages = Some(self.config.enabled_languages.clone());

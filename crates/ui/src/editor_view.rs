@@ -73,6 +73,59 @@ impl TextEditorView {
         if response.clicked() && enabled {
             response.request_focus();
         }
+        let mut menu_action = None;
+        response.context_menu(|ui| {
+            let selected = buffer
+                .cursors()
+                .as_slice()
+                .iter()
+                .any(|cursor| cursor.anchor != cursor.head);
+            for (label, available) in [
+                ("Copy", selected),
+                ("Cut", selected),
+                ("Paste", true),
+                ("Delete", selected),
+            ] {
+                if ui
+                    .add_enabled(enabled && available, egui::Button::new(label))
+                    .clicked()
+                {
+                    menu_action = Some(label);
+                    ui.close();
+                }
+            }
+        });
+        if let Some(action) = menu_action {
+            response.request_focus();
+            match action {
+                "Copy" | "Cut" => {
+                    let text = buffer
+                        .cursors()
+                        .as_slice()
+                        .iter()
+                        .map(|cursor| {
+                            buffer
+                                .rope()
+                                .byte_slice(
+                                    cursor.anchor.byte_offset.min(cursor.head.byte_offset)
+                                        ..cursor.anchor.byte_offset.max(cursor.head.byte_offset),
+                                )
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ui.ctx().copy_text(text);
+                    if action == "Cut" {
+                        Self::replace(buffer, "", None)?;
+                    }
+                }
+                "Paste" => ui
+                    .ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                "Delete" => Self::replace(buffer, "", None)?,
+                _ => {}
+            }
+        }
         self.ai
             .synchronize(buffer, ui.ctx(), enabled && response.has_focus());
         if ui.input(|i| i.pointer.any_pressed()) {
@@ -2434,6 +2487,110 @@ mod tests {
             "wheel must scroll viewport"
         );
         assert_eq!(buffer.rope().to_string(), source);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises real context-menu clicks and buffer undo for standard clipboard operations"
+    )]
+    fn context_menu_keeps_selection_and_edits_with_undo() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for action in ["Copy", "Cut", "Delete", "Paste"] {
+            let mut editor = TextEditorView::default();
+            let ctx = egui::Context::default();
+            let mut buffer = TextBuffer::load_from_str(BufferId(190), "Alpha βeta");
+            let none = egui::Modifiers::NONE;
+            mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.0)?;
+            let rendered = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, 0.1)?;
+            let point = text_position(&rendered, "Alpha βeta", 3).ok_or("source text")?;
+            let anchor = buffer.position_at(0)?;
+            let head = buffer.position_at(5)?;
+            buffer.set_cursors(vec![Cursor { anchor, head }])?;
+            let mut time = 1.0;
+            for pressed in [true, false] {
+                mouse_frame(
+                    &mut editor,
+                    &mut buffer,
+                    &ctx,
+                    vec![
+                        Event::PointerMoved(point),
+                        Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: none,
+                        },
+                    ],
+                    none,
+                    time,
+                )?;
+                time += 0.1;
+            }
+            let menu = mouse_frame(&mut editor, &mut buffer, &ctx, vec![], none, time)?;
+            for label in ["Copy", "Cut", "Paste", "Delete"] {
+                assert!(text_position(&menu, label, 1).is_some(), "missing {label}");
+            }
+            assert_eq!(buffer.cursors().as_slice()[0], Cursor { anchor, head });
+            let target = text_position(&menu, action, 1).ok_or("menu action")?;
+            mouse_frame(
+                &mut editor,
+                &mut buffer,
+                &ctx,
+                vec![Event::PointerMoved(target)],
+                none,
+                2.0,
+            )?;
+            mouse_frame(
+                &mut editor,
+                &mut buffer,
+                &ctx,
+                pointer(target, true, none),
+                none,
+                2.1,
+            )?;
+            let output = mouse_frame(
+                &mut editor,
+                &mut buffer,
+                &ctx,
+                pointer(target, false, none),
+                none,
+                2.2,
+            )?;
+            match action {
+                "Copy" | "Cut" => assert!(output.platform_output.commands.iter().any(|command| {
+                    matches!(command, egui::OutputCommand::CopyText(text) if text == "Alpha")
+                })),
+                "Paste" => {
+                    assert!(output.viewport_output.values().any(|viewport| {
+                        viewport
+                            .commands
+                            .iter()
+                            .any(|command| matches!(command, egui::ViewportCommand::RequestPaste))
+                    }));
+                    mouse_frame(
+                        &mut editor,
+                        &mut buffer,
+                        &ctx,
+                        vec![Event::Paste("Ж🦀".into())],
+                        none,
+                        2.3,
+                    )?;
+                }
+                _ => {}
+            }
+            let expected = match action {
+                "Cut" | "Delete" => " βeta",
+                "Paste" => "Ж🦀 βeta",
+                _ => "Alpha βeta",
+            };
+            assert_eq!(buffer.rope().to_string(), expected);
+            if action != "Copy" {
+                buffer.undo()?;
+                assert_eq!(buffer.rope().to_string(), "Alpha βeta");
+            }
+        }
         Ok(())
     }
 

@@ -27,6 +27,7 @@ mod markdown;
 mod menu_bar;
 mod openapi;
 mod plugins;
+mod preview_clipboard;
 mod problems;
 mod project;
 mod project_badge;

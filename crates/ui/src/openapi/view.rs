@@ -20,6 +20,7 @@ pub fn show(
         ctx.request_repaint_after(Duration::from_millis(100));
     }
     let mut authorize = false;
+    crate::preview_clipboard::menu(ui, path, enabled);
     egui::ScrollArea::vertical()
         .id_salt(("openapi-gui", path.to_path_buf()))
         .auto_shrink([false, false])

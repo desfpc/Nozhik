@@ -1,4 +1,4 @@
-Nozhik Source-Available License 1.1
+Nozhik Source-Available License 1.2
 
 Copyright (c) 2026 Sergei Peshalov. All rights reserved.
 
@@ -40,7 +40,25 @@ Sharing source code as allowed in section 2 is permitted. These restrictions do
 not restrict rights independently granted by third-party licenses or mandatory
 applicable law.
 
-4. Purchased official builds
+4. Paid rights for official builds
+
+The paid offering is a license to use official compiled builds and access any
+binary delivery and update services expressly included in the order. Copyright
+and ownership of the Software are not sold or assigned. A license key records
+and enables the purchased entitlement; delivery of a key alone does not replace
+any promised delivery of builds or services. Free self-build rights in section 2
+remain available without a purchase.
+
+Before ordering, purchasers are required to install and evaluate a self-built
+copy using the README instructions and check the published requirements and
+limitations. This evaluation does not waive mandatory consumer rights, excuse
+non-delivery or defects in the paid offering, or constitute consent to immediate
+digital delivery. No proof of evaluation is required to exercise statutory rights.
+
+Payment is consideration for the specified rights and services, not a donation
+or a non-refundable contribution. Automatic updates are included only if
+expressly offered and available in the purchased channel. Neither the public
+source code nor this license alone promises an operating update service.
 
 A purchase of an official build grants one individual user a non-exclusive,
 perpetual right to use that build for personal, professional or commercial work,
@@ -118,3 +136,21 @@ ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE. NOTHING
 HERE EXCLUDES RIGHTS OR LIABILITY THAT CANNOT LAWFULLY BE EXCLUDED, INCLUDING
 MANDATORY CONSUMER RIGHTS.
+
+9. Refunds and mandatory rights
+
+After proper delivery, no additional voluntary change-of-mind refund is offered
+unless stated in the order or required by the seller of record. A statutory
+withdrawal right may be lost only where applicable law permits, after the
+required separate express consent to immediate performance, acknowledgement of
+that loss, contract confirmation and actual start of the relevant performance.
+Receipt or activation of a key alone does not establish all these conditions.
+For continuing services, the rules applicable to those services apply; issuance
+of a key does not mean that all update services have been fully performed.
+
+Nothing in this license excludes mandatory rights concerning non-delivery,
+non-conformity, remedies, refunds, withdrawal or lawful payment disputes. The
+applicable seller-of-record or store terms may grant additional rights. Earlier
+purchases retain their agreed terms unless the purchaser validly agrees otherwise.
+A valid refund may end only the paid entitlement refunded; it does not withdraw
+the independent self-build permissions in section 2 or affect the user's data.

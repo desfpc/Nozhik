@@ -225,6 +225,14 @@ fn candidate(path: &Path, known: bool) -> bool {
             .is_some_and(|value| value.eq_ignore_ascii_case("json"))
 }
 
+impl OpenApiUi {
+    pub(crate) fn is_preview(&self, path: &Path) -> bool {
+        self.files
+            .get(path)
+            .is_some_and(|state| state.mode == Mode::Gui)
+    }
+}
+
 impl crate::NozhikUi {
     /// Draws the JSON/GUI switch for an `OpenAPI` document.
     ///

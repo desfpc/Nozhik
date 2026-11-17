@@ -58,6 +58,16 @@ fn is_markdown_path(path: &Path) -> bool {
         == Some(nozhik_config::languages::LanguageId::Markdown)
 }
 
+impl MarkdownUi {
+    pub(crate) fn is_preview(&self, path: &Path) -> bool {
+        is_markdown_path(path)
+            && self
+                .previews
+                .get(path)
+                .is_some_and(|preview| preview.mode == Mode::Gui)
+    }
+}
+
 impl crate::NozhikUi {
     /// Draws the Text/GUI switch for a Markdown document.
     ///
@@ -537,6 +547,101 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises pointer selection, native Copy and popup delivery on four rendered surfaces"
+    )]
+    fn rendered_selection_copies_through_keyboard_native_menu_and_context_menu()
+    -> Result<(), String> {
+        let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+        for (file, source, token) in [
+            ("plain.md", "Alpha **Bravo** Charlie", "Alpha Bravo Charlie"),
+            ("table.md", "| Name |\n| --- |\n| Alpha |", "Alpha"),
+            ("code.md", "```text\nAlpha\n```", "Alpha"),
+            (
+                "link-table.md",
+                "| Name |\n| --- |\n| [Alpha](https://example.com) |",
+                "Alpha",
+            ),
+            (
+                "openapi.json",
+                r#"{"openapi":"3.0.3","info":{"title":"Alpha","version":"1"},"paths":{}}"#,
+                "Alpha",
+            ),
+        ] {
+            let mut session = GuiSession::open(&dir.path().join(file), source)?;
+            let size = vec2(900.0, 650.0);
+            let rendered = session.show_gui(size)?;
+            let rect = galley(&rendered, token).ok_or_else(|| format!("missing {file} text"))?;
+            let start = rect.left_center() + vec2(0.5, 0.0);
+            let end = rect.right_center() - vec2(0.5, 0.0);
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            session.frame(vec![Event::PointerMoved(start), button(start, true)], size);
+            session.frame(vec![Event::PointerMoved(end)], size);
+            session.frame(vec![button(end, false)], size);
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(
+                copied(&copy, token),
+                "keyboard copy failed in {file}: {:?}",
+                copy.platform_output.commands
+            );
+            // Native action must copy the visible selection, never the hidden source cursor.
+            session.shell.integration.actions.push("ui.copy".into());
+            let copy = session.frame(Vec::new(), size);
+            assert!(copied(&copy, token), "native copy failed in {file}");
+            for action in ["ui.cut", "ui.paste"] {
+                session.shell.integration.actions.push(action.into());
+                session.frame(Vec::new(), size);
+                assert_eq!(session.shell.documents[0].buffer.rope().to_string(), source);
+            }
+            let right: Vec<_> = click(end)
+                .into_iter()
+                .map(|event| match event {
+                    Event::PointerButton {
+                        pos,
+                        pressed,
+                        modifiers,
+                        ..
+                    } => Event::PointerButton {
+                        pos,
+                        pressed,
+                        modifiers,
+                        button: PointerButton::Secondary,
+                    },
+                    event => event,
+                })
+                .collect();
+            session.frame(right, size);
+            let menu = session.frame(Vec::new(), size);
+            let copy_button =
+                galley(&menu, "Copy").ok_or_else(|| format!("missing Copy menu in {file}"))?;
+            assert!(galley(&menu, "Cut").is_none());
+            assert!(galley(&menu, "Paste").is_none());
+            assert!(galley(&menu, "Delete").is_none());
+            session.frame(vec![Event::PointerMoved(copy_button.center())], size);
+            let copy = session.frame(click(copy_button.center()), size);
+            assert!(
+                copied(&copy, token),
+                "context copy failed in {file}: {:?}",
+                copy.platform_output.commands
+            );
+            assert_eq!(session.shell.documents[0].buffer.rope().to_string(), source);
+        }
+        Ok(())
+    }
+
+    fn copied(output: &egui::FullOutput, expected: &str) -> bool {
+        output.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == expected),
+        )
+    }
+
     struct GuiSession {
         shell: NozhikUi,
         ctx: egui::Context,
@@ -723,7 +828,10 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| shell.editor_area(ctx),
+            |ctx| {
+                shell.global_actions(ctx);
+                shell.editor_area(ctx);
+            },
         )
     }
 

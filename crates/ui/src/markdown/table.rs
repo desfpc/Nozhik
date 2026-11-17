@@ -341,49 +341,42 @@ fn draw_piece(
     pos: Pos2,
     draw: &mut Draw<'_>,
 ) {
-    match piece.kind {
-        Kind::Code => {
-            painter.rect_filled(
-                Rect::from_min_size(pos, vec2(piece.width, piece.height)),
-                4.0,
-                theme::chip(),
-            );
-            if let Some(galley) = &piece.galley {
-                painter.galley(
-                    pos + vec2(draw.metrics.px(CODE_PAD_X), draw.metrics.px(CODE_PAD_Y)),
-                    Arc::clone(galley),
-                    Color32::PLACEHOLDER,
-                );
-            }
-        }
-        Kind::Word => {
-            if let Some(galley) = &piece.galley {
-                painter.galley(pos, Arc::clone(galley), Color32::PLACEHOLDER);
-            }
-        }
-        Kind::Space | Kind::Break => {}
-    }
-    let Some(url) = &piece.link else {
+    let text_pos = if piece.kind == Kind::Code {
+        painter.rect_filled(
+            Rect::from_min_size(pos, vec2(piece.width, piece.height)),
+            4.0,
+            theme::chip(),
+        );
+        pos + vec2(draw.metrics.px(CODE_PAD_X), draw.metrics.px(CODE_PAD_Y))
+    } else {
+        pos
+    };
+    let Some(galley) = &piece.galley else {
         return;
     };
-    let rect = Rect::from_min_size(pos, vec2(piece.width, piece.height));
-    if rect.width() < 1.0 || rect.height() < 1.0 {
-        return;
-    }
     let response = ui.interact(
-        rect,
+        Rect::from_min_size(text_pos, galley.size()),
         ui.id()
-            .with(("markdown-cell-link", id.table, id.row, id.column, index)),
-        Sense::click(),
+            .with(("markdown-cell-text", id.table, id.row, id.column, index)),
+        Sense::click_and_drag(),
     );
-    if !link_is_active(url) {
-        return;
-    }
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-    if response.clicked() {
-        *draw.opened = Some(url.clone());
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        text_pos,
+        Arc::clone(galley),
+        theme::text(),
+        Stroke::NONE,
+    );
+    if let Some(url) = &piece.link
+        && link_is_active(url)
+    {
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            *draw.opened = Some(url.clone());
+        }
     }
 }
 

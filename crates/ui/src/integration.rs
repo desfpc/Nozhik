@@ -393,6 +393,21 @@ impl NozhikUi {
                         ctx.copy_text(text);
                         continue;
                     }
+                    // Rendered documents own their selection; stale source cursors must
+                    // never copy or mutate a buffer hidden behind a preview.
+                    if self
+                        .active
+                        .and_then(|index| self.documents.get(index))
+                        .is_some_and(|doc| {
+                            self.markdown.is_preview(&doc.path)
+                                || self.openapi.is_preview(&doc.path)
+                        })
+                    {
+                        if action == "ui.copy" {
+                            ctx.input_mut(|input| input.events.push(egui::Event::Copy));
+                        }
+                        continue;
+                    }
                     // RequestPaste reads the system clipboard through egui-winit; native menu clicks restore editor focus.
                     if let Some(buffer) = self.active_buffer() {
                         let text = selected_text(buffer);

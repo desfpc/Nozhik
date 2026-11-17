@@ -550,7 +550,7 @@ mod tests {
     #[test]
     #[allow(
         clippy::too_many_lines,
-        reason = "Exercises pointer selection, native Copy and popup delivery on four rendered surfaces"
+        reason = "Exercises pointer selection, native Copy and popup delivery on rendered surfaces"
     )]
     fn rendered_selection_copies_through_keyboard_native_menu_and_context_menu()
     -> Result<(), String> {
@@ -600,24 +600,36 @@ mod tests {
                 session.frame(Vec::new(), size);
                 assert_eq!(session.shell.documents[0].buffer.rope().to_string(), source);
             }
-            let right: Vec<_> = click(end)
-                .into_iter()
-                .map(|event| match event {
-                    Event::PointerButton {
-                        pos,
-                        pressed,
-                        modifiers,
-                        ..
-                    } => Event::PointerButton {
-                        pos,
-                        pressed,
-                        modifiers,
-                        button: PointerButton::Secondary,
-                    },
-                    event => event,
-                })
-                .collect();
-            session.frame(right, size);
+            // Separate frames expose selection changes on secondary press/drag,
+            // which a synthetic press+release in one frame used to hide.
+            let secondary = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            session.frame(
+                vec![Event::PointerMoved(start), secondary(start, true)],
+                size,
+            );
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(
+                copied(&copy, token),
+                "secondary press changed selection in {file}"
+            );
+            session.frame(vec![Event::PointerMoved(end)], size);
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(
+                copied(&copy, token),
+                "secondary drag changed selection in {file}"
+            );
+            // Release near the press so this gesture still opens the context menu.
+            session.frame(
+                vec![Event::PointerMoved(start), secondary(start, false)],
+                size,
+            );
+            session.frame(vec![secondary(start, true)], size);
+            session.frame(vec![secondary(start, false)], size);
             let menu = session.frame(Vec::new(), size);
             let copy_button =
                 galley(&menu, "Copy").ok_or_else(|| format!("missing Copy menu in {file}"))?;
@@ -632,6 +644,46 @@ mod tests {
                 copy.platform_output.commands
             );
             assert_eq!(session.shell.documents[0].buffer.rope().to_string(), source);
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(copied(&copy, token), "menu click lost selection in {file}");
+            let blank = rect.right_bottom() + vec2(60.0, 20.0);
+            session.frame(
+                vec![Event::PointerMoved(blank), secondary(blank, true)],
+                size,
+            );
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(
+                copied(&copy, token),
+                "secondary whitespace press cleared {file}"
+            );
+            session.frame(vec![secondary(blank, false)], size);
+            session.frame(
+                vec![Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                size,
+            );
+            // A primary click still deselects. Secondary drag must not create a selection.
+            session.frame(click(blank), size);
+            session.frame(
+                vec![Event::PointerMoved(start), secondary(start, true)],
+                size,
+            );
+            session.frame(vec![Event::PointerMoved(end)], size);
+            session.frame(vec![secondary(end, false)], size);
+            let copy = session.frame(vec![Event::Copy], size);
+            assert!(
+                !copy
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, egui::OutputCommand::CopyText(_))),
+                "secondary drag created selection in {file}"
+            );
         }
         Ok(())
     }

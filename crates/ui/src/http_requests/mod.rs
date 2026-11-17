@@ -13,6 +13,7 @@ pub(crate) use model::{
     BodyKind, Incoming, MAX_TAGS, content_type_kind, normalize_tag, percent_decode,
 };
 
+use crate::library_ui::{nav_row, section_label};
 use crate::theme;
 use crate::tool_icons;
 use egui::{
@@ -311,10 +312,24 @@ impl HttpRequests {
             .show(ui, |ui| {
                 ui.add_space(9.0);
                 section_label(ui, "Library");
-                if nav_row(ui, "All requests", None, self.filter == Filter::All) {
+                if nav_row(
+                    ui,
+                    tool_icons::Icon::Http,
+                    "All requests",
+                    None,
+                    self.filter == Filter::All,
+                    theme::primary(),
+                ) {
                     pick = Some(Filter::All);
                 }
-                if nav_row(ui, "Untagged", None, self.filter == Filter::Untagged) {
+                if nav_row(
+                    ui,
+                    tool_icons::Icon::Http,
+                    "Untagged",
+                    None,
+                    self.filter == Filter::Untagged,
+                    theme::muted(),
+                ) {
                     pick = Some(Filter::Untagged);
                 }
                 section_label(ui, "Tags");
@@ -325,7 +340,14 @@ impl HttpRequests {
                 for (tag, count) in tag_rows(&self.file.requests) {
                     let selected =
                         self.filter == Filter::Tag && tag_key(&self.tag_filter) == tag_key(&tag);
-                    if nav_row(ui, &tag, Some(count), selected) {
+                    if nav_row(
+                        ui,
+                        tool_icons::Icon::Http,
+                        &tag,
+                        Some(count),
+                        selected,
+                        theme::primary(),
+                    ) {
                         self.tag_filter = tag;
                         pick = Some(Filter::Tag);
                     }
@@ -655,6 +677,7 @@ impl HttpRequests {
         }
         let indices = self.visible_indices();
         if indices.is_empty() {
+            ui.add_space(25.0);
             ui.weak(if self.file.requests.is_empty() {
                 "No requests yet"
             } else {
@@ -684,6 +707,7 @@ impl HttpRequests {
                             }
                         });
                     }
+                    ui.add_space(5.0);
                 }
             });
         if let Some(id) = delete {
@@ -1583,55 +1607,6 @@ fn request_card(ui: &mut Ui, request: &Request, selected: bool) -> egui::Respons
 
 fn method_color(method: &str) -> Color32 {
     theme::http_method(method)
-}
-
-fn nav_row(ui: &mut Ui, label: &str, count: Option<usize>, selected: bool) -> bool {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
-    if selected || response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            4.0,
-            if selected {
-                theme::accent()
-            } else {
-                theme::hover()
-            },
-        );
-    }
-    let icon = tool_icons::Icon::Http;
-    tool_icons::paint(
-        ui.painter(),
-        rect.left_center() + Vec2::new(16.0, 0.0),
-        icon,
-        theme::primary(),
-    );
-    ui.painter().text(
-        Pos2::new(rect.left() + 32.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(13.0),
-        if selected {
-            theme::on_selected()
-        } else {
-            theme::text()
-        },
-    );
-    if let Some(count) = count {
-        ui.painter().text(
-            Pos2::new(rect.right() - 8.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            count.to_string(),
-            egui::FontId::proportional(12.0),
-            theme::muted(),
-        );
-    }
-    response.clicked()
-}
-
-fn section_label(ui: &mut Ui, text: &str) {
-    ui.add_space(7.0);
-    ui.label(RichText::new(text).small().color(theme::muted()).strong());
 }
 
 fn paint_centered(ui: &Ui, rect: Rect, message: &str) {

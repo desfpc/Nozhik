@@ -21,6 +21,7 @@ mod http_requests;
 mod integration;
 mod language;
 mod layout;
+mod library_ui;
 mod linters;
 mod llm_panel;
 mod markdown;

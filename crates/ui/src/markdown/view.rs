@@ -52,7 +52,7 @@ pub fn show(
     opened: &mut Option<String>,
 ) {
     let scale = finite_scale(scale);
-    crate::preview_clipboard::menu(ui, path, enabled);
+    let _selection = crate::preview_clipboard::menu(ui, path, enabled);
     egui::ScrollArea::vertical()
         .id_salt(("markdown-gui", path.to_path_buf()))
         .auto_shrink([false, false])

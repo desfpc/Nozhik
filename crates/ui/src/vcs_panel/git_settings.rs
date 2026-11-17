@@ -87,6 +87,7 @@ impl VcsPanel {
         let authentication = self.git_settings.auth.authentication();
         let mut settings = self.git_settings.draft.clone();
         settings.auth = authentication.profile();
+        settings.save_token = self.git_settings.auth.save_token;
         self.git_settings.error = None;
         self.git_settings.notice.clear();
         if test {
@@ -109,14 +110,18 @@ impl VcsPanel {
         }
         self.git_settings.request = None;
         self.git_settings.auth = crate::git_auth::AuthFields::from_profile(&settings.auth);
+        self.git_settings.auth.save_token = settings.save_token;
         self.git_settings.draft = settings.clone();
         self.git_settings.snapshot = Some(settings);
         if self.git_settings.saving {
             self.error = None;
             self.git_settings.saving = false;
-            self.git_settings.notice =
+            self.git_settings.notice = if self.git_settings.draft.save_token {
+                "Git settings saved. Token saved in system credential store."
+            } else {
                 "Git settings saved. Session credentials are available until this project closes."
-                    .into();
+            }
+            .into();
             self.submit(Task::Refresh);
         }
     }

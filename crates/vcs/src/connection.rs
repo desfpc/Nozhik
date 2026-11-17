@@ -1,4 +1,4 @@
-//! Repository-local connection preferences; secrets remain in the owning Git session.
+//! Repository-local connection preferences; secrets live in memory or the protected OS store.
 use crate::{VcsError, clone::Authentication};
 use std::{io::Write, path::PathBuf};
 
@@ -79,6 +79,8 @@ pub struct GitSettings {
     pub author_email: String,
     /// Effective credential helper; empty uses the system configuration.
     pub credential_helper: String,
+    /// Explicit opt-in for protected OS token storage.
+    pub save_token: bool,
     /// Non-secret authentication mechanism.
     pub auth: AuthProfile,
 }
@@ -108,6 +110,11 @@ pub(crate) fn read(repo: &git2::Repository) -> Result<GitSettings, VcsError> {
         author_name: value(&config, "user.name")?,
         author_email: value(&config, "user.email")?,
         credential_helper: value(&config, "credential.helper")?,
+        save_token: match config.get_bool("nozhik.auth.savetoken") {
+            Ok(value) => value,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => false,
+            Err(error) => return Err(error.into()),
+        },
         auth: AuthProfile {
             method,
             username: value(&config, "nozhik.auth.username")?,
@@ -131,6 +138,9 @@ fn set(config: &mut git2::Config, key: &str, value: &str) -> Result<(), VcsError
 /// # Errors
 /// Returns invalid URLs, control characters, incompatible authentication or SSH key paths.
 pub fn validate(settings: &mut GitSettings) -> Result<(), VcsError> {
+    if settings.auth.method != AuthMethod::Token {
+        settings.save_token = false;
+    }
     for url in [&mut settings.remote_url, &mut settings.push_url] {
         if url.chars().any(char::is_control) {
             return Err(crate::git_worker::invalid(
@@ -200,7 +210,15 @@ pub fn validate(settings: &mut GitSettings) -> Result<(), VcsError> {
 pub(crate) fn save(
     repo: &git2::Repository,
     expected: &GitSettings,
+    settings: GitSettings,
+) -> Result<GitSettings, VcsError> {
+    save_with(repo, expected, settings, || Ok(()))
+}
+pub(crate) fn save_with(
+    repo: &git2::Repository,
+    expected: &GitSettings,
     mut settings: GitSettings,
+    credentials: impl FnOnce() -> Result<(), VcsError>,
 ) -> Result<GitSettings, VcsError> {
     validate(&mut settings)?;
     let destination = repo.commondir().join("config");
@@ -245,6 +263,7 @@ pub(crate) fn save(
                 &settings.credential_helper,
             )?;
         }
+        config.set_bool("nozhik.auth.savetoken", settings.save_token)?;
         config.set_str("nozhik.auth.method", settings.auth.method.key())?;
         set(&mut config, "nozhik.auth.username", &settings.auth.username)?;
         set(
@@ -259,6 +278,7 @@ pub(crate) fn save(
     }
     std::fs::set_permissions(lock.path(), metadata.permissions())?;
     std::fs::File::open(lock.path())?.sync_all()?;
+    credentials()?;
     lock.persist(destination).map_err(|error| error.error)?;
     read(repo)
 }

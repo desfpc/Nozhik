@@ -15,10 +15,19 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, VcsError>;
-#[derive(Default)]
 pub struct GitWorker {
     repo: Option<Repository>,
     session: crate::connection::Session,
+    credentials: std::sync::Arc<dyn crate::credentials::Store>,
+}
+impl Default for GitWorker {
+    fn default() -> Self {
+        Self {
+            repo: None,
+            session: crate::connection::Session::default(),
+            credentials: std::sync::Arc::new(crate::credentials::OsStore),
+        }
+    }
 }
 impl GitWorker {
     #[allow(
@@ -47,7 +56,13 @@ impl GitWorker {
             &task,
             Task::Fetch | Task::Push | Task::Pull | Task::PullPush
         ) {
-            self.session.authentication(&crate::connection::read(repo)?)
+            let settings = crate::connection::read(repo)?;
+            crate::credentials::resolve(
+                self.credentials.as_ref(),
+                repo,
+                &settings,
+                self.session.authentication(&settings),
+            )?
         } else {
             crate::clone::Authentication::Automatic
         };
@@ -55,7 +70,7 @@ impl GitWorker {
             Task::GitSettings => return Ok(Outcome::GitSettings(crate::connection::read(repo)?)),
             Task::SaveGitSettings {
                 expected,
-                settings,
+                mut settings,
                 authentication,
             } => {
                 if authentication.profile() != settings.auth {
@@ -63,7 +78,26 @@ impl GitWorker {
                         "Authentication does not match the selected profile",
                     ));
                 }
-                let settings = crate::connection::save(repo, &expected, settings)?;
+                crate::connection::validate(&mut settings)?;
+                let mut candidate = crate::connection::Session::default();
+                candidate.replace(settings.clone(), self.session.authentication(&settings));
+                candidate.replace(settings.clone(), authentication);
+                let authentication = crate::credentials::resolve(
+                    self.credentials.as_ref(),
+                    repo,
+                    &settings,
+                    candidate.authentication(&settings),
+                )?;
+                let settings =
+                    crate::connection::save_with(repo, &expected, settings.clone(), || {
+                        crate::credentials::update(
+                            self.credentials.as_ref(),
+                            repo,
+                            &expected,
+                            &settings,
+                            &authentication,
+                        )
+                    })?;
                 self.session.replace(settings.clone(), authentication);
                 return Ok(Outcome::GitSettings(settings));
             }
@@ -78,7 +112,19 @@ impl GitWorker {
                         "Clone authentication no longer matches repository settings",
                     ));
                 }
-                self.session.replace(settings, authentication);
+                let mut saved = settings.clone();
+                saved.save_token = credentials.save_token
+                    && matches!(authentication, crate::clone::Authentication::Token(_));
+                let saved = crate::connection::save_with(repo, &settings, saved.clone(), || {
+                    crate::credentials::update(
+                        self.credentials.as_ref(),
+                        repo,
+                        &settings,
+                        &saved,
+                        &authentication,
+                    )
+                })?;
+                self.session.replace(saved, authentication);
                 "Git session credentials configured"
             }
             Task::TestGitConnection {
@@ -105,6 +151,8 @@ impl GitWorker {
                 } else {
                     self.session.authentication(&settings)
                 };
+                let auth =
+                    crate::credentials::resolve(self.credentials.as_ref(), repo, &settings, auth)?;
                 test_connection(repo, &settings.remote_url, &auth)?;
                 "Git fetch connection successful"
             }

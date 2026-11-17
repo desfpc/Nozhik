@@ -2,6 +2,7 @@
 pub mod clone;
 mod commit_context;
 pub mod connection;
+mod credentials;
 mod git_worker;
 mod history_actions;
 mod history_selection;
@@ -24,6 +25,9 @@ pub enum VcsError {
     /// libgit2 failure, including credentials or repository locks.
     #[error(transparent)]
     Git(#[from] git2::Error),
+    /// Protected credential storage failed; no plaintext fallback.
+    #[error("System credential store is unavailable or denied access")]
+    Credential(#[from] keyring::Error),
     /// Filesystem failure.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -47,10 +51,10 @@ pub enum Task {
         expected: connection::GitSettings,
         /// Desired non-secret settings.
         settings: connection::GitSettings,
-        /// Session-only credentials matching the desired authentication profile.
+        /// Credentials matching the desired authentication profile.
         authentication: clone::Authentication,
     },
-    /// Install clone credentials for this repository session without persisting secrets.
+    /// Install clone credentials for this repository session with optional OS token storage.
     Authenticate(clone::Credentials),
     /// Test the provided fetch URL and credentials without changing refs or settings.
     TestGitConnection {

@@ -4757,3 +4757,46 @@ cargo clean удалил 10.5 GiB (27516 файлов); удалены task logs
 Finder .DS_Store. Финальный размер проекта — 399 MiB, binaries — 117 MiB.
 Исходники, история, незакоммиченные изменения и готовые актуальные бинарники
 с legal materials сохранены; после очистки сборок не было.
+
+### Git tokens in the system credential store (v0.1.69, 2026-11-17)
+
+Settings -> Git -> Token and both token-based clone forms now offer explicit
+Save token in system credential store. The serial Git worker uses native keyring
+backends (macOS Keychain, Windows Credential Manager, Linux Secret Service), with
+no plaintext fallback. Only nozhik.auth.savetoken and the existing non-secret
+preferences enter Git config. Passwords and SSH passphrases remain session-only.
+
+Saved tokens are bound to canonical repository common directory, exact fetch and
+push URLs and auth profile. Restarted fetch/pull/push and read-only connection tests
+resolve blank tokens from that store. Blank saves preserve matching credentials;
+replacement tokens overwrite the entry. Disabling persistence or changing endpoints
+removes the previous saved entry during Save. Validation, stale-config checks and
+config.lock precede storage writes; storage errors preserve the config and are
+reported through project Problems. Clone carries opt-in with its project-open request
+and saves only after rechecking origin/profile. Credentials remain zeroizing values
+and never enter URLs, settings files or diagnostic text.
+
+Four new injected-store regressions cover restart, blank saves, replacement,
+opt-out/deletion, repository/fetch/push isolation, clone transfer, config locks and
+missing/locked storage. Locked-store errors are checked through all four transport
+commands and Test Fetch Connection. Tests never access the real OS credential store.
+Workspace/lock version is 0.1.69; next is 0.1.70. Existing keyring/serde_json packages
+are reused; no new third-party packages.
+
+Validation: fmt, git diff --check, workspace/all-targets/all-features Clippy with
+-D warnings and workspace release build passed. Final full workspace/all-features
+tests with --test-threads=1: 477 passed, 0 failed, 19 existing optional ignored.
+An initial sandbox run could not bind local test servers; the first unrestricted
+run hit an existing AI lifecycle timeout during compilation. The final unrestricted
+full run passed, including that test. Native GUI, real OS credential storage and
+Windows build/Clippy were not run. No commit or push was performed.
+
+The standard update-binaries.py rebuilt macOS ARM64 executable, app archive and
+legal sidecars; --check verified sources and binary checksums. Windows was not
+rebuilt. Cleanup results follow below.
+
+Source fingerprint: 500a306721565c0b77711ed744873634c986b28289f1e4c43798123d7cc4e120.
+cargo clean removed 9.6 GiB (27,786 files). Removed task logs and three untracked
+Finder .DS_Store files. Final project size: 400 MiB; binaries: 117 MiB. Sources,
+history and current macOS binaries/legal materials remain. Post-clean --check
+passed; no builds were started after cleanup.

@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 pub struct AuthFields {
     pub kind: AuthMethod,
+    pub save_token: bool,
     pub username: String,
     pub secret: Zeroizing<String>,
     pub key: String,
@@ -72,6 +73,10 @@ impl AuthFields {
                 ui.small("Uses repository/system Git credential helpers or the SSH agent.");
             }
             AuthMethod::Token => {
+                ui.checkbox(
+                    &mut self.save_token,
+                    "Save token in system credential store",
+                );
                 ui.label("Access token (HTTPS)");
                 ui.add(
                     crate::form::singleline(&mut *self.secret)
@@ -106,7 +111,7 @@ impl AuthFields {
                 ui.add(crate::form::singleline(&mut *self.passphrase).password(true));
             }
         }
-        ui.small("Tokens, passwords and key passphrases stay in memory for this project session. Blank secret fields keep existing session credentials for the same connection.");
+        ui.small("Tokens can be saved in the system credential store. Other secrets stay in memory. Blank fields reuse credentials only for the same connection.");
         Ok(())
     }
 }

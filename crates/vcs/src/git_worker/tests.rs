@@ -1280,6 +1280,7 @@ fn clone_credentials_refuse_an_origin_changed_before_project_open()
     assert!(
         worker
             .execute(Task::Authenticate(crate::clone::Credentials {
+                save_token: false,
                 url: "https://github.com/example/original".into(),
                 authentication: auth,
             }))
@@ -1396,3 +1397,5 @@ fn token_connection_sends_basic_credentials_and_reports_http_403()
     server.join().map_err(|_| "mock server panicked")??;
     Ok(())
 }
+
+mod saved_tokens;

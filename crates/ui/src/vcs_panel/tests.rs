@@ -1525,6 +1525,7 @@ fn opening_cloned_project_installs_session_authentication_after_repository_open(
     nozhik_vcs::connection::remember_clone(&repo, &auth)?;
     let mut panel = VcsPanel {
         clone_auth: Some(nozhik_vcs::clone::Credentials {
+            save_token: false,
             url: "https://github.com/example/project".into(),
             authentication: auth,
         }),

@@ -73,7 +73,7 @@ severity Problems и базовая ANSI-палитра живут в JSON, чт
   thiserror. Без UI.
 - fs_model: event_bus, vcs (read-only ignore/membership snapshots), notify, ignore, fuzzy-matcher, ropey, tempfile, thiserror.
   Без UI; синхронные операции вызываются выделенным worker.
-- vcs: git2 (vendored libgit2/OpenSSL), thiserror, zeroize, tempfile (clone staging). Без UI/runtime/event_bus;
+- vcs: git2 (vendored libgit2/OpenSSL), thiserror, zeroize, tempfile (clone staging), keyring (native OS stores), serde_json (credential identity). Без UI/runtime/event_bus;
   Repository принадлежит единственному worker. Git index — источник staged-состояния.
 - plugin_host: event_bus, tokio process/io-util, serde/serde_json, semver,
   directories, thiserror. Без egui, buffer и прямой зависимости от config.
@@ -200,7 +200,7 @@ references; prose is not.
 
 ### Launcher / GitHub
 
-UI may use reqwest for session-only GitHub REST access on a dedicated worker.
+UI may use reqwest for GitHub REST access on a dedicated worker.
 Never serialize clone credentials or embed secrets in remote URLs/errors. Explicit
 Git credentials must reach libgit2 callbacks; certificate/host-key verification
 must stay enabled. Cancelled completions must not open projects. Version follows
@@ -226,7 +226,12 @@ Bind session secrets to saved URLs/profile, reject redirected credentials, and k
 certificate/SSH trust checks enabled. Settings read/save/test stay on the Git worker;
 connection tests must not change refs, index, worktree or persist candidate settings.
 Successful clone credentials travel with that project's open request and must not
-become global state. Blank fields may retain only a matching session credential.
+become global state. Blank fields may retain only a matching session or explicitly saved OS token.
+Git tokens use keyring on the serial blocking Git worker, bound to repository common
+directory + exact fetch/push URLs/profile. Only save_token opt-in is stored in config;
+no plaintext fallback. Tests inject a store and never touch the real OS keychain.
+Storage mutations happen under config.lock after validation/stale checks; connection
+tests never persist candidate credentials. Passwords and SSH passphrases remain session-only.
 
 
 ### Table structure editing

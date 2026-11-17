@@ -259,6 +259,7 @@ impl CloneDialog {
         };
         let destination = PathBuf::from(self.destination.trim());
         let auth = self.authentication();
+        let save_token = self.connection.save_token;
         self.start(ctx, move |cancel| {
             let url =
                 nozhik_vcs::clone::normalize_url(&remote).map_err(|error| error.to_string())?;
@@ -267,6 +268,7 @@ impl CloneDialog {
                     Reply::Cloned(
                         path,
                         Credentials {
+                            save_token,
                             url,
                             authentication: auth,
                         },
@@ -301,7 +303,11 @@ impl CloneDialog {
             self.selected = None;
             self.repos.clear();
         }
-        ui.small("Token stays in memory for this project session. Grant access to the repositories you want to clone.");
+        ui.checkbox(
+            &mut self.connection.save_token,
+            "Save token in system credential store",
+        );
+        ui.small("The saved token is reused by the cloned project after restart. Grant access to the repositories you want to clone.");
         let connect = ui
             .add_enabled(
                 !self.token.is_empty(),
@@ -436,6 +442,7 @@ mod tests {
         send.send(Ok(Reply::Cloned(
             PathBuf::from("/tmp/cloned-project"),
             Credentials {
+                save_token: false,
                 url: "https://github.com/example/project".into(),
                 authentication: Authentication::Token(dialog.token.clone()),
             },
@@ -482,6 +489,7 @@ mod tests {
             send.send(Ok(Reply::Cloned(
                 PathBuf::from("/tmp/cancelled"),
                 Credentials {
+                    save_token: false,
                     url: "https://github.com/example/project".into(),
                     authentication: Authentication::Automatic
                 }

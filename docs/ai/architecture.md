@@ -9,7 +9,7 @@
 | nozhik-buffer | Rope, координаты, курсоры, история, поиск | core, event_bus |
 | nozhik-config | Схема, валидация, хранение и доступ к настройкам | core, event_bus |
 | nozhik-fs-model | lazy tree, ignore, file index, watcher, I/O worker | event_bus, vcs (read-only membership) |
-| nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror |
+| nozhik-vcs | Git repository/index, status/diff/history, branches/remotes, serial worker | git2, thiserror, zeroize, tempfile, keyring, serde_json |
 | nozhik-plugin-host | Manifest validation, isolated process lifecycle, action/keymap registries | event_bus, tokio, serde/serde_json, semver, directories |
 | nozhik-language-support | PHP/CSS/JavaScript/Go/YAML incremental syntax, local formatting, PHP/CSS/JavaScript/Go project indexes, PHP stdio LSP | tree-sitter/php/css/javascript/go/yaml, csscolorparser, lsp-types, tokio, ropey, serde_json, thiserror |
 | nozhik-docker | Compose file discovery, YAML run markers, scoped Docker CLI worker, PHP and Go linter JSON reports, PHPUnit and `go test` console commands | tree-sitter/yaml, ignore, serde/serde_json, thiserror, Unix nix |
@@ -1344,8 +1344,8 @@ Dedicated threads run blocking vcs::clone or a current-thread Tokio runtime for
 reqwest GitHub REST calls. GET /user validates the account; /user/repos pages of
 100 include owner/collaborator/organization access (10,000 entry safety limit).
 Requests have 20-second timeouts and refuse redirects. No OAuth client registration
-is required: connection uses a user-provided PAT. No Enterprise endpoints or disk
-credential storage. Late cancelled replies cannot open a project. Worker completion
+is required: connection uses a user-provided PAT. No Enterprise endpoints. Optional
+Git token storage is described below. Late cancelled replies cannot open a project. Worker completion
 requests repaint; no idle polling repaint is added.
 
 VCS clone accepts public/helper/agent, token, basic credentials and explicit SSH key.
@@ -1537,11 +1537,19 @@ can be added/changed; refs/index/worktree remain intact and saving performs no n
 Test reads the candidate remote with no refs/config writes; changed credential helpers
 must be saved first. Push permissions are checked by push, not by the fetch test.
 
-Only nozhik.auth.method/username/keypath are persisted, with ordinary origin/user/
-credential.helper keys in Git config. Tokens/passwords/passphrases stay in zeroizing
-session memory. Blank secret fields retain a previous credential only when both
+Only nozhik.auth.method/username/keypath/savetoken are persisted, with ordinary origin/user/
+credential.helper keys in Git config. Passwords/passphrases stay in zeroizing
+session memory. HTTPS tokens optionally use keyring native OS storage via the serial
+blocking Git worker; no plaintext fallback. vcs::credentials injects a Store for
+isolated tests and binds its identity to canonical repository common dir + exact
+fetch/push URL, username and key path. Blank token resolution consults the store only
+with save_token enabled; missing and locked entries remain distinct. Save validates
+and locks config before updating the OS entry; disabling storage deletes it. Clone
+passes opt-in with Credentials and persists only when the opened repository still
+matches the clone URL/profile. Test never writes credentials. Blank secret fields
+retain a previous credential only when both
 endpoints and AuthProfile still match. External endpoint/profile changes stop reuse.
-No new OS keychain writes or plaintext secret persistence are added.
+OS errors are sanitized; no plaintext secret persistence is allowed.
 
 UI Settings → Git delegates to VcsPanel and uses the same git_auth::AuthFields as
 Clone Repository. Explicit Save/Reload/Test preserve existing general settings auto-save.

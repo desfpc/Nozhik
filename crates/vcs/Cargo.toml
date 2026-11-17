@@ -6,6 +6,7 @@ license-file.workspace = true
 
 [dependencies]
 zeroize.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 git2.workspace = true
 thiserror.workspace = true
@@ -13,3 +14,12 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust", "vendored"] }

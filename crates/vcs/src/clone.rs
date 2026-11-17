@@ -9,7 +9,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-/// Session-only authentication. Secrets are never stored in Git configuration.
+/// In-memory authentication. Secrets are never stored in Git configuration.
 #[derive(Clone, Default)]
 pub enum Authentication {
     /// Public repository, SSH agent or Git credential helper.
@@ -40,7 +40,9 @@ pub enum Authentication {
 pub struct Credentials {
     /// Normalized clone URL; must still match before installing session credentials.
     pub url: String,
-    /// Session-only authentication, never serialized.
+    /// Save the clone token in the OS store when the project opens.
+    pub save_token: bool,
+    /// Authentication, never serialized.
     pub authentication: Authentication,
 }
 

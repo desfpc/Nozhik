@@ -4877,3 +4877,28 @@ Windows не пересобирался и не объявляется акту�
 Удалены 7 временных логов задачи и 5 untracked Finder файлов. Итоговый размер
 проекта — 401 MiB, binaries — 117 MiB. Исходники, история, настройки и готовые
 бинарники с legal materials сохранены. После очистки сборки не запускались.
+
+## Управление доверием в Settings — v0.1.72 (2026-11-17)
+
+Settings показывает состояние доверия и соответствующее действие для проекта.
+Revoke Trust доступна только здесь. После выдачи доверия верхняя панель полностью
+исчезает; без доверия остаются Restricted Mode и Review and Trust….
+Подтверждение общее для обоих входов, поверх Settings через общий Dialog.
+Версия workspace/lock — 0.1.72; следующая — 0.1.73.
+
+Проверки: fmt, git diff --check, workspace/all-targets/all-features Clippy с
+-D warnings и workspace release build прошли. Полный последовательный workspace
+test all-features: 492 passed, 0 failed, 19 прежних ignored. Новый headless-тест
+кликами выдаёт доверие через Settings, проверяет отсутствие баннера и занятого
+им места, затем отзывает доверие через Settings. Нативное окно вручную не
+запускалось. Sandbox запрещал сокеты тестовых серверов; полный прогон выполнен
+вне sandbox.
+
+update-binaries.py обновил macOS ARM64 executable, app archive и legal materials;
+--check подтвердил fingerprint исходников и checksums. Windows не пересобирался.
+Commit/push не выполнялись.
+
+После проверки бинарников cargo clean удалил 10.4 GiB (27589 файлов). Удалены
+временные логи задачи и untracked Finder metadata вне .git. Проект занимает
+402 MiB, binaries — 117 MiB; исходники, история, настройки и готовые бинарники
+с legal materials сохранены. После очистки сборки не запускались.

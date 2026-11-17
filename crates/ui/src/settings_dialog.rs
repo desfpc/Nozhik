@@ -578,6 +578,7 @@ impl crate::NozhikUi {
                     ));
                     ui.small(project.root_path.display().to_string());
                 }
+                self.trust_controls(ui);
                 ui.separator();
                 let size = egui::vec2(
                     ui.available_width(),

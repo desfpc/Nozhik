@@ -91,9 +91,18 @@ impl crate::NozhikUi {
         }
     }
     pub(crate) fn trust_banner(&mut self, ctx: &egui::Context) {
-        let Some(root) = self.trust.root.clone() else {
+        if self.trust.root.is_none() || self.execution_allowed() {
             return;
-        };
+        }
+        egui::TopBottomPanel::top("project_trust").show(ctx, |ui| {
+            self.trust_controls(ui);
+        });
+    }
+
+    pub(crate) fn trust_controls(&mut self, ui: &mut egui::Ui) {
+        if self.trust.root.is_none() {
+            return;
+        }
         let allowed = self.execution_allowed();
         let status = self
             .trust
@@ -101,44 +110,48 @@ impl crate::NozhikUi {
             .as_ref()
             .map(ProjectTrust::status)
             .unwrap_or_default();
-        egui::TopBottomPanel::top("project_trust").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(if allowed {
-                    "Trusted Project"
-                } else {
-                    "Restricted Mode"
-                });
-                ui.label(if allowed {
-                    "External project tools are enabled."
-                } else {
-                    "View, edit and search are available. External code is disabled."
-                });
-                if allowed {
-                    if ui.button("Revoke Trust").clicked()
-                        && let Some(session) = &self.trust.session
-                    {
-                        session.revoke();
-                    }
-                } else if ui
-                    .add_enabled(
-                        status.ready && !self.settings_dialog.saving(),
-                        egui::Button::new("Review and Trust…"),
-                    )
-                    .clicked()
-                {
-                    self.trust.confirm.clone_from(&status.fingerprint);
-                }
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(if allowed {
+                "Trusted Project"
+            } else {
+                "Restricted Mode"
             });
-            if let Some(error) = &self.trust.error {
-                ui.label(error);
-            }
-            if !status.detail.is_empty() && !allowed {
-                ui.weak(&status.detail);
+            ui.label(if allowed {
+                "External project tools are enabled."
+            } else {
+                "View, edit and search are available. External code is disabled."
+            });
+            if allowed {
+                if ui.button("Revoke Trust").clicked()
+                    && let Some(session) = &self.trust.session
+                {
+                    session.revoke();
+                }
+            } else if ui
+                .add_enabled(
+                    status.ready && !self.settings_dialog.saving(),
+                    egui::Button::new("Review and Trust…"),
+                )
+                .clicked()
+            {
+                self.trust.confirm.clone_from(&status.fingerprint);
             }
         });
+        if let Some(error) = &self.trust.error {
+            ui.label(error);
+        }
+        if !status.detail.is_empty() && !allowed {
+            ui.weak(&status.detail);
+        }
+    }
+
+    pub(crate) fn trust_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(root) = self.trust.root.clone() else {
+            return;
+        };
         if let Some(fingerprint) = self.trust.confirm.clone() {
-            let mut open = true;
-            egui::Window::new("Trust this project?").open(&mut open).collapsible(false).show(ctx, |ui| {
+            let modal = crate::dialog::Dialog::new("project_trust_confirmation", [640.0, 320.0]).show(ctx, |ui| {
+                ui.heading("Trust this project?");
                 ui.label(root.display().to_string());
                 ui.label("Plugins, language servers, terminals, Docker and project commands can execute code with your account permissions. Trust only projects and tools you have reviewed.");
                 ui.label("Trust is local to this canonical folder and these execution inputs. Configuration, manifest or executable changes require a new decision. This is not an OS sandbox.");
@@ -150,7 +163,7 @@ impl crate::NozhikUi {
                     if ui.button("Keep Restricted").clicked() { self.trust.confirm = None; }
                 });
             });
-            if !open {
+            if modal.should_close() {
                 self.trust.confirm = None;
             }
         }
@@ -176,6 +189,127 @@ mod tests {
         }
         Ok(())
     }
+    fn frame(
+        shell: &mut crate::NozhikUi,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                shell.settings_tick(ctx);
+                shell.trust_banner(ctx);
+                shell.settings_window(ctx);
+                shell.trust_confirmation(ctx);
+            },
+        )
+    }
+
+    fn label_position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+        output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+    }
+
+    fn click(shell: &mut crate::NozhikUi, ctx: &egui::Context, label: &str) -> TestResult {
+        frame(shell, ctx, vec![]);
+        let output = frame(shell, ctx, vec![]);
+        let pos = label_position(&output, label).ok_or_else(|| format!("Missing {label}"))?;
+        for pressed in [true, false] {
+            frame(
+                shell,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn settings_manage_both_trust_states_and_trusted_banner_takes_no_space() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root)?;
+        let bus = nozhik_event_bus::EventBus::new(32)?;
+        let settings = nozhik_config::ConfigManager::from_path(
+            root.join(".nozhik/settings.toml"),
+            bus.clone(),
+        )?;
+        let mut shell = crate::NozhikUi::new(bus, settings, nozhik_config::Config::default());
+        shell.trust.root = Some(root.clone());
+        shell.trust.session = Some(ProjectTrust::with_storage(
+            root,
+            dir.path().join("host-trust"),
+            vec![],
+            || {},
+        )?);
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        wait(|| {
+            frame(&mut shell, &ctx, vec![]);
+            !shell.settings_dialog.saving()
+                && shell
+                    .trust
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.status().ready)
+        })?;
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(label_position(&output, "Restricted Mode").is_some());
+        assert!(label_position(&output, "Revoke Trust").is_none());
+        shell.settings_open = true;
+        // Hide only the banner in this frame to locate the Settings copy unambiguously.
+        let mut output = None;
+        for _ in 0..3 {
+            output = Some(ctx.run(egui::RawInput::default(), |ctx| shell.settings_window(ctx)));
+        }
+        assert!(label_position(&output.ok_or("Settings frame")?, "Review and Trust…").is_some());
+        wait(|| {
+            frame(&mut shell, &ctx, vec![]);
+            !shell.settings_dialog.saving()
+        })?;
+        click(&mut shell, &ctx, "Review and Trust…")?;
+        assert!(shell.trust.confirm.is_some());
+        click(&mut shell, &ctx, "Trust Project")?;
+        wait(|| shell.execution_allowed())?;
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(label_position(&output, "Revoke Trust").is_some());
+        shell.settings_open = false;
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(label_position(&output, "Trusted Project").is_none());
+        assert!(label_position(&output, "Revoke Trust").is_none());
+        assert_eq!(ctx.available_rect(), ctx.screen_rect());
+        shell.settings_open = true;
+        click(&mut shell, &ctx, "Revoke Trust")?;
+        assert!(!shell.execution_allowed());
+        let output = frame(&mut shell, &ctx, vec![]);
+        assert!(label_position(&output, "Restricted Mode").is_some());
+        assert!(label_position(&output, "Review and Trust…").is_some());
+        Ok(())
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,

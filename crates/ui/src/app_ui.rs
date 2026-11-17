@@ -1057,6 +1057,7 @@ impl NozhikUi {
             });
         }
         self.settings_window(ctx);
+        self.trust_confirmation(ctx);
         self.plugins_window(ctx);
         self.integration_dialogs(ctx);
         if let Some((path, auth)) = self.welcome.clone.tick() {

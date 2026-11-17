@@ -310,7 +310,7 @@ impl LinterUi {
         if tools.is_empty() && self.items.is_empty() {
             return None;
         }
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         ui.heading("Linters");
         if self.running {
             ui.horizontal(|ui| {
@@ -374,7 +374,7 @@ impl LinterUi {
             ui.strong(format!("{} ({})", display_path(&path, root), group.len()));
             for item in group {
                 ui.horizontal(|ui| {
-                    ui.add_space(12.0);
+                    ui.add_space(13.0);
                     let response = ui.selectable_label(false, row_label(&item));
                     if response.clicked() {
                         clicked = Some(item.clone());
@@ -384,7 +384,7 @@ impl LinterUi {
                     }
                 });
             }
-            ui.add_space(4.0);
+            ui.add_space(5.0);
         }
         clicked
     }

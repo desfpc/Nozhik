@@ -1205,7 +1205,7 @@ impl TextEditorView {
                     .fill(theme::surface())
                     .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(7)
-                    .inner_margin(5)
+                    .inner_margin(6)
                     .show(ui, |ui| {
                         // Reset egui Area's remembered small bounds before the ScrollArea lays out.
                         ui.set_min_size(egui::vec2((width - 10.0).max(0.0), height - 10.0));
@@ -1901,7 +1901,7 @@ fn doc_popup(
                 .fill(theme::surface())
                 .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(7)
-                .inner_margin(10)
+                .inner_margin(11)
                 .show(ui, |ui| {
                     ui.set_width(width - 20.0);
                     let doc_font =

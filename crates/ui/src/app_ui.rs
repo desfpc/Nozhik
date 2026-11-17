@@ -252,7 +252,7 @@ impl NozhikUi {
 
     fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(36.0)
+            .exact_height(40.0)
             .frame(theme::rail_frame())
             .show(ctx, |ui| {
                 if cfg!(target_os = "macos") {
@@ -267,7 +267,7 @@ impl NozhikUi {
                 }
                 ui.horizontal_centered(|ui| {
                     if cfg!(target_os = "macos") {
-                        ui.add_space(72.0);
+                        ui.add_space(73.0);
                     }
                     self.project_switcher(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -326,8 +326,8 @@ impl NozhikUi {
     )]
     pub(crate) fn panels(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("status")
-            .exact_height(26.0)
-            .frame(egui::Frame::new().fill(theme::chrome()).inner_margin(4))
+            .exact_height(28.0)
+            .frame(egui::Frame::new().fill(theme::chrome()).inner_margin(5))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Nozhik")
@@ -518,7 +518,7 @@ impl NozhikUi {
 
     fn tool_rail(&mut self, ctx: &Context) {
         egui::SidePanel::left("left_strip")
-            .exact_width(36.0)
+            .exact_width(38.0)
             .resizable(false)
             .show_separator_line(false)
             .frame(theme::rail_frame())
@@ -619,7 +619,7 @@ impl NozhikUi {
                 )
                 .show_separator_line(false)
                 .frame(match tool {
-                    LeftTool::Commit => egui::Frame::new().fill(theme::panel()).inner_margin(0),
+                    LeftTool::Commit => egui::Frame::new().fill(theme::panel()).inner_margin(1),
                     LeftTool::Snippets => crate::snippets::sidebar_frame(),
                     LeftTool::HttpRequests => crate::http_requests::sidebar_frame(),
                     _ => theme::dock_frame(theme::panel()),
@@ -686,7 +686,7 @@ impl NozhikUi {
         }
         if self.left == Some(LeftTool::Commit) {
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(theme::background()).inner_margin(0))
+                .frame(egui::Frame::new().fill(theme::background()).inner_margin(1))
                 .show(ctx, |ui| {
                     self.vcs.configure_diff(&self.config);
                     self.vcs.center(ui, f32::from(self.config.font_size));
@@ -834,7 +834,7 @@ impl NozhikUi {
                     ui.add_space((ui.available_height() * 0.35).max(0.0));
                     ui.vertical_centered(|ui| {
                         ui.heading("Nozhik");
-                        ui.add_space(20.0);
+                        ui.add_space(21.0);
                         for label in [
                             "Search Everywhere    Double Shift",
                             "Go to File    Ctrl/Cmd + Shift + O",
@@ -1413,11 +1413,11 @@ mod tests {
             shell.bottom = None;
             frame(&mut shell, size, vec![]);
             let rail = rect("left_strip")?;
-            assert_eq!(rail.width(), 36.0);
+            assert_eq!(rail.width(), 38.0);
             assert_eq!(rail.bottom(), rect("status")?.top());
-            let terminal = rail.left_bottom() + vec2(18.0, -18.0);
-            let llm = terminal - vec2(0.0, 32.0);
-            let problems = terminal - vec2(0.0, 64.0);
+            let terminal = rail.left_bottom() + vec2(19.0, -19.0);
+            let llm = terminal - vec2(0.0, 33.0);
+            let problems = terminal - vec2(0.0, 66.0);
             // Actual pointer input exercises open, switch, collapse and reopen.
             for (position, expected) in [
                 (terminal, Some(crate::terminal_panel::TERMINAL_LABEL)),

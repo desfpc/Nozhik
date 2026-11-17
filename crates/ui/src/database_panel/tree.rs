@@ -5,7 +5,7 @@ use egui::{FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, p
 use nozhik_database::{ConnectionProfile, DbDriverType, introspection::TableInfo};
 
 const HEIGHT: f32 = 24.0;
-const INDENT: f32 = 19.0;
+const INDENT: f32 = 20.0;
 
 pub(super) enum Action {
     Schema(ConnectionProfile, String, super::schema::Action),
@@ -442,7 +442,7 @@ pub(super) fn show(ui: &mut Ui, db: &DatabaseUi, selected: &mut Option<egui::Id>
         selected,
         actions: Vec::new(),
     };
-    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.spacing_mut().item_spacing.y = 1.0;
     for profile in &db.profiles {
         let catalog = db.trees.get(&profile.name);
         let pending = db
@@ -733,7 +733,7 @@ mod tests {
         let mut rows = Vec::new();
         let draw = |ctx: &egui::Context, selected: &mut Option<egui::Id>, rows: &mut Vec<Rect>| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.spacing_mut().item_spacing.y = 1.0;
                 let mut tree = Tree {
                     selected,
                     actions: Vec::new(),
@@ -798,7 +798,7 @@ mod tests {
         let id = label(&first, "id").ok_or("id")?;
         let city = label(&first, "city_id").ok_or("city_id")?;
         assert_eq!(id.x - folder.x, INDENT);
-        assert_eq!(city.y - id.y, HEIGHT);
+        assert_eq!(city.y - id.y, HEIGHT + 1.0);
         assert_eq!(rows[1].height(), HEIGHT);
         let point = rows[1].center();
         let output = ctx.run(

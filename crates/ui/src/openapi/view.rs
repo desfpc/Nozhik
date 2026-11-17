@@ -74,7 +74,7 @@ fn document(
         );
     });
     if !description.is_empty() {
-        ui.add_space(6.0);
+        ui.add_space(7.0);
         ui.label(description);
     }
     if !extra.is_empty() {
@@ -86,9 +86,9 @@ fn document(
     for warning in warnings.iter().take(8) {
         ui.colored_label(theme::warning(), warning);
     }
-    ui.add_space(8.0);
+    ui.add_space(9.0);
     let authorize = servers_bar(ui, state);
-    ui.add_space(10.0);
+    ui.add_space(11.0);
     let groups: Vec<(String, String, Vec<usize>)> = {
         match &state.parsed {
             Parsed::Spec(spec) => spec
@@ -107,7 +107,7 @@ fn document(
     };
     for (name, description, operations) in groups {
         tag_block(ui, state, hub, &name, &description, &operations, transfers);
-        ui.add_space(8.0);
+        ui.add_space(9.0);
     }
     schemas_block(ui, state);
     authorize
@@ -167,7 +167,7 @@ fn servers_bar(ui: &mut Ui, state: &mut FileState) -> bool {
     egui::Frame::new()
         .fill(theme::surface())
         .corner_radius(6)
-        .inner_margin(12)
+        .inner_margin(13)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -283,7 +283,7 @@ fn tag_block(
     }
     for index in operations {
         operation_card(ui, state, hub, *index, transfers);
-        ui.add_space(6.0);
+        ui.add_space(7.0);
     }
 }
 
@@ -327,14 +327,14 @@ fn operation_card(
         .fill(theme::surface())
         .stroke(Stroke::new(1.0_f32, color.linear_multiply(0.75)))
         .corner_radius(6)
-        .inner_margin(8)
+        .inner_margin(9)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if operation_header(ui, &operation, color, secured, satisfied, open).clicked() {
                 toggle_set(&mut state.open_ops, &operation.key);
             }
             if open {
-                ui.add_space(6.0);
+                ui.add_space(7.0);
                 if ui.button("To HTTP Requests").clicked() {
                     transfers.push(capture_request(state, &operation));
                 }
@@ -574,7 +574,7 @@ fn parameter_row(
     parameter: &spec::Parameter,
     trying: bool,
 ) {
-    ui.add_space(6.0);
+    ui.add_space(7.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new(&parameter.name).strong());
         if parameter.required {
@@ -670,7 +670,7 @@ fn body_block(ui: &mut Ui, state: &mut FileState, operation: &spec::Operation) {
     let Some(body) = &operation.body else {
         return;
     };
-    ui.add_space(8.0);
+    ui.add_space(9.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Request body").size(16.0).strong());
         if body.required {
@@ -759,14 +759,14 @@ fn body_block(ui: &mut Ui, state: &mut FileState, operation: &spec::Operation) {
 }
 
 fn execute_button(ui: &mut Ui) -> egui::Response {
-    ui.add_space(8.0);
+    ui.add_space(9.0);
     ui.add(egui::Button::new(theme::on_primary("Execute")).fill(theme::primary()))
 }
 
 fn responses_block(ui: &mut Ui, operation: &spec::Operation) {
-    ui.add_space(10.0);
+    ui.add_space(11.0);
     ui.label(RichText::new("Responses").size(16.0).strong());
-    ui.add_space(4.0);
+    ui.add_space(5.0);
     egui::Grid::new(("openapi-responses", operation.key.clone()))
         .num_columns(3)
         .min_col_width(72.0)
@@ -791,13 +791,13 @@ fn responses_block(ui: &mut Ui, operation: &spec::Operation) {
 
 fn live_block(ui: &mut Ui, state: &FileState, key: &str) {
     if state.pending.contains_key(key) {
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         ui.label("Sending…");
     }
     let Some(outcome) = state.live.get(key) else {
         return;
     };
-    ui.add_space(8.0);
+    ui.add_space(9.0);
     ui.label(RichText::new("Server response").strong());
     if let Some(error) = &outcome.transport_error {
         ui.colored_label(theme::error(), error);
@@ -851,11 +851,11 @@ fn schemas_block(ui: &mut Ui, state: &mut FileState) {
     if names.is_empty() {
         return;
     }
-    ui.add_space(12.0);
+    ui.add_space(13.0);
     egui::Frame::new()
         .stroke(Stroke::new(1.0_f32, theme::border()))
         .corner_radius(6)
-        .inner_margin(10)
+        .inner_margin(11)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let open = state.schemas_open;
@@ -867,7 +867,7 @@ fn schemas_block(ui: &mut Ui, state: &mut FileState) {
             }
             for name in names {
                 schema_entry(ui, state, &name);
-                ui.add_space(8.0);
+                ui.add_space(9.0);
             }
         });
 }
@@ -1012,7 +1012,7 @@ fn code_block(ui: &mut Ui, text: &str, json: bool) {
     egui::Frame::new()
         .fill(theme::panel())
         .corner_radius(6)
-        .inner_margin(10)
+        .inner_margin(11)
         .show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(true));
         });
@@ -1203,14 +1203,14 @@ fn authorize_modal(ctx: &egui::Context, state: &mut FileState) {
             ui.label("This document does not declare security schemes.");
         }
         for scheme in &schemes {
-            ui.add_space(8.0);
+            ui.add_space(9.0);
             ui.label(RichText::new(&scheme.title).size(20.0).strong());
             if !scheme.description.is_empty() {
                 ui.label(&scheme.description);
             }
             scheme_fields(ui, state, scheme);
         }
-        ui.add_space(12.0);
+        ui.add_space(13.0);
         ui.horizontal(|ui| {
             let authorized = schemes.iter().any(|scheme| {
                 state

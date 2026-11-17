@@ -236,7 +236,7 @@ impl UsagesPopup {
                         } else {
                             egui::Color32::TRANSPARENT
                         })
-                        .inner_margin(4);
+                        .inner_margin(5);
                     let response = frame
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {

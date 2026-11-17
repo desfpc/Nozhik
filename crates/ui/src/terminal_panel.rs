@@ -426,7 +426,7 @@ impl TerminalPanel {
                     ui.label(
                         egui::RichText::new(if self.llm { "LLM" } else { "Terminal" }).strong(),
                     );
-                    ui.add_space(12.0);
+                    ui.add_space(13.0);
                     let width = (ui.available_width() - 64.0).max(1.0);
                     egui::ScrollArea::horizontal()
                         .id_salt("terminal_tabs")
@@ -435,6 +435,7 @@ impl TerminalPanel {
                         .max_width(width)
                         .max_height(34.0)
                         .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 1.0;
                             for session in self.manager.sessions() {
                                 let id = session.id();
                                 let label = self.labels.get(&id).cloned().unwrap_or_else(|| {
@@ -569,7 +570,7 @@ impl TerminalPanel {
             ui.cursor().top(),
             egui::Stroke::new(1.0_f32, crate::theme::border()),
         );
-        ui.add_space(6.0);
+        ui.add_space(7.0);
         if let Some(id) = self.active
             && let Some(session) = self.manager.session(id)
         {

@@ -417,7 +417,7 @@ impl VcsPanel {
                 ui.set_width(width);
                 egui::Frame::popup(ui.style())
                     .fill(theme::surface())
-                    .inner_margin(10)
+                    .inner_margin(11)
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
                         ui.horizontal(|ui| {
@@ -510,9 +510,9 @@ impl VcsPanel {
                     if branches.is_empty() {
                         continue;
                     }
-                    ui.add_space(8.0);
+                    ui.add_space(9.0);
                     ui.strong(heading);
-                    ui.add_space(6.0);
+                    ui.add_space(7.0);
                     for branch in branches {
                         let current = branch.name == repo.branch;
                         let selected = if merging {
@@ -545,12 +545,12 @@ impl VcsPanel {
             return;
         }
         let modal = crate::dialog::Dialog::new("git_operation_dialog", [760.0, 560.0])
-            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(24).corner_radius(6))
+            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(25).corner_radius(6))
             .show(ctx, |ui| {
                         crate::form::begin(ui);
             let title = match &dialog { Dialog::NewBranch => "Create a Branch".into(), Dialog::Switch(_) => "Switch Branch".into(), Dialog::Merge => format!("Merge into {}", self.branch()), Dialog::Conflicts => "Resolve conflicts before Merge".into(), Dialog::Abort => "Abort Merge?".into(), Dialog::None => String::new() };
             ui.horizontal(|ui| { ui.heading(title); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { self.dialog = Dialog::None; } }); });
-            ui.add_space(12.0); ui.separator(); ui.add_space(12.0);
+            ui.add_space(13.0); ui.separator(); ui.add_space(13.0);
             match dialog {
                 Dialog::NewBranch => self.create_branch_dialog(ui),
                 Dialog::Switch(ref branch) => self.switch_dialog(ui, branch),
@@ -572,12 +572,12 @@ impl VcsPanel {
     fn create_branch_dialog(&mut self, ui: &mut egui::Ui) {
         ui.label("Name");
         ui.add(crate::form::singleline(&mut self.new_branch).desired_width(f32::INFINITY));
-        ui.add_space(12.0);
+        ui.add_space(13.0);
         ui.label(format!(
             "Your new branch will be based on your currently checked out branch ({}).",
             self.branch()
         ));
-        ui.add_space(20.0);
+        ui.add_space(21.0);
         ui.separator();
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - 292.0).max(0.0));
@@ -616,7 +616,7 @@ impl VcsPanel {
             .ctx()
             .data_mut(|d| d.get_temp::<bool>(id))
             .unwrap_or(true);
-        ui.add_space(12.0);
+        ui.add_space(13.0);
         for (value, title, description) in [
             (
                 true,
@@ -637,7 +637,7 @@ impl VcsPanel {
                 })
                 .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(4)
-                .inner_margin(12)
+                .inner_margin(13)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
@@ -655,7 +655,7 @@ impl VcsPanel {
             }
         }
         ui.ctx().data_mut(|d| d.insert_temp(id, leave));
-        ui.add_space(20.0);
+        ui.add_space(21.0);
         ui.separator();
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - 292.0).max(0.0));
@@ -755,7 +755,7 @@ impl VcsPanel {
         };
         let unresolved = repo.conflicts.iter().filter(|c| c.remaining > 0).count();
         ui.strong(format!("{unresolved} conflicted files"));
-        ui.add_space(12.0);
+        ui.add_space(13.0);
         egui::ScrollArea::vertical()
             .id_salt("merge_conflicts")
             .max_height(ui.ctx().screen_rect().height() * 0.4)
@@ -788,7 +788,7 @@ impl VcsPanel {
                 }
             });
         ui.label("Edit and save each file to resolve its conflicts. Status updates automatically.");
-        ui.add_space(16.0);
+        ui.add_space(17.0);
         ui.separator();
         ui.horizontal(|ui| {
             if ui.button("Abort Merge").clicked() {

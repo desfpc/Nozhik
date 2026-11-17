@@ -270,7 +270,7 @@ impl crate::NozhikUi {
                 if let Some(state) = self.openapi.files.get_mut(&path) {
                     ui.selectable_value(&mut state.mode, Mode::Json, "JSON");
                     ui.selectable_value(&mut state.mode, Mode::Gui, "GUI");
-                    ui.add_space(8.0);
+                    ui.add_space(9.0);
                 }
                 if json && !gui && enabled {
                     if ui.button("Open in Tools / JSON").clicked() {

@@ -285,7 +285,7 @@ impl Models {
                     egui::Frame::new()
                         .fill(crate::theme::accent())
                         .corner_radius(4)
-                        .inner_margin(6)
+                        .inner_margin(7)
                         .show(ui, |ui| {
                             ui.label("Model Installed & Ready");
                         });

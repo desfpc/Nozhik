@@ -343,7 +343,7 @@ impl ProblemLog {
                     if close {
                         dismissed.push(*id);
                     }
-                    ui.add_space(8.0);
+                    ui.add_space(9.0);
                 }
                 if hidden > 0 {
                     more_bar(ui, hidden);
@@ -375,7 +375,7 @@ impl ProblemLog {
             self.toggle(category);
         }
         if !self.expanded.contains(&category) {
-            ui.add_space(4.0);
+            ui.add_space(5.0);
             return;
         }
         let rows: Vec<Problem> = self
@@ -389,7 +389,7 @@ impl ProblemLog {
         }
         for problem in rows {
             paint_problem(ui, &problem);
-            ui.add_space(6.0);
+            ui.add_space(7.0);
         }
     }
 
@@ -544,7 +544,7 @@ fn card_frame(fill: Color32) -> Frame {
     Frame::new()
         .fill(fill)
         .corner_radius(CornerRadius::same(theme::RADIUS))
-        .inner_margin(Margin::same(12))
+        .inner_margin(Margin::same(13))
         .stroke(Stroke::new(1.0_f32, theme::border()))
 }
 
@@ -633,7 +633,7 @@ fn more_bar(ui: &mut Ui, hidden: usize) {
     Frame::new()
         .fill(theme::surface())
         .corner_radius(CornerRadius::same(theme::RADIUS))
-        .inner_margin(Margin::symmetric(12, 8))
+        .inner_margin(Margin::symmetric(13, 9))
         .show(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new(format!("{hidden} more")).color(theme::muted()));

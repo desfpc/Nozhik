@@ -174,7 +174,7 @@ impl CloneDialog {
         let busy = self.busy();
         crate::dialog::Dialog::new("clone_repository", [800.0, 680.0]).show(ctx, |ui| {
             ui.heading("Clone a Repository");
-            ui.add_space(12.0);
+            ui.add_space(13.0);
             ui.scope(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
                     crate::form::begin(ui);
@@ -188,7 +188,7 @@ impl CloneDialog {
                     } else {
                         self.url_form(ui);
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(11.0);
                     ui.label("Local destination (new project directory)");
                     ui.horizontal(|ui| {
                         ui.add(crate::form::singleline(&mut self.destination).desired_width(485.0));

@@ -55,11 +55,11 @@ impl NozhikUi {
         let mut selected = None;
         let mut open = false;
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(24.0);
+            ui.add_space(25.0);
             ui.add_enabled_ui(!blocked, |ui| {
                 if self.welcome.about {
                     ui.heading("About Nozhik");
-                    ui.add_space(16.0);
+                    ui.add_space(17.0);
                     ui.hyperlink_to(
                         "github.com/desfpc/Nozhik",
                         "https://github.com/desfpc/Nozhik",
@@ -84,7 +84,7 @@ impl NozhikUi {
                         self.welcome.clone.open = true;
                     }
                 });
-                ui.add_space(20.0);
+                ui.add_space(21.0);
                 ui.separator();
                 if let Some(error) = &self.recent_projects.error {
                     ui.colored_label(crate::theme::error(), format!("Project history: {error}"));
@@ -110,7 +110,7 @@ impl NozhikUi {
                             }
                         }
                         if count == 0 {
-                            ui.add_space(28.0);
+                            ui.add_space(29.0);
                             ui.weak(if filter.is_empty() {
                                 "Open a local folder or clone a repository to get started."
                             } else {
@@ -137,7 +137,7 @@ impl NozhikUi {
             .exact_width(235.0)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.add_space(30.0);
+                ui.add_space(31.0);
                 ui.horizontal(|ui| {
                     if let Some(logo) = &self.welcome.logo {
                         ui.image((logo.id(), egui::vec2(56.0, 56.0)));
@@ -147,7 +147,7 @@ impl NozhikUi {
                         ui.weak(env!("CARGO_PKG_VERSION"));
                     });
                 });
-                ui.add_space(32.0);
+                ui.add_space(33.0);
                 ui.add_enabled_ui(!blocked, |ui| {
                     if ui
                         .add_sized(

@@ -38,7 +38,7 @@ fn menu_frame() -> egui::Frame {
         .fill(theme::chrome())
         .stroke(Stroke::new(1.0_f32, theme::muted()))
         .corner_radius(8)
-        .inner_margin(6)
+        .inner_margin(7)
 }
 
 impl NozhikUi {
@@ -114,12 +114,12 @@ impl NozhikUi {
                     + tab_padding(&t.name)
             })
             .collect();
-        let total: f32 = widths.iter().sum();
-        let overflow = total > (ui.available_width() - CONTROL - 4.0).max(0.0) + 0.5;
+        let total: f32 = widths.iter().map(|width| width + 1.0).sum::<f32>() - 1.0;
+        let overflow = total > (ui.available_width() - CONTROL - 5.0).max(0.0) + 0.5;
         let reserved = if overflow {
-            CONTROL.mul_add(2.0, 8.0)
+            CONTROL.mul_add(2.0, 10.0)
         } else {
-            CONTROL + 4.0
+            CONTROL + 5.0
         };
         let active = tabs.iter().find(|t| t.selected).map(|t| t.buffer);
         let reveal = active != self.tabs.active;
@@ -149,6 +149,7 @@ impl NozhikUi {
                             .max_width(width)
                             .max_height(HEIGHT)
                             .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.x = 1.0;
                                 for (tab, width) in tabs.iter().zip(&widths) {
                                     let (rect, response) = ui
                                         .allocate_exact_size(vec2(*width, HEIGHT), Sense::click());
@@ -201,7 +202,7 @@ impl NozhikUi {
                         );
                     },
                 );
-                ui.add_space(4.0);
+                ui.add_space(5.0);
                 if overflow {
                     let button = control(ui, "Show hidden tabs", false);
                     #[cfg(test)]
@@ -211,7 +212,7 @@ impl NozhikUi {
                     if let Some(menu) = overflow_menu(&button, &hidden, popup_limit) {
                         activate = menu.inner.or(activate);
                     }
-                    ui.add_space(4.0);
+                    ui.add_space(5.0);
                 }
                 let button = control(ui, "Tab actions", true);
                 #[cfg(test)]
@@ -260,7 +261,7 @@ impl NozhikUi {
             ui.cursor().top(),
             Stroke::new(1.0_f32, theme::border()),
         );
-        ui.add_space(4.0);
+        ui.add_space(5.0);
         if let Some(id) = activate {
             self.activate_tab(id);
         }
@@ -287,7 +288,7 @@ fn overflow_menu(
         .frame(frame)
         .width(limit.x)
         .show(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = 3.0;
             ui.spacing_mut().button_padding = vec2(8.0, 3.0);
             let font = egui::TextStyle::Button.resolve(ui.style());
             let labels: Vec<_> = hidden

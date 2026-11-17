@@ -297,7 +297,7 @@ impl VcsPanel {
         let mut close = false;
         let mut apply = false;
         let modal = crate::dialog::Dialog::new("git_history_action", [800.0, 620.0])
-            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(22))
+            .frame(egui::Frame::popup(&ctx.style()).fill(theme::surface()).inner_margin(23))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| { ui.heading(dialog.title.trim_end_matches('…')); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("×").clicked() { close = true; } }); });
                 ui.separator();

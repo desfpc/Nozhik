@@ -92,7 +92,7 @@ impl crate::NozhikUi {
             ui.selectable_value(&mut preview.mode, Mode::Text, "Text");
             ui.selectable_value(&mut preview.mode, Mode::Gui, "GUI");
             if gui {
-                ui.add_space(8.0);
+                ui.add_space(9.0);
                 for step in [Scale::Small, Scale::Medium, Scale::Large] {
                     let label = egui::RichText::new("A").size(step.button_size());
                     ui.selectable_value(&mut preview.scale, step, label);

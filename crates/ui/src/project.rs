@@ -444,7 +444,7 @@ impl NozhikUi {
             self.project_controls.buttons = vec![egui::Rect::NOTHING; 4];
         }
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().item_spacing.x = 3.0;
             ui.label(egui::RichText::new("Project").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for (icon, label, enabled) in [

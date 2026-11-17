@@ -203,7 +203,7 @@ fn render_list(ui: &mut Ui, events: &mut Events<'_>, start: Option<u64>, doc: &m
     let mut number = start.unwrap_or(1);
     let scale = doc.scale;
     ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 4.0 * scale;
+        ui.spacing_mut().item_spacing.y = 5.0 * scale;
         loop {
             match events.peek() {
                 Some(Event::Start(Tag::Item)) => {
@@ -228,7 +228,7 @@ fn render_list(ui: &mut Ui, events: &mut Events<'_>, start: Option<u64>, doc: &m
                     };
                     let line = line_height(ui, scale);
                     ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0 * scale;
+                        ui.spacing_mut().item_spacing.x = 9.0 * scale;
                         paint_list_marker(ui, &marker, line, scale);
                         ui.vertical(|ui| {
                             let saved_space = doc.space;
@@ -284,7 +284,7 @@ fn paint_list_marker(ui: &mut Ui, marker: &ListMarker, line: f32, scale: f32) {
 fn paint_quote(ui: &mut Ui, events: &mut Events<'_>, end: TagEnd, doc: &mut Doc<'_>) {
     let scale = doc.scale;
     ui.horizontal_top(|ui| {
-        ui.add_space(12.0 * scale);
+        ui.add_space(13.0 * scale);
         let saved = doc.space;
         doc.space = 4.0 * scale;
         let inner = ui.vertical(|ui| render_until(ui, events, Some(end), doc));
@@ -319,7 +319,7 @@ fn paint_code_frame(ui: &mut Ui, language: Option<&str>, text: &str, scale: f32)
     egui::Frame::new()
         .fill(theme::surface())
         .corner_radius(theme::RADIUS)
-        .inner_margin(10.0 * scale)
+        .inner_margin(11.0 * scale)
         .show(ui, |ui| {
             if let Some(language) = language {
                 let small = egui::TextStyle::Small.resolve(ui.style()).size * scale;
@@ -387,7 +387,7 @@ fn paint_heading(ui: &mut Ui, level: HeadingLevel, items: &[Inline], doc: &mut D
         ..Face::default()
     };
     paint_inlines(ui, items, &face, doc);
-    ui.add_space(2.0 * doc.scale);
+    ui.add_space(3.0 * doc.scale);
 }
 
 fn paint_rule(ui: &mut Ui, scale: f32) {

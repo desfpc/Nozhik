@@ -611,7 +611,7 @@ fn history_full_width_rows_select_commits_and_files_in_separate_columns()
         })
         .ok_or("file row")?;
     assert!(second.x > 300.0 && second.x < 600.0);
-    assert!((second.y - first.y - 32.0).abs() < 1.0);
+    assert!((second.y - first.y - 33.0).abs() < 1.0);
     // Click empty space at the end of the file row.
     click_at(
         &mut panel,

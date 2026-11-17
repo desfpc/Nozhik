@@ -168,7 +168,7 @@ impl TableEditor {
         egui::Frame::new()
             .fill(crate::theme::panel())
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(4.0)
+            .inner_margin(5.0)
             .show(ui, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
                     let width = ((ui.available_width() - 95.0) * 0.5).max(80.0);
@@ -200,7 +200,7 @@ impl TableEditor {
                 .fill(crate::theme::panel())
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .corner_radius(8.0)
-                .inner_margin(8.0)
+                .inner_margin(9.0)
                 .show(ui, |ui| {
                     ui.add_enabled_ui(enabled && self.changes.is_some(), |ui| {
                         ui.horizontal(|ui| {

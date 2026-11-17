@@ -288,7 +288,7 @@ impl Snippets {
             .id_salt("snippet_nav")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(9.0);
                 section_label(ui, "Favorites");
                 if nav_row(
                     ui,
@@ -312,7 +312,7 @@ impl Snippets {
                 }
                 section_label(ui, "Tags");
                 if self.file.snippets.is_empty() && self.loaded {
-                    ui.add_space(4.0);
+                    ui.add_space(5.0);
                     ui.weak("No tags yet");
                 }
                 for (tag, count) in tag_rows(&self.file.snippets) {
@@ -329,7 +329,7 @@ impl Snippets {
                         pick = Some(NavPick::Tag(tag));
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(13.0);
             });
         if enabled && let Some(pick) = pick {
             match pick {
@@ -705,14 +705,14 @@ impl Snippets {
         if self.query.ends_with('\n') {
             self.query.pop();
         }
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         if !self.loaded {
             ui.weak("Loading snippets…");
             return;
         }
         let indices = self.visible_indices();
         if indices.is_empty() {
-            ui.add_space(24.0);
+            ui.add_space(25.0);
             ui.weak(if self.file.snippets.is_empty() {
                 "No snippets yet"
             } else {
@@ -739,7 +739,7 @@ impl Snippets {
                             ui.close();
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(5.0);
                 }
             });
         if !enabled {
@@ -985,7 +985,7 @@ impl Snippets {
             .show(ctx, |ui| {
                 Frame::popup(ui.style())
                     .fill(theme::surface())
-                    .inner_margin(12)
+                    .inner_margin(13)
                     .corner_radius(CornerRadius::same(10))
                     .show(ui, |ui| {
                         ui.set_min_width(260.0);
@@ -993,7 +993,7 @@ impl Snippets {
                         ui.vertical_centered(|ui| {
                             ui.label(RichText::new("Assign tags to snippet").strong());
                         });
-                        ui.add_space(8.0);
+                        ui.add_space(9.0);
                         if current.is_empty() {
                             ui.weak("No tags yet");
                         } else {
@@ -1005,7 +1005,7 @@ impl Snippets {
                                 }
                             });
                         }
-                        ui.add_space(8.0);
+                        ui.add_space(9.0);
                         let output = crate::form::singleline(&mut self.tag_draft)
                             .id(tag_id())
                             .hint_text("Add a tag")
@@ -1017,7 +1017,7 @@ impl Snippets {
                             add = Some(self.tag_draft.clone());
                         }
                         if !suggestions.is_empty() {
-                            ui.add_space(8.0);
+                            ui.add_space(9.0);
                             ui.label(
                                 RichText::new("Suggestions")
                                     .color(theme::muted())
@@ -1192,12 +1192,12 @@ pub fn sidebar_frame() -> Frame {
     // Horizontal inset keeps section titles and rows off the column border.
     Frame::new()
         .fill(theme::panel())
-        .inner_margin(Margin::symmetric(8, 0))
+        .inner_margin(Margin::symmetric(9, 1))
 }
 
 /// Editor surface behind the snippet text.
 pub fn editor_frame() -> Frame {
-    Frame::new().fill(theme::background()).inner_margin(0)
+    Frame::new().fill(theme::background()).inner_margin(1)
 }
 
 fn worker(
@@ -1545,9 +1545,9 @@ fn body_font(ui: &Ui) -> FontId {
 }
 
 fn section_label(ui: &mut Ui, text: &str) {
-    ui.add_space(10.0);
+    ui.add_space(11.0);
     ui.label(RichText::new(text).size(12.0).color(theme::muted()));
-    ui.add_space(4.0);
+    ui.add_space(5.0);
 }
 
 fn nav_row(
@@ -1601,7 +1601,7 @@ fn snippet_card(ui: &mut Ui, snippet: &Snippet, selected: bool) -> egui::Respons
     let inner = ui
         .vertical(|ui| {
             ui.set_width(ui.available_width());
-            ui.add_space(6.0);
+            ui.add_space(7.0);
             let title = if snippet.title.trim().is_empty() {
                 "untitled snippet"
             } else {
@@ -1663,7 +1663,7 @@ fn snippet_card(ui: &mut Ui, snippet: &Snippet, selected: bool) -> egui::Respons
                     );
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(5.0);
         })
         .response;
     let fill = if selected {

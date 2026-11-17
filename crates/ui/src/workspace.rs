@@ -477,12 +477,12 @@ impl NozhikUi {
                 egui::Frame::popup(ui.style())
                     .fill(theme::surface())
                     .corner_radius(9)
-                    .inner_margin(7)
+                    .inner_margin(8)
                     .stroke(egui::Stroke::new(1.0_f32, theme::border())),
             )
             .show(|ui| {
                 ui.set_width(350.0_f32.min(ui.ctx().screen_rect().width() - 40.0));
-                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
                 if project_menu_action(ui, "Open…", crate::tool_icons::Icon::Project).clicked() {
                     ui.close();
                     self.choose_project_folder(ui.ctx());
@@ -547,24 +547,24 @@ impl NozhikUi {
         let mut rects = Vec::new();
         let mut viewport = egui::Rect::NOTHING;
         egui::TopBottomPanel::top("project_tabs")
-            .exact_height(36.0)
+            .exact_height(38.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::chrome())
                     .inner_margin(egui::Margin {
-                        left: 6,
-                        right: 6,
-                        top: 4,
-                        bottom: 4,
+                        left: 7,
+                        right: 7,
+                        top: 5,
+                        bottom: 5,
                     }),
             )
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+                ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
                 let count = f32::from(u16::try_from(entries.len()).unwrap_or(u16::MAX));
-                let overflow = count.mul_add(141.0, -1.0) > ui.available_width() + 0.5;
+                let overflow = count.mul_add(142.0, -2.0) > ui.available_width() + 0.5;
                 let view_width =
                     (ui.available_width() - if overflow { 52.0 } else { 0.0 }).max(1.0);
-                let width = ((view_width - (count - 1.0)) / count).max(140.0);
+                let width = ((count - 1.0).mul_add(-2.0, view_width) / count).max(140.0);
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(view_width, 28.0),
@@ -588,7 +588,7 @@ impl NozhikUi {
                                 .max_height(28.0)
                                 .animated(false)
                                 .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.x = 1.0;
+                                    ui.spacing_mut().item_spacing.x = 2.0;
                                     ui.horizontal_top(|ui| {
                                         for (index, path) in entries.iter().enumerate() {
                                             let (rect, response) = ui.allocate_exact_size(
@@ -655,7 +655,7 @@ impl NozhikUi {
                         },
                     );
                     if overflow {
-                        let maximum = count.mul_add(width + 1.0, -1.0) - view_width;
+                        let maximum = count.mul_add(width + 2.0, -2.0) - view_width;
                         for (direction, enabled) in [
                             (-1.0, self.workspace.tab_offset > 0.5),
                             (1.0, self.workspace.tab_offset < maximum - 0.5),
@@ -1226,12 +1226,13 @@ mod tests {
         assert!(text_position(&output, "Clone Repository…").is_some());
         assert!(text_position(&output, "Open Projects").is_some());
         assert!(text_position(&output, "Recent Projects").is_some());
+        let menu_heading = text_position(&output, "Open Projects").ok_or("menu heading missing")?;
         let row = output
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Text(text)
-                    if text.galley.job.text == "First" && text.pos.y > 110.0 =>
+                    if text.galley.job.text == "First" && text.pos.y > menu_heading.y =>
                 {
                     Some(text.pos + text.galley.size() * 0.5)
                 }

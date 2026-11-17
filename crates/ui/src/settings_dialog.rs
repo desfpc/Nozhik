@@ -226,19 +226,21 @@ impl SettingsDialog {
         containers: &[(String, String)],
     ) -> bool {
         let compact = size.x < 560.0;
-        let height = (size.y - if compact { 50.0 } else { 0.0 }).max(0.0);
+        let height = size.y.max(0.0);
         if compact {
+            let top = ui.cursor().top();
             // One category row keeps the modal inside a short window; further rows scroll.
             let plugins = egui::ScrollArea::vertical()
                 .id_salt("settings_categories_compact")
                 .min_scrolled_height(0.0)
                 .auto_shrink([false, true])
-                .max_height(40.0)
+                .max_height(ui.spacing().interact_size.y)
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| self.navigation(ui)).inner
                 })
                 .inner;
             ui.separator();
+            let height = (height - (ui.cursor().top() - top)).max(0.0);
             self.options(
                 ui,
                 config,
@@ -351,7 +353,7 @@ impl SettingsDialog {
                 }
             });
         }
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         ui.label("Changes apply immediately.");
         ui.weak("Disabled files remain editable as plain text and searchable by name.");
         ui.weak("Disabling a language stops its indexing, diagnostics, syntax highlighting and completion. Its disk cache is retained for later use.");
@@ -444,7 +446,7 @@ impl SettingsDialog {
         if selection != previous {
             config.file_types.insert(extension.clone(), selection);
         }
-        ui.add_space(12.0);
+        ui.add_space(13.0);
         ui.weak("JSON profiles: ~/.nozhik/code_styles/<extension>/");
         ui.weak("Also reads code_styles/ beside settings.toml");
         if ui.button("Reload profiles").clicked() {
@@ -566,7 +568,7 @@ impl crate::NozhikUi {
                 egui::Frame::new()
                     .fill(crate::theme::background())
                     .corner_radius(8)
-                    .inner_margin(16),
+                    .inner_margin(17),
             )
             .show(ctx, |ui| {
                 ui.visuals_mut().window_corner_radius = egui::CornerRadius::same(8);

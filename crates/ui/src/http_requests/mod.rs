@@ -309,7 +309,7 @@ impl HttpRequests {
             .id_salt("http_request_nav")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(9.0);
                 section_label(ui, "Library");
                 if nav_row(ui, "All requests", None, self.filter == Filter::All) {
                     pick = Some(Filter::All);
@@ -319,7 +319,7 @@ impl HttpRequests {
                 }
                 section_label(ui, "Tags");
                 if self.file.requests.is_empty() && self.loaded {
-                    ui.add_space(4.0);
+                    ui.add_space(5.0);
                     ui.weak("No tags yet");
                 }
                 for (tag, count) in tag_rows(&self.file.requests) {
@@ -330,7 +330,7 @@ impl HttpRequests {
                         pick = Some(Filter::Tag);
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(13.0);
             });
         if enabled && let Some(pick) = pick {
             self.filter = pick;
@@ -648,7 +648,7 @@ impl HttpRequests {
         {
             self.create();
         }
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         if !self.loaded {
             ui.weak("Loading requests…");
             return;
@@ -760,7 +760,7 @@ impl HttpRequests {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 crate::form::begin(ui);
-                ui.add_space(8.0);
+                ui.add_space(9.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(enabled && self.can_edit(), |ui| {
                         let name = crate::form::singleline(&mut self.file.requests[index].name)
@@ -780,7 +780,7 @@ impl HttpRequests {
                 if self.assign_tags {
                     self.tag_popup(ui, index, enabled);
                 }
-                ui.add_space(6.0);
+                ui.add_space(7.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(enabled && self.can_edit(), |ui| {
                         let mut method = self.file.requests[index].method.clone();
@@ -812,7 +812,7 @@ impl HttpRequests {
                         self.send_selected();
                     }
                 });
-                ui.add_space(8.0);
+                ui.add_space(9.0);
                 ui.horizontal(|ui| {
                     for (tab, label) in [
                         (Tab::Query, "Query"),
@@ -824,7 +824,7 @@ impl HttpRequests {
                         }
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(5.0);
                 ui.add_enabled_ui(enabled && self.can_edit(), |ui| match self.tab {
                     Tab::Query => {
                         builder_changed |= edit_fields(
@@ -846,7 +846,7 @@ impl HttpRequests {
                     }
                     Tab::Body => builder_changed |= self.edit_body(ui, index, &request_id),
                 });
-                ui.add_space(10.0);
+                ui.add_space(11.0);
                 ui.label(RichText::new("cURL").strong());
                 if let Some(error) = &self.curl_error {
                     ui.colored_label(theme::error(), error);
@@ -885,7 +885,7 @@ impl HttpRequests {
                     }
                 }
                 self.show_response(ui, &request_id);
-                ui.add_space(12.0);
+                ui.add_space(13.0);
             });
         command
     }
@@ -1007,13 +1007,13 @@ impl HttpRequests {
 
     fn show_response(&self, ui: &mut Ui, id: &str) {
         if self.inflight.contains_key(id) {
-            ui.add_space(8.0);
+            ui.add_space(9.0);
             ui.weak("Sending…");
         }
         let Some(outcome) = self.outcomes.get(id) else {
             return;
         };
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         ui.horizontal(|ui| {
             let color = outcome.status_code.map_or_else(theme::error, |code| {
                 if (200..400).contains(&code) {
@@ -1039,7 +1039,7 @@ impl HttpRequests {
         if !outcome.body.is_empty() {
             egui::Frame::new()
                 .fill(theme::panel())
-                .inner_margin(8)
+                .inner_margin(9)
                 .corner_radius(6)
                 .show(ui, |ui| {
                     ui.monospace(&outcome.body);
@@ -1324,12 +1324,12 @@ pub(crate) fn sidebar_frame() -> Frame {
     // Horizontal inset keeps section titles and rows off the column border.
     Frame::new()
         .fill(theme::panel())
-        .inner_margin(Margin::symmetric(8, 0))
+        .inner_margin(Margin::symmetric(9, 1))
 }
 
 /// Builder surface.
 pub(crate) fn editor_frame() -> Frame {
-    Frame::new().fill(theme::background()).inner_margin(0)
+    Frame::new().fill(theme::background()).inner_margin(1)
 }
 
 fn assemble(request: &Request) -> Result<Outgoing, String> {
@@ -1630,7 +1630,7 @@ fn nav_row(ui: &mut Ui, label: &str, count: Option<usize>, selected: bool) -> bo
 }
 
 fn section_label(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(7.0);
     ui.label(RichText::new(text).small().color(theme::muted()).strong());
 }
 

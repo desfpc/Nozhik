@@ -650,7 +650,7 @@ impl VcsPanel {
     }
     fn changes(&mut self, ui: &mut egui::Ui) {
         egui::Frame::new()
-            .inner_margin(10)
+            .inner_margin(11)
             .show(ui, |ui| self.changes_contents(ui));
     }
     fn changes_contents(&mut self, ui: &mut egui::Ui) {
@@ -707,7 +707,7 @@ impl VcsPanel {
             .min_scrolled_height(height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.spacing_mut().item_spacing.y = 1.0;
                 let pane_width = ui.available_width();
                 let visible = changes
                     .iter()
@@ -837,14 +837,14 @@ impl VcsPanel {
         if self.history.is_empty() {
             ui.weak("No commits yet");
         }
-        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.spacing_mut().item_spacing.y = 1.0;
         let height = (ui.available_height() - 36.0).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("git_history")
             .max_height(height)
             .auto_shrink([false, false])
             .show_rows(ui, 56.0, self.history.len(), |ui, rows| {
-                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.spacing_mut().item_spacing.y = 1.0;
                 for index in rows {
                     let commit = self.history[index].clone();
                     let selected = self.history_selection.contains(&commit.sha);
@@ -897,7 +897,7 @@ impl VcsPanel {
         let Some(commit) = details.commits.first() else {
             return;
         };
-        egui::Frame::new().inner_margin(10).show(ui, |ui| {
+        egui::Frame::new().inner_margin(11).show(ui, |ui| {
             ui.set_width(ui.available_width());
             if details.commits.len() > 1 {
                 ui.strong(format!("Showing changes from {} commits", details.commits.len()));
@@ -921,14 +921,14 @@ impl VcsPanel {
             .width_range(120.0..=420.0)
             .frame(egui::Frame::new().fill(theme::surface()))
             .show_inside(ui, |ui| {
-                egui::Frame::new().inner_margin(10).show(ui, |ui| {
+                egui::Frame::new().inner_margin(11).show(ui, |ui| {
                     ui.label(format!("{} changed files", details.files.len()));
                 });
                 egui::ScrollArea::vertical()
                     .id_salt("commit_files")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         for file in &details.files {
                             let Some(diff_target) = file.diff_target() else {
                                 continue;
@@ -1004,7 +1004,7 @@ impl VcsPanel {
     fn diff_contents(&mut self, ui: &mut egui::Ui, font_size: f32) {
         egui::Frame::new()
             .fill(theme::header())
-            .inner_margin(4)
+            .inner_margin(5)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);

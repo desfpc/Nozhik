@@ -524,7 +524,13 @@ pub fn apply_id(ctx: &Context, id: &str) {
     ctx.style_mut(|style| {
         style.interaction.resize_grab_radius_side = SPLITTER;
         style.spacing.button_padding = button_padding;
-        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.item_spacing = egui::vec2(7.0, 5.0);
+        style.spacing.window_margin = egui::Margin::same(7);
+        style.spacing.menu_margin = egui::Margin::same(7);
+        style.spacing.indent = 19.0;
+        style.spacing.menu_spacing = 3.0;
+        style.spacing.scroll.bar_inner_margin = 5.0;
+        style.spacing.scroll.bar_outer_margin = 1.0;
     });
     // Fonts are not readable until the first pass. The hook runs after that pass
     // starts, so `interact_size` matches a button before any widget is built.
@@ -615,13 +621,13 @@ pub fn dock_frame(fill: Color32) -> egui::Frame {
     egui::Frame::new()
         .fill(fill)
         .corner_radius(RADIUS)
-        .inner_margin(8)
-        .outer_margin(egui::Margin::same(2))
+        .inner_margin(9)
+        .outer_margin(egui::Margin::same(3))
 }
 
 /// Compact rail surrounding the work area.
 pub fn rail_frame() -> egui::Frame {
-    egui::Frame::new().fill(chrome()).inner_margin(4)
+    egui::Frame::new().fill(chrome()).inner_margin(5)
 }
 
 #[derive(Clone, Copy)]
@@ -962,16 +968,16 @@ mod tests {
     }
 
     #[test]
-    fn standard_scheme_keeps_the_previous_new_ui_dark_colors() {
+    fn standard_scheme_uses_neutral_surfaces_and_preserves_accents() {
         install("dark");
-        assert_eq!(background(), Color32::from_rgb(30, 31, 32));
-        assert_eq!(panel(), Color32::from_rgb(24, 25, 26));
-        assert_eq!(border(), Color32::from_rgb(57, 59, 64));
+        assert_eq!(background(), Color32::from_rgb(28, 29, 30));
+        assert_eq!(panel(), Color32::from_rgb(21, 22, 23));
+        assert_eq!(border(), Color32::from_rgb(58, 59, 62));
         assert_eq!(super::accent(), Color32::from_rgb(46, 67, 110));
         assert_eq!(hover(), Color32::from_rgb(53, 55, 60));
         assert_eq!(text(), Color32::from_rgb(188, 190, 196));
         assert_eq!(muted(), Color32::from_rgb(122, 126, 133));
-        assert_eq!(chrome(), Color32::from_rgb(38, 40, 42));
+        assert_eq!(chrome(), Color32::from_rgb(39, 40, 41));
         assert_eq!(success(), Color32::from_rgb(90, 200, 120));
         assert_eq!(syntax_color("keyword"), Color32::from_rgb(207, 142, 109));
         assert_eq!(syntax_color("string"), Color32::from_rgb(106, 171, 115));
@@ -1029,7 +1035,7 @@ mod tests {
         assert_eq!(resolve("light").background, Color32::WHITE);
         assert_eq!(
             resolve("catppuccin").background,
-            Color32::from_rgb(30, 30, 46)
+            Color32::from_rgb(28, 28, 40)
         );
         assert_eq!(resolve("missing").id, "dark");
     }
@@ -1079,13 +1085,13 @@ mod tests {
         assert_eq!(text(), Color32::from_rgb(25, 26, 28));
         apply_id(&ctx, "dark");
         assert!(ctx.style().visuals.dark_mode);
-        assert_eq!(background(), Color32::from_rgb(30, 31, 32));
+        assert_eq!(background(), Color32::from_rgb(28, 29, 30));
     }
 
     #[test]
     fn rejects_unknown_fields_and_bad_colors() {
         assert!(parse_schemes(r#"{"schemes":[],"extra":1}"#).is_err());
-        let broken = include_str!("../assets/color-schemes.json").replace("#1E1F20", "nope");
+        let broken = include_str!("../assets/color-schemes.json").replace("#1C1D1E", "nope");
         assert!(parse_schemes(&broken).is_err());
     }
 

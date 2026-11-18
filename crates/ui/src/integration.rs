@@ -44,7 +44,19 @@ pub struct Integration {
     about: bool,
     fullscreen: bool,
 }
+const FIND_QUERY_ID: &str = "nozhik-find-query";
+const FIND_REPLACEMENT_ID: &str = "nozhik-find-replacement";
+
 impl Integration {
+    fn find_field_focused(&self, ctx: &egui::Context) -> bool {
+        self.find
+            && ctx.memory(|memory| {
+                [FIND_QUERY_ID, FIND_REPLACEMENT_ID]
+                    .iter()
+                    .any(|id| memory.has_focus(egui::Id::new(id)))
+            })
+    }
+
     pub(crate) const fn blocking(&self) -> bool {
         self.close.is_some() || self.path_action.is_some()
     }
@@ -346,6 +358,24 @@ impl NozhikUi {
                     }
                 }
                 "ui.cut" | "ui.copy" | "ui.paste" => {
+                    // Find/Replace owns its selection and must keep focus when the
+                    // native Edit menu requests clipboard operations.
+                    if self.integration.find_field_focused(ctx) {
+                        match action.as_str() {
+                            "ui.copy" => ctx.input_mut(|input| {
+                                if !input.events.contains(&egui::Event::Copy) {
+                                    input.events.push(egui::Event::Copy);
+                                }
+                            }),
+                            "ui.cut" => ctx.input_mut(|input| {
+                                if !input.events.contains(&egui::Event::Cut) {
+                                    input.events.push(egui::Event::Cut);
+                                }
+                            }),
+                            _ => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                        }
+                        continue;
+                    }
                     if self.bottom == Some(crate::llm_panel::LLM_LABEL)
                         && self
                             .llm
@@ -755,14 +785,17 @@ impl NozhikUi {
             ui.label("Find");
             let find_field = ui.add(
                 crate::form::singleline(&mut self.integration.query)
-                    .id(egui::Id::new("nozhik-find-query")),
+                    .id(egui::Id::new(FIND_QUERY_ID)),
             );
             if self.integration.find_focus {
                 find_field.request_focus();
                 self.integration.find_focus = false;
             }
             ui.label("Replace");
-            ui.add(crate::form::singleline(&mut self.integration.replacement));
+            ui.add(
+                crate::form::singleline(&mut self.integration.replacement)
+                    .id(egui::Id::new(FIND_REPLACEMENT_ID)),
+            );
             find = ui.button("Next").clicked();
             replace = ui.button("Replace").clicked();
             all = ui.button("Replace All").clicked();
@@ -1065,6 +1098,133 @@ mod tests {
             ctx.memory(|memory| memory.has_focus(find_id)),
             "Cmd/Ctrl+F must focus the Find field"
         );
+        Ok(())
+    }
+
+    fn clipboard_frame(
+        shell: &mut NozhikUi,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                shell.global_actions(ctx);
+                shell.editor_area(ctx);
+            },
+        )
+    }
+
+    #[test]
+    fn find_replace_clipboard_preserves_document_and_field_focus()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for field in [FIND_QUERY_ID, FIND_REPLACEMENT_ID] {
+            let dir = tempfile::tempdir()?;
+            let mut shell = shell(dir.path())?;
+            shell.loaded_file(dir.path().join("notes.txt"), "source selection", false);
+            let buffer = &mut shell.documents[0].buffer;
+            let cursors = vec![Cursor {
+                anchor: buffer.position_at(0)?,
+                head: buffer.position_at(6)?,
+            }];
+            buffer.set_cursors(cursors.clone())?;
+            let ctx = egui::Context::default();
+            clipboard_frame(&mut shell, &ctx, Vec::new());
+            shell.integration.actions.push("ui.find".into());
+            clipboard_frame(&mut shell, &ctx, Vec::new());
+            let id = egui::Id::new(field);
+            ctx.memory_mut(|memory| memory.request_focus(id));
+            clipboard_frame(&mut shell, &ctx, Vec::new());
+
+            shell.integration.actions.push("ui.paste".into());
+            let requested = clipboard_frame(&mut shell, &ctx, Vec::new());
+            assert!(requested.viewport_output.values().any(|output| {
+                output
+                    .commands
+                    .contains(&egui::ViewportCommand::RequestPaste)
+            }));
+            // egui-winit delivers the native clipboard response on a later frame.
+            clipboard_frame(
+                &mut shell,
+                &ctx,
+                vec![egui::Event::Paste("Ж🦀 text".into())],
+            );
+            assert!(ctx.memory(|memory| memory.has_focus(id)));
+            let text = if field == FIND_QUERY_ID {
+                &shell.integration.query
+            } else {
+                &shell.integration.replacement
+            };
+            assert_eq!(text, "Ж🦀 text");
+
+            // Select Unicode scalars, as TextEdit does, rather than source byte offsets.
+            let mut state = egui::TextEdit::load_state(&ctx, id).ok_or("field state missing")?;
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(2),
+                )));
+            state.store(&ctx, id);
+            for (action, event) in [
+                (None, Some(egui::Event::Copy)),
+                (Some("ui.copy"), None),
+                (Some("ui.copy"), Some(egui::Event::Copy)),
+                (Some("ui.cut"), None),
+            ] {
+                if let Some(action) = action {
+                    shell.integration.actions.push(action.into());
+                }
+                // Native shortcuts may also arrive with an egui clipboard event.
+                let output = clipboard_frame(&mut shell, &ctx, event.into_iter().collect());
+                let copied: Vec<_> = output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .filter_map(|command| {
+                        if let egui::OutputCommand::CopyText(text) = command {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(copied, ["Ж🦀"]);
+            }
+            let text = if field == FIND_QUERY_ID {
+                &shell.integration.query
+            } else {
+                &shell.integration.replacement
+            };
+            assert_eq!(text, " text");
+            assert!(ctx.memory(|memory| memory.has_focus(id)));
+            assert_eq!(
+                shell.documents[0].buffer.rope().to_string(),
+                "source selection"
+            );
+            assert_eq!(shell.documents[0].buffer.cursors().as_slice(), cursors);
+            assert!(!shell.documents[0].buffer.is_dirty());
+
+            // An open search bar must still let the editor own clipboard input
+            // once the user returns focus to the document.
+            let editor = shell
+                .integration
+                .last_editor
+                .ok_or("editor focus missing")?;
+            ctx.memory_mut(|memory| memory.request_focus(editor));
+            clipboard_frame(&mut shell, &ctx, vec![egui::Event::Paste("file".into())]);
+            assert_eq!(
+                shell.documents[0].buffer.rope().to_string(),
+                "file selection"
+            );
+        }
         Ok(())
     }
 

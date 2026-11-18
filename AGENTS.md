@@ -71,4 +71,4 @@ CI binaries.yml сохраняет сборки обеих платформ то
 Версия ведётся в `[workspace.package].version` корневого `Cargo.toml`.
 Каждая следующая доработка/коммит увеличивает patch-версию один раз и обновляет
 `Cargo.lock`; интерфейс и app bundle используют эту же версию.
-Текущая версия — 0.1.75 (Preserve preview selection on right click), следующая — 0.1.76.
+Текущая версия — 0.1.77 (File tab context menu), следующая — 0.1.78.

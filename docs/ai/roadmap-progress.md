@@ -4991,3 +4991,58 @@ app archive с ad-hoc подписью и legal materials; --check подтве�
 403 MiB, binaries — 117 MiB. Исходники, история, настройки и готовые бинарники
 с legal materials сохранены. После очистки сборки не запускались.
 Commit/push в этой задаче не выполнялись.
+
+
+## Буфер обмена в Find/Replace — v0.1.76 (2026-11-18)
+
+Общие команды Copy/Cut/Paste сначала проверяют фокус полей Find/Replace.
+Copy/Cut передаются штатному TextEdit с защитой от повторного события, Paste
+запрашивает системный буфер без отложенного возврата фокуса редактору.
+Replace получил стабильный widget id. Открытая панель не мешает операциям
+с документом после возврата фокуса в редактор.
+
+Headless-регрессия проверяет оба поля: Unicode paste, копирование и вырезание
+выделения через общие команды и события egui, сохранение фокуса, текста,
+курсоров и dirty-состояния открытого файла, затем вставку в сам документ.
+Версия workspace/lock — 0.1.76; следующая — 0.1.77.
+
+fmt, git diff --check, workspace Clippy all-targets/all-features с -D warnings
+и workspace release build прошли. update-binaries.py обновил macOS ARM64
+executable, app archive и legal materials; --check подтвердил исходники
+и checksums после удаления лишнего untracked Finder .DS_Store из комплекта.
+Windows не пересобирался; ручная проверка нативного окна не выполнялась.
+
+Полный последовательный workspace test all-features: 493 passed,
+0 failed, 19 прежних ignored. Первый sandbox-прогон остановился
+на запрете локальных сокетов; полный повтор вне sandbox прошёл.
+Commit/push не выполнялись.
+
+После проверки бинарников cargo clean удалил 8.2 GiB (25208 файлов).
+Удалены логи задачи и 6 untracked Finder файлов, включая файл из комплекта.
+Итоговый размер проекта — 404 MiB, binaries — 117 MiB. Исходники, история,
+настройки и готовые бинарники с legal materials сохранены; повторный --check
+после очистки прошёл. После очистки сборки не запускались.
+
+
+## Контекстное меню вкладок файлов — v0.1.77 (2026-11-18)
+
+Правый клик по вкладке файла открывает Copy path и Show in File Manager.
+Copy path копирует полный путь документа; Show in File Manager передаёт путь
+существующей команде файлового worker, как в дереве проекта. Меню относится
+к вкладке под указателем без смены активного документа и отсутствует у SQL-вкладок.
+Версия workspace/lock — 0.1.77; следующая — 0.1.78.
+
+fmt, git diff --check, workspace Clippy all-targets/all-features с -D warnings
+и workspace release build прошли. Ручная проверка нативного окна не выполнялась.
+Windows build/Clippy не запускались. Commit/push не выполнялись.
+
+Полный последовательный workspace test all-features вне sandbox: 493 passed,
+0 failed, 19 прежних ignored. update-binaries.py обновил macOS ARM64
+executable, app archive с ad-hoc подписью и legal materials; --check подтвердил
+исходники и checksums. Windows не пересобирался.
+
+После проверки бинарников cargo clean удалил 8.2 GiB (25208 файлов).
+Логи задачи удалены; untracked Finder metadata не обнаружены. Размер проекта —
+404 MiB, binaries — 117 MiB. Исходники, история, настройки и готовые бинарники
+с legal materials сохранены; повторный --check после очистки прошёл.
+После очистки сборки не запускались.

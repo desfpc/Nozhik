@@ -185,6 +185,25 @@ impl NozhikUi {
                                         close_response.hovered(),
                                         &font,
                                     );
+                                    if let TabId::File(index) = tab.id
+                                        && let Some(document) = self.documents.get(index)
+                                    {
+                                        let path = document.path.clone();
+                                        response.context_menu(|ui| {
+                                            if ui.button("Copy path").clicked() {
+                                                ui.ctx().copy_text(path.display().to_string());
+                                                ui.close();
+                                            }
+                                            if ui.button("Show in File Manager").clicked() {
+                                                self.queue(
+                                                    nozhik_fs_model::Command::ShowInFileManager(
+                                                        path.clone(),
+                                                    ),
+                                                );
+                                                ui.close();
+                                            }
+                                        });
+                                    }
                                     response.on_hover_text(&tab.path);
                                 }
                             });

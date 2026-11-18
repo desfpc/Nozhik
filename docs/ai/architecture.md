@@ -1201,6 +1201,11 @@ visible tabs on either edge. Selection reveals the whole tab; manual scrolling
 is retained until the active buffer changes. The strip uses zero clip expansion
 so reveal coordinates and overflow classification share the same boundaries.
 
+File tabs expose Copy path and Show in File Manager on secondary click (v0.1.77).
+The menu targets the clicked document without activating or closing it; SQL tabs
+have no file context menu. Copy uses the document's full path; reveal queues the
+same filesystem-worker ShowInFileManager command used by the project tree.
+
 Go to File opens the existing Search Everywhere Files filter. File-only bulk
 closure uses CloseTarget::Files and the existing dirty/revision save gate;
 Save All in this flow saves only open file documents, with SQL destinations left
@@ -2221,7 +2226,10 @@ Languages, не запускается кнопкой.
 ## Поиск по файлу и по проекту (v0.1.52)
 
 Ctrl/Cmd+F открывает строку Find/Replace и один раз переводит фокус в поле Find
-(`nozhik-find-query`). Поле Replace фокус не забирает.
+(`nozhik-find-query`). Поле Replace (`nozhik-find-replacement`) фокус не забирает.
+Если фокус в одном из этих полей, общие команды Copy/Cut передаются его TextEdit,
+а Paste запрашивает системный буфер без возврата фокуса в редактор. Выделение
+и текст открытого файла при этом не меняются (v0.1.76).
 
 Search Everywhere больше не показывает вкладку Symbols. Classes берёт объявления
 `SymbolKind::Class` из PHP-индекса и селекторы CSS, у которых `declaration == true`.
